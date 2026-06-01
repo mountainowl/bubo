@@ -535,13 +535,19 @@ The install ships three ready-to-copy templates under
 the same cadence (poll every 15 min, sync outcomes hourly, health probe
 every 5 min).
 
-**Cron** (`deploy/templates/llm-reviewer.cron`):
+**Cron** (`deploy/templates/llm-reviewer.cron`) — the template is a
+distro-style drop-in file. Copy it into whichever location your cron
+implementation reads (commonly the system cron drop directory on
+Debian/Ubuntu/RHEL; the user crontab on macOS; the operator's choice on
+custom builds):
 
 ```sh
 # As the install user (or root):
-sudo cp $LLM_CODE_REVIEW_ROOT/deploy/templates/llm-reviewer.cron /etc/cron.d/llm-reviewer
-sudo chmod 644 /etc/cron.d/llm-reviewer
-# Then edit /etc/cron.d/llm-reviewer to point LLM_CODE_REVIEW_ROOT at your install path.
+CRON_DROP_DIR="$(your distro's cron drop directory)"
+sudo install -m 0644 \
+  "$LLM_CODE_REVIEW_ROOT/deploy/templates/llm-reviewer.cron" \
+  "$CRON_DROP_DIR/llm-reviewer"
+# Then edit the installed file to point LLM_CODE_REVIEW_ROOT at your install path.
 ```
 
 The template's three lines fire `mr-review-poller` (poll cycle),
