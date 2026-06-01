@@ -10,6 +10,8 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-01
+
 ### Added
 - **`mcp-llm-reviewer` server.** New MCP server with two interfaces
   exposed to any MCP-capable client (Codex, Claude Desktop, Cline).
