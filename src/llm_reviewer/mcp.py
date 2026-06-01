@@ -2,8 +2,8 @@
 
 The poster path uses MCP to create inline review threads on GitLab. The
 MCP server is a separate process (typically ``mcp-gitlab`` or
-``gitlab-mcp`` on ``PATH``, wrapped by ``bin/mcp-gitlab``); this module
-speaks the minimal subset of the protocol we need:
+``gitlab-mcp`` on ``PATH``, wrapped by ``bin/mcp-upstream-gitlab``); this
+module speaks the minimal subset of the protocol we need:
 
 * ``initialize`` handshake.
 * ``notifications/initialized``.
@@ -33,7 +33,7 @@ MCP_TIMEOUT_SECONDS = 60
 
 # Default MCP server wrapper — the GitLab one, for backwards compatibility
 # with the original single-provider call sites.
-DEFAULT_MCP_SERVER = ROOT / "bin" / "mcp-gitlab"
+DEFAULT_MCP_SERVER = ROOT / "bin" / "mcp-upstream-gitlab"
 
 
 def thread_args(project: str, iid: int, body: str, position: JsonObject) -> JsonObject:
@@ -50,7 +50,7 @@ def call_tool(name: str, arguments: JsonObject, *, server: str | None = None) ->
     """Invoke a tool on an MCP server wrapper and return its result.
 
     ``server`` is the path to the server wrapper script (e.g.
-    ``bin/mcp-gitlab`` or ``bin/mcp-github``); defaults to
+    ``bin/mcp-upstream-gitlab`` or ``bin/mcp-upstream-github``); defaults to
     :data:`DEFAULT_MCP_SERVER` (GitLab) so existing call sites are
     unchanged.
 

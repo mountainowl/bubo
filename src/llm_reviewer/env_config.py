@@ -160,6 +160,7 @@ def runtime_env(root: Path, cfg: dict[str, Any]) -> dict[str, str]:
     agent = section(cfg, "agents")
     gitlab = section(cfg, "gitlab")
     github = section(cfg, "github")
+    mcp_srv = section(cfg, "mcp_server")
 
     gitlab_url = str(gitlab.get("url", "https://gitlab.com")).rstrip("/")
     base_dir = _path_value(root, poller.get("state_dir", "var"))
@@ -191,6 +192,14 @@ def runtime_env(root: Path, cfg: dict[str, Any]) -> dict[str, str]:
         exports["LLM_REVIEWER_GITLAB_USERNAME"] = str(gitlab["bot_username"])
     if github.get("bot_username"):
         exports["LLM_REVIEWER_GITHUB_USERNAME"] = str(github["bot_username"])
+    # [mcp_server] — controls how `mcp-llm-reviewer` exposes itself. stdio
+    # is the default (Codex spawns the process per session); set transport
+    # to "http" plus a bearer_token for multi-host deployments.
+    exports["LLM_REVIEWER_MCP_TRANSPORT"] = str(mcp_srv.get("transport", "stdio"))
+    exports["LLM_REVIEWER_MCP_HOST"] = str(mcp_srv.get("host", "127.0.0.1"))
+    exports["LLM_REVIEWER_MCP_PORT"] = str(int(mcp_srv.get("port", 8765)))
+    if mcp_srv.get("bearer_token"):
+        exports["LLM_REVIEWER_MCP_BEARER_TOKEN"] = str(mcp_srv["bearer_token"])
     exports.update(credential_env(cfg))
     return exports
 

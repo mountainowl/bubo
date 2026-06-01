@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
 dependencies = [
+    "mcp>=1.2.0",
     "opentelemetry-api>=1.42.1",
     "opentelemetry-exporter-otlp-proto-grpc>=1.42.1",
     "opentelemetry-sdk>=1.42.1",
@@ -15,6 +16,7 @@ dependencies = [
 mr-review-poller = "llm_reviewer.poller:main"
 code-review-codex = "llm_reviewer.codex_runner:main"
 gh-review-poller = "llm_reviewer.github:main"
+mcp-llm-reviewer = "llm_reviewer.mcp_server:main"
 
 [dependency-groups]
 dev = [

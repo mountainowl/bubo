@@ -23,8 +23,9 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
         "bin/mr-review-poller",
         "bin/code-review-codex",
         "bin/gh-review-poller",
-        "bin/mcp-gitlab",
-        "bin/mcp-github",
+        "bin/mcp-upstream-gitlab",
+        "bin/mcp-upstream-github",
+        "bin/mcp-llm-reviewer",
         "bin/env",
         "config/env.example.toml",
         "deploy/templates/codex-config.toml",
@@ -39,12 +40,20 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
 
     missing = [path for path in required if not (ROOT / path).exists()]
     assert missing == []
-    mcp_wrapper = (ROOT / "bin" / "mcp-gitlab").read_text()
-    assert "command -v mcp-gitlab" in mcp_wrapper
-    assert "command -v gitlab-mcp" in mcp_wrapper
+    # The two upstream-MCP wrappers locate the actual MCP server binary on
+    # PATH (those names are upstream's, not ours — do not rename them).
+    gitlab_wrapper = (ROOT / "bin" / "mcp-upstream-gitlab").read_text()
+    assert "command -v mcp-gitlab" in gitlab_wrapper
+    assert "command -v gitlab-mcp" in gitlab_wrapper
 
-    gh_mcp_wrapper = (ROOT / "bin" / "mcp-github").read_text()
-    assert "command -v github-mcp-server" in gh_mcp_wrapper
+    github_wrapper = (ROOT / "bin" / "mcp-upstream-github").read_text()
+    assert "command -v github-mcp-server" in github_wrapper
+
+    # The reviewer's own MCP server uses the same uv-run launcher pattern as
+    # the other entry points.
+    own_wrapper = (ROOT / "bin" / "mcp-llm-reviewer").read_text()
+    assert "uv run --project" in own_wrapper
+    assert "mcp-llm-reviewer" in own_wrapper
 
 
 def test_deploy_archive_excludes_runtime_noise() -> None:

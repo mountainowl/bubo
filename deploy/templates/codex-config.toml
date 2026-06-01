@@ -27,8 +27,17 @@ tool_timeout_sec = 60.0
 default_tools_approval_mode = "approve"
 enabled_tools = ["git_status", "git_diff_unstaged", "git_diff_staged", "git_diff", "git_log", "git_show", "git_branch"]
 
+[mcp_servers.llm-reviewer]
+command = "{{ROOT}}/bin/mcp-llm-reviewer"
+args = []
+startup_timeout_sec = 20
+# Must be >= [review].timeout_seconds because `review_change` blocks on
+# the underlying code-review-codex subprocess. The read-only metrics
+# tools complete in milliseconds so the long ceiling costs nothing.
+tool_timeout_sec = 1800
+
 [mcp_servers.gitlab]
-command = "{{ROOT}}/bin/mcp-gitlab"
+command = "{{ROOT}}/bin/mcp-upstream-gitlab"
 args = []
 startup_timeout_sec = 30
 tool_timeout_sec = 120

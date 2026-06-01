@@ -32,6 +32,10 @@ SECRET_ENV_NAMES = (
     "ANTHROPIC_API_KEY",
     *LLM_API_KEY_ENV_KEYS,
     *GITLAB_TOKEN_ENV_NAMES,
+    # Static bearer token for the HTTP MCP transport. The codex subprocess
+    # spawned by `review_change` inherits this env var; redact in case any
+    # sub-tool prints its environment on the way to the MCP response.
+    "LLM_REVIEWER_MCP_BEARER_TOKEN",
 )
 
 _CRED_URL = re.compile(r"(https?://[^:/@\s]+:)[^@\s/]+(@)")

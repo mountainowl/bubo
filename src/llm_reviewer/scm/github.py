@@ -9,7 +9,7 @@ Key differences from GitLab, all encapsulated here:
 * **Checkout** uses ``gh repo clone`` and the ``refs/pull/<n>/head`` ref.
 * **Position** is GitHub's ``{commit_id, path, line, side}`` anchor, not
   GitLab's base/start/head ``position`` dict.
-* **Posting** goes through the GitHub MCP server (``bin/mcp-github``). The
+* **Posting** goes through the GitHub MCP server (``bin/mcp-upstream-github``). The
   exact tool name varies between GitHub MCP server implementations, so it
   is overrideable via ``LLM_REVIEWER_GITHUB_MCP_TOOL``; if the MCP call
   fails for any reason, posting falls back to the well-defined REST
@@ -34,8 +34,8 @@ from llm_reviewer.secrets import redact_secrets
 from llm_reviewer.subproc import run_bounded
 from llm_reviewer.types import JsonObject
 
-# GitHub MCP server wrapper (mirrors bin/mcp-gitlab).
-_GITHUB_MCP_SERVER = ROOT / "bin" / "mcp-github"
+# GitHub MCP server wrapper (mirrors bin/mcp-upstream-gitlab).
+_GITHUB_MCP_SERVER = ROOT / "bin" / "mcp-upstream-github"
 # Tool name for posting an inline PR review comment. Overrideable because
 # different GitHub MCP servers name this tool differently.
 _GITHUB_MCP_TOOL = os.environ.get(

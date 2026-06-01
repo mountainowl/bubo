@@ -25,7 +25,7 @@ land on the first invocation after deploy.
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from llm_reviewer import paths
@@ -613,15 +613,271 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     ]
 
 
+def list_recent_reviews(
+    limit: int = 20,
+    status: str | None = None,
+    project: str | None = None,
+) -> list[JsonObject]:
+    """Return ``reviewed_mrs`` rows newest-first, with optional filters.
+
+    Caller-friendly reader powering :func:`llm_reviewer.mcp_server.list_recent_reviews`
+    — keeps SQL in this module so MCP server code stays free of cursor
+    handling.
+
+    ``limit`` is clamped to ``[1, 200]`` so a misconfigured client cannot
+    accidentally request the whole table.
+    """
+    limit = max(1, min(200, int(limit)))
+    sql = "select project,iid,sha,status,error,updated_at from reviewed_mrs"
+    clauses: list[str] = []
+    params: list[object] = []
+    if status is not None:
+        clauses.append("status=?")
+        params.append(status)
+    if project is not None:
+        clauses.append("project=?")
+        params.append(project)
+    if clauses:
+        sql += " where " + " and ".join(clauses)
+    sql += " order by updated_at desc limit ?"
+    params.append(limit)
+    with connect_db() as db:
+        rows = db.execute(sql, params).fetchall()
+    return [
+        {
+            "project": row[0],
+            "iid": int(row[1]),
+            "sha": row[2],
+            "status": row[3],
+            "error": row[4],
+            "updated_at": row[5],
+        }
+        for row in rows
+    ]
+
+
+def get_review_row(
+    project: str, iid: int, sha: str | None = None
+) -> JsonObject | None:
+    """Return one ``reviewed_mrs`` row, or ``None`` if no match.
+
+    When ``sha`` is ``None``, the row with the freshest ``updated_at`` for
+    ``(project, iid)`` is returned — useful for "what's the current state
+    of MR <iid>" without first looking up the SHA.
+    """
+    with connect_db() as db:
+        if sha is None:
+            row = db.execute(
+                """
+                select project,iid,sha,status,report,error,updated_at
+                from reviewed_mrs
+                where project=? and iid=?
+                order by updated_at desc
+                limit 1
+                """,
+                (project, iid),
+            ).fetchone()
+        else:
+            row = db.execute(
+                """
+                select project,iid,sha,status,report,error,updated_at
+                from reviewed_mrs
+                where project=? and iid=? and sha=?
+                """,
+                (project, iid, sha),
+            ).fetchone()
+    if row is None:
+        return None
+    return {
+        "project": row[0],
+        "iid": int(row[1]),
+        "sha": row[2],
+        "status": row[3],
+        "report": row[4],
+        "error": row[5],
+        "updated_at": row[6],
+    }
+
+
+def _resolve_sha(db: sqlite3.Connection, project: str, iid: int) -> str | None:
+    """Return the most-recently-updated SHA for ``(project, iid)`` or None.
+
+    Internal helper. Used by :func:`findings_for` and :func:`outcomes_for`
+    when the caller did not pin a SHA — we resolve to the same SHA
+    :func:`get_review_row` would pick, so the three readers agree on
+    "current".
+    """
+    row = db.execute(
+        """
+        select sha from reviewed_mrs
+        where project=? and iid=?
+        order by updated_at desc
+        limit 1
+        """,
+        (project, iid),
+    ).fetchone()
+    return None if row is None else str(row[0])
+
+
+def findings_for(
+    project: str, iid: int, sha: str | None = None
+) -> list[JsonObject]:
+    """Return one ``review_findings`` row per finding for an MR/PR.
+
+    See :func:`llm_reviewer.mcp_server.get_findings` for the public
+    contract. When ``sha`` is ``None`` we resolve to the most recent
+    reviewed SHA via :func:`_resolve_sha`.
+    """
+    with connect_db() as db:
+        target_sha = sha if sha is not None else _resolve_sha(db, project, iid)
+        if target_sha is None:
+            return []
+        rows = db.execute(
+            """
+            select fingerprint,file,line,status,discussion_id,body,updated_at,
+                   run_id,type,severity,category,confidence,note_id
+            from review_findings
+            where project=? and iid=? and sha=?
+            order by updated_at asc
+            """,
+            (project, iid, target_sha),
+        ).fetchall()
+    return [
+        {
+            "project": project,
+            "iid": iid,
+            "sha": target_sha,
+            "fingerprint": row[0],
+            "file": row[1],
+            "line": row[2],
+            "status": row[3],
+            "discussion_id": row[4],
+            "body": row[5],
+            "updated_at": row[6],
+            "run_id": row[7],
+            "type": row[8],
+            "severity": row[9],
+            "category": row[10],
+            "confidence": row[11],
+            "note_id": row[12],
+        }
+        for row in rows
+    ]
+
+
+def outcomes_for(
+    project: str, iid: int, sha: str | None = None
+) -> list[JsonObject]:
+    """Return one ``finding_outcomes`` row per finding for an MR/PR.
+
+    Empty list when ``--sync-outcomes`` has not yet run for the target —
+    that is not an error condition.
+    """
+    with connect_db() as db:
+        target_sha = sha if sha is not None else _resolve_sha(db, project, iid)
+        if target_sha is None:
+            return []
+        rows = db.execute(
+            """
+            select fingerprint,discussion_id,resolved,deleted,
+                   developer_replied,disputed,false_positive,duplicate,
+                   resolved_at,merged_unresolved,last_checked_at
+            from finding_outcomes
+            where project=? and iid=? and sha=?
+            order by last_checked_at desc
+            """,
+            (project, iid, target_sha),
+        ).fetchall()
+    return [
+        {
+            "project": project,
+            "iid": iid,
+            "sha": target_sha,
+            "fingerprint": row[0],
+            "discussion_id": row[1],
+            "resolved": bool(row[2]),
+            "deleted": bool(row[3]),
+            "developer_replied": bool(row[4]),
+            "disputed": bool(row[5]),
+            "false_positive": bool(row[6]),
+            "duplicate": bool(row[7]),
+            "resolved_at": row[8],
+            "merged_unresolved": bool(row[9]),
+            "last_checked_at": row[10],
+        }
+        for row in rows
+    ]
+
+
+def metrics_summary(
+    since_hours: int = 24, project: str | None = None
+) -> JsonObject:
+    """Aggregate counts and totals over ``since_hours`` of history.
+
+    Powers :func:`llm_reviewer.mcp_server.get_metrics`. Three queries
+    (reviews/by-status, findings count, token+cost sum) run against the
+    same connection — sqlite-cheap, no need to optimize.
+
+    The ``(? is null or column = ?)`` predicate folds the optional
+    project filter into one SQL per metric instead of doubling them;
+    each parameter pair is the same ``project`` value twice.
+
+    ``since_hours`` is clamped to ``[1, 720]`` so a misconfigured client
+    cannot accidentally scan the entire table; one month is a generous
+    operational window.
+    """
+    since_hours = max(1, min(720, int(since_hours)))
+    cutoff = (datetime.now(UTC) - timedelta(hours=since_hours)).isoformat(timespec="seconds")
+    with connect_db() as db:
+        status_rows = db.execute(
+            """
+            select status, count(*) from reviewed_mrs
+            where updated_at >= ? and (? is null or project = ?)
+            group by status
+            """,
+            (cutoff, project, project),
+        ).fetchall()
+        findings_row = db.execute(
+            """
+            select count(*) from review_findings
+            where updated_at >= ? and (? is null or project = ?)
+            """,
+            (cutoff, project, project),
+        ).fetchone()
+        token_row = db.execute(
+            """
+            select coalesce(sum(tokens_total),0), coalesce(sum(cost_usd),0.0)
+            from review_runs
+            where started_at >= ? and (? is null or project = ?)
+            """,
+            (cutoff, project, project),
+        ).fetchone()
+    by_status = {str(row[0]): int(row[1]) for row in status_rows}
+    return {
+        "window_hours": since_hours,
+        "project": project,
+        "reviews_total": sum(by_status.values()),
+        "by_status": by_status,
+        "findings_total": int(findings_row[0]) if findings_row else 0,
+        "tokens_total_sum": int(token_row[0]) if token_row else 0,
+        "cost_usd_sum": float(token_row[1]) if token_row else 0.0,
+    }
+
+
 __all__ = [
     "already_seen",
     "connect_db",
     "count_inflight_workers",
     "ensure_column",
     "finding_seen",
+    "findings_for",
+    "get_review_row",
     "init_db",
     "init_dirs",
     "latest_reviewed_row",
+    "list_recent_reviews",
+    "metrics_summary",
+    "outcomes_for",
     "posted_findings_for_outcome_sync",
     "prompt_version",
     "record",

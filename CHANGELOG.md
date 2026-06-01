@@ -11,6 +11,28 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 ## [Unreleased]
 
 ### Added
+- **`mcp-llm-reviewer` server.** New MCP server with two interfaces
+  exposed to any MCP-capable client (Codex, Claude Desktop, Cline).
+  *Metrics interface* (read-only against SQLite): `health`,
+  `list_recent_reviews`, `get_review`, `get_findings`,
+  `get_finding_outcomes`, `get_metrics` (aggregate counts + token/cost
+  sums over a configurable window). *Review interface*: `review_change`
+  triggers a one-shot review by URL or
+  `(provider={gitlab,github,auto}, project, number)`, blocks until the
+  underlying `code-review-codex` subprocess finishes, and returns the
+  parsed findings JSON alongside the raw transcript. MCP-triggered
+  reviews intentionally do not write to `reviewed_mrs` — metrics reflect
+  only poller-driven reviews. Two transports selectable via the new
+  `[mcp_server]` config section: `stdio` (default; Codex spawns the
+  process per session) and `http` (long-lived HTTP+SSE server bound to
+  `host:port`, every request must present `Authorization: Bearer
+  <bearer_token>` or get a 401). HTTP auth is a thin ASGI middleware
+  with constant-time bearer compare; the server does not terminate TLS
+  (front with nginx/caddy or bind only to localhost). Backed by the
+  official `mcp` Python SDK (FastMCP). New console script +
+  `bin/mcp-llm-reviewer` launcher; new readers in `db.py`
+  (`list_recent_reviews`, `get_review_row`, `findings_for`,
+  `outcomes_for`, `metrics_summary`).
 - **OpenSSF Scorecard hardening pass.** Pinned every GitHub Action by full
   commit SHA across `ci.yml`, `integration.yml`, `release.yml`,
   `scorecard.yml` (with a trailing `# vX.Y.Z` comment so Dependabot keeps
@@ -111,6 +133,14 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   payload shape, Link-header pagination).
 
 ### Changed
+- **Renamed upstream MCP wrappers** to disambiguate "MCP servers we
+  consume" from "the MCP server we expose": `bin/mcp-gitlab` →
+  `bin/mcp-upstream-gitlab`, `bin/mcp-github` → `bin/mcp-upstream-github`.
+  Internal references (`mcp.py`, `scm/github.py`,
+  `deploy/templates/codex-config.toml`, `tests/test_deploy_layout.py`)
+  updated in lockstep. **Operator action required:** update your
+  `~/.codex/config.toml` (or any other MCP client config) to point at the
+  new wrapper paths.
 - **Decomposed the `poller.py` god-module** into single-concern modules:
   `db.py` (SQLite schema + writers), `mcp.py` (GitLab MCP JSON-RPC),
   `subproc.py` (bounded subprocess + process-group kill, shared with
