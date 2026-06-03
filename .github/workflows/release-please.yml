@@ -1,0 +1,48 @@
+name: Release Please
+
+# Automated release-PR maintainer.
+#
+# On every push to `main`, release-please either opens a new release PR or
+# updates the existing one with the next computed version from Conventional
+# Commits since the last tag:
+#
+#   * `fix:`                              -> patch
+#   * `feat:`                             -> minor
+#   * `feat!:` / `BREAKING CHANGE:`       -> minor (pre-1.0 via bump-minor-pre-major)
+#   * `chore:` / `docs:` / `test:` / ...  -> no bump
+#
+# Merging the release PR creates a `vX.Y.Z` tag, which fires `release.yml`
+# (build sdist+wheel, generate SBOM, cosign-sign, publish GitHub Release).
+#
+# CHANGELOG.md is intentionally NOT managed by release-please — entries are
+# hand-curated under `## [Unreleased]` and renamed at release time. The
+# `.release-please-changelog.md` sink absorbs release-please's
+# auto-generated changelog so the human one stays clean.
+#
+# Setup prerequisite: a `RELEASE_PAT` repository secret holding a Personal
+# Access Token (or GitHub App installation token) with `contents: write`
+# and `pull-requests: write`. The default `GITHUB_TOKEN` cannot trigger
+# downstream workflows on tag push (GitHub anti-recursion safeguard), so
+# `release.yml` would silently fail to fire without the PAT.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: Maintain release PR / cut release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # create release branch, write commits and tags
+      pull-requests: write  # open / update the release PR
+    steps:
+      - name: Run release-please
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.RELEASE_PAT }}

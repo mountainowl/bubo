@@ -75,17 +75,49 @@ BREAKING CHANGE: `manual_review_dry_run` was removed; use `[agents].dry_run`.
 
 ### Cutting a release
 
-The version is single-sourced in `pyproject.toml`. To cut a release locally:
+Releases are automated by [release-please](https://github.com/googleapis/release-please).
+On every push to `main`, the `Release Please` workflow either opens a new
+release PR or updates the existing one with the next computed version
+from Conventional Commits since the last tag:
+
+| Commit type | Bump |
+|---|---|
+| `fix:` | patch |
+| `feat:` | minor |
+| `feat!:` / `BREAKING CHANGE:` footer | minor (pre-1.0 carve-out via `bump-minor-pre-major`) |
+| `chore:` / `docs:` / `test:` / `ci:` / `build:` / `style:` / `refactor:` | no bump |
+
+The release PR bumps `pyproject.toml` and updates
+`.release-please-manifest.json`. **Before merging, rename the
+`## [Unreleased]` block in `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`**
+and add an empty `## [Unreleased]` above it — release-please intentionally
+does not touch the hand-curated CHANGELOG (its own auto-generated changelog
+lives in `.release-please-changelog.md`, which exists only as a sink).
+
+Merging the release PR creates a `vX.Y.Z` tag, which fires
+`.github/workflows/release.yml` (build sdist + wheel, generate SBOM,
+cosign-sign, publish the GitHub Release with artifacts).
+
+#### One-time setup (for repo admins)
+
+The workflow requires a `RELEASE_PAT` secret — a fine-grained Personal
+Access Token (or GitHub App installation token) with `contents: write`
+and `pull-requests: write` on this repo. The default `GITHUB_TOKEN`
+cannot trigger downstream workflows on tag push by design, so without
+this token the tag push would not fire `release.yml`.
 
 ```sh
-uv run cz bump --yes        # bumps version per commits since last tag, tags
-git push --follow-tags      # pushes the bump commit + tag; release.yml fires
+# Generate a fine-grained PAT at https://github.com/settings/tokens
+# scoped to this repo with the two permissions above, then:
+gh secret set RELEASE_PAT --body "<your-pat>"
 ```
 
-The CHANGELOG is **not** auto-generated; entries are hand-curated under
-`## [Unreleased]` and renamed to the new version at release time. The
-intentional cost: a small amount of manual work per release, in exchange
-for a CHANGELOG humans actually want to read.
+#### Cz still validates commit messages
+
+`commitizen` remains the source of truth for Conventional Commits
+format enforcement (`pre-commit` `commit-msg` hook locally;
+`.github/workflows/commitlint.yml` on every PR). It just no longer
+performs the version bump — release-please does.
 
 ## Pull Requests
 
