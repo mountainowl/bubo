@@ -10,6 +10,8 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-03
+
 ### Added
 - **"No issues found" comment on reviews with zero findings.** When a
   review completes with zero actionable findings, the poller now posts a
