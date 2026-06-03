@@ -210,6 +210,61 @@ def create_pr_review_comment(
     return cast(JsonObject, data) if isinstance(data, dict) else {}
 
 
+def get_issue_comments(
+    cfg: ReviewConfig, token: str, project: str, number: int
+) -> list[JsonObject]:
+    """Return change-level (non-inline) comments on a pull request.
+
+    PRs and issues share the same comments endpoint on GitHub — this is the
+    canonical way to read or write a comment that is not anchored to a
+    specific diff line.
+    """
+    repo = _owner_repo(project)
+    return api_pages(cfg.github_api_url, token, f"/repos/{repo}/issues/{number}/comments")
+
+
+def find_issue_comment_by_body(
+    cfg: ReviewConfig,
+    token: str,
+    project: str,
+    number: int,
+    body: str,
+    *,
+    bot_username: str | None = None,
+) -> str:
+    """Locate an existing change-level comment authored by the bot.
+
+    Returns the comment ID as a string, or ``""`` if none matches. Mirrors
+    :func:`find_review_comment_by_body` for the inline path so the
+    no-findings comment never stacks duplicates on re-review. When
+    ``bot_username`` is provided, the match is restricted to comments
+    authored by the bot — a human or other bot reproducing the body must
+    not satisfy the dedup, or the reviewer would silently stop posting
+    its own no-findings acknowledgement.
+    """
+    for comment in get_issue_comments(cfg, token, project, number):
+        if bot_username and ((comment.get("user") or {}).get("login") or "") != bot_username:
+            continue
+        if comment.get("body") == body and comment.get("id"):
+            return str(comment["id"])
+    return ""
+
+
+def create_issue_comment(
+    cfg: ReviewConfig, token: str, project: str, number: int, body: str
+) -> JsonObject:
+    """Post a change-level (non-inline) comment on a pull request."""
+    repo = _owner_repo(project)
+    data, _ = api(
+        cfg.github_api_url,
+        token,
+        "POST",
+        f"/repos/{repo}/issues/{number}/comments",
+        {"body": body},
+    )
+    return cast(JsonObject, data) if isinstance(data, dict) else {}
+
+
 def _graphql_url(api_url: str) -> str:
     """Derive the GraphQL endpoint from the REST ``api_url``.
 

@@ -101,6 +101,23 @@ class GitLabProvider:
             gitlab.create_merge_request_discussion(cfg, token, project, number, body, position)
         )
 
+    def post_change_comment(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        body: str,
+    ) -> str:
+        existing = gitlab.find_note_by_body(
+            cfg, token, project, number, body, bot_username=self.bot_username()
+        )
+        if existing:
+            return existing
+        created = gitlab.create_mr_note(cfg, token, project, number, body)
+        note_id = created.get("id")
+        return "" if note_id is None else str(note_id)
+
     def fetch_outcome(
         self,
         cfg: ReviewConfig,

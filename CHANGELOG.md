@@ -10,6 +10,32 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+### Added
+- **"No issues found" comment on reviews with zero findings.** When a
+  review completes with zero actionable findings, the poller now posts a
+  single change-level comment (`"Automated review ran — no issues found."`
+  by default) so authors and approvers can distinguish "reviewer ran and
+  was happy" from "reviewer never ran." Behavior is on by default; gated
+  by two new `[agents]` keys: `post_no_findings_comment` (bool, default
+  `true` — set `false` to restore the previous silent behavior) and
+  `no_findings_comment_body` (string — customize for localization or
+  branding; whitespace-only disables the post even when the flag is on).
+  Honors `[review].dry_run`. Idempotent on exact body match **scoped to
+  the bot's author** — a human or other bot reproducing the body does
+  not satisfy the dedup, so the reviewer never silently stops posting
+  its own acknowledgement. Comment-post failures are **soft**: a
+  transient API error from the acknowledgement post does NOT flip the
+  underlying clean review to `FAILED`; the verdict is logged as
+  `errored` and the review still records `NO_FINDINGS`. Implemented as
+  a new `post_change_comment` method on the SCM provider protocol
+  (GitLab MR notes, GitHub issue comments). Closes #13.
+- **Strict TOML type validation for new config keys.** Added
+  `bool_value` and `text_value` to `config_values.py` — they raise
+  `ConfigError` for string `"false"` (which `bool()` would have silently
+  coerced to `True`) and for lists/tables (which `str()` would have
+  silently turned into a misleading repr). Applied to the two new
+  `[agents]` keys; existing keys are unaffected.
+
 ## [0.3.0] - 2026-06-01
 
 ### Added

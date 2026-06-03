@@ -46,6 +46,18 @@ Fix: Treat Cognito validation construction failures as failed Cognito auth when 
 Confidence: 0.94
 ```
 
+When a review finds nothing actionable, the bot posts a single
+change-level acknowledgement so a clean MR/PR is distinguishable from
+one the reviewer never touched:
+
+```text
+Automated review ran — no issues found.
+```
+
+This is idempotent on exact body match scoped to the bot's author — re-reviews
+on rebases or repeated polls reuse the existing comment. Default-on; configure
+or disable under `[agents]` (see [Configuration reference](#configuration-reference)).
+
 Real (sanitized) inline findings on GitLab MRs:
 
 ![Sanitized inline finding — data primer](docs/images/gitlab-mr-review-data-primer.png)
@@ -382,9 +394,15 @@ flowchart TB
 3. Each finding is mapped to a changed line in the MR diff and posted as an
    inline GitLab review thread (or stored as a "planned" finding if
    `dry_run` is on).
-4. SQLite records reviewed SHAs and posted-finding fingerprints so the bot
+4. If a review finishes with zero findings, the worker posts a single
+   change-level acknowledgement comment (the no-findings comment) so
+   reviewer-ran-and-passed is distinguishable from reviewer-never-ran.
+   Default-on, dedup'd by bot author + exact body; honors `dry_run`;
+   a failure to post the acknowledgement is a soft error that does NOT
+   flip the underlying clean review to `FAILED`.
+5. SQLite records reviewed SHAs and posted-finding fingerprints so the bot
    does not spam the same MR or duplicate a comment.
-5. `--sync-outcomes` later checks which posted findings were resolved,
+6. `--sync-outcomes` later checks which posted findings were resolved,
    replied to, marked false-positive, deleted, or merged-unresolved.
 
 The poller does not try to be a code-review brain. It orchestrates SCM access,
@@ -538,6 +556,16 @@ credentials live in that one TOML file.
       <td><code>codex_sandbox</code></td>
       <td><code>read-only</code></td>
       <td>Filesystem access passed to Codex review runs.</td>
+    </tr>
+    <tr>
+      <td><code>post_no_findings_comment</code></td>
+      <td><code>true</code></td>
+      <td>When a review finishes with zero findings, post a single change-level acknowledgement so authors and approvers can tell <em>reviewer ran and passed</em> from <em>reviewer never ran</em>. Dedup'd by bot author + exact body; honors <code>[review].dry_run</code>; a post failure is a soft error that does NOT flip the review to <code>FAILED</code>. Set <code>false</code> to restore the previous silent-on-clean behavior.</td>
+    </tr>
+    <tr>
+      <td><code>no_findings_comment_body</code></td>
+      <td><code>"Automated review ran — no issues found."</code></td>
+      <td>Body of the acknowledgement, posted verbatim. Customize for localization or branding. Do NOT embed per-run values (URLs, timestamps) — the body must be byte-identical across re-reviews for dedup to work. Empty/whitespace-only disables posting.</td>
     </tr>
     <tr><th colspan="3"><code>[telemetry]</code></th></tr>
     <tr>

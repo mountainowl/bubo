@@ -41,10 +41,11 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from llm_reviewer import github, gitlab, paths
 from llm_reviewer.config_values import ConfigError, positive_int
@@ -490,6 +491,63 @@ def _position_line(position: JsonObject) -> Any:
     return position.get("new_line") or position.get("line")
 
 
+NoFindingsCommentVerdict = Literal[
+    "posted", "posted_pending_id", "skipped_dry_run", "disabled", "errored"
+]
+
+
+def post_no_findings_comment(
+    *,
+    cfg: ReviewConfig,
+    token: str,
+    project: str,
+    number: int,
+    provider: ScmProvider,
+) -> tuple[NoFindingsCommentVerdict, str]:
+    """Post the change-level "no issues found" comment.
+
+    Called only when the review finished with status
+    :attr:`ReviewStatus.NO_FINDINGS`. Returns ``(verdict, detail)`` where
+    ``verdict`` is one of:
+
+    * ``"posted"`` — a new comment was created or an existing identical
+      one was matched; ``detail`` is the provider comment ID.
+    * ``"posted_pending_id"`` — the provider call succeeded but returned
+      no ID (rare 2xx without ``id``); ``detail`` is empty. Surfaced so
+      the structured log distinguishes a healthy post from a partial one.
+    * ``"skipped_dry_run"`` — ``cfg.dry_run`` is set; ``detail`` is empty.
+    * ``"disabled"`` — either ``post_no_findings_comment`` is ``False``
+      or ``no_findings_comment_body`` is empty/whitespace-only; ``detail``
+      is empty.
+    * ``"errored"`` — the provider raised. ``detail`` is the (redacted)
+      error string. The caller treats this as a soft failure: the review
+      itself succeeded, only the cosmetic acknowledgement failed.
+
+    The provider call is idempotent on exact body match scoped to the
+    bot's author: a re-review of the same MR/PR will reuse the existing
+    comment instead of stacking duplicates on rebases or repeated polls.
+    The submitted body is stripped to match the gate check exactly, so
+    a trailing newline in the operator's config cannot defeat dedup on
+    platforms that normalize stored bodies.
+    """
+    body = cfg.no_findings_comment_body.strip()
+    if not cfg.post_no_findings_comment or not body:
+        return ("disabled", "")
+    if cfg.dry_run:
+        return ("skipped_dry_run", "")
+    try:
+        comment_id = provider.post_change_comment(cfg, token, project, number, body)
+    except (RuntimeError, OSError, urllib.error.URLError) as exc:
+        # Soft failure: a comment-post error must NEVER flip a clean review
+        # to FAILED. The inline-comment path treats individual post failures
+        # as PENDING_EXTERNAL_ID; this cosmetic acknowledgement is at least
+        # as forgiving.
+        return ("errored", redact_secrets(str(exc)))
+    if not comment_id:
+        return ("posted_pending_id", "")
+    return ("posted", comment_id)
+
+
 def post_or_plan_findings(
     *,
     cfg: ReviewConfig,
@@ -749,6 +807,23 @@ def worker(job: Path) -> int:
                 if (posted, planned, skipped) == (0, 0, 0)
                 else ReviewStatus.SUCCESS
             )
+            if status == ReviewStatus.NO_FINDINGS:
+                no_findings_verdict, no_findings_detail = post_no_findings_comment(
+                    cfg=cfg,
+                    token=token,
+                    project=project,
+                    number=iid,
+                    provider=provider,
+                )
+                log(
+                    "no_findings_comment",
+                    project=project,
+                    iid=iid,
+                    sha=sha,
+                    verdict=no_findings_verdict,
+                    detail=no_findings_detail,
+                    run_id=run_id,
+                )
             record(project, iid, sha, status, str(report))
             record_review_run_finish(
                 run_id=run_id,

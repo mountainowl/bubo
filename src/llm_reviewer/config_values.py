@@ -75,6 +75,46 @@ def confidence_threshold(value: object, name: str) -> float:
     return parsed
 
 
+def bool_value(value: object, name: str, *, default: bool) -> bool:
+    """Parse ``value`` as a strict boolean.
+
+    Accepts only Python ``bool`` (which TOML's ``true`` / ``false`` parses
+    to). Raises :class:`ConfigError` for string ``"true"`` / ``"false"``,
+    integers, or anything else — operators routinely write ``= "false"``
+    expecting it to disable a feature, and Python's ``bool()`` silently
+    treats a non-empty string as truthy, inverting the intent.
+
+    ``default`` is returned when ``value`` is ``None`` (key absent from
+    the TOML mapping).
+    """
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ConfigError(f"{name} must be a boolean (true/false, no quotes)")
+    return value
+
+
+def text_value(value: object, name: str, *, default: str) -> str:
+    """Parse ``value`` as a string.
+
+    Accepts only Python ``str``. Raises :class:`ConfigError` if the TOML
+    value is a list, table, or non-string scalar — operators sometimes
+    write arrays or numbers by mistake, and ``str()`` silently coerces
+    them to a misleading representation (``str([1, 2]) == "[1, 2]"``,
+    ``str(False) == "False"``) that would then be posted verbatim as a
+    comment body or similar payload.
+
+    ``default`` is returned when ``value`` is ``None`` (key absent from
+    the TOML mapping). Whitespace-only strings ARE accepted — callers
+    treat that as a documented "disabled" signal.
+    """
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise ConfigError(f"{name} must be a string")
+    return value
+
+
 def lower_string_list(value: object, name: str) -> list[str]:
     """Parse ``value`` as a list of lowercase strings.
 
