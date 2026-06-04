@@ -10,6 +10,25 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-04
+
+### Changed
+- **README split into focused docs/ files.** README went from 863 → 172
+  lines: hero, badges, example output (including the no-findings comment
+  shipped in 0.4.0), a 60-second quickstart, the "How it works" diagram
+  and step list, and a "Further reading" link table now sit on the top
+  page. Deep content moved out to `docs/prerequisites.md`,
+  `docs/install-and-configure.md`, `docs/run.md`,
+  `docs/configuration.md`, `docs/operate.md`, and `docs/telemetry.md`.
+  No operator-facing terminology or runtime behavior changes.
+
+### Added
+- **GitHub provider mechanics section** in `docs/run.md`: documents the
+  MCP-prefers-then-REST-fallback posting path and the GraphQL-then-REST
+  fallback used by `--sync-outcomes` for thread-resolution state. Linked
+  from the README status table so operators evaluating the GitHub
+  provider can find these details from the top page.
+
 ## [0.4.0] - 2026-06-03
 
 ### Added

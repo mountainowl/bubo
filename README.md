@@ -133,7 +133,8 @@ in the configured CLI skill.
 - **GitLab posting via polling** — production path. Stable.
 - **GitHub posting via polling** — supported, at outcome-metric parity with
   GitLab. Set `[scm].provider = "github"` (or run `gh-review-poller`, which
-  forces it).
+  forces it). See [how the GitHub provider talks to GitHub](docs/run.md#how-the-github-provider-talks-to-github)
+  for the MCP/REST + GraphQL details.
 - **Webhook-driven triggering** — not implemented; polling is the only path.
 - **pip-only install** — not supported. The install needs the bundled prompt, skill, config template, wrapper scripts, and deployment templates that ship with the checkout.
 

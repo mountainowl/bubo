@@ -130,3 +130,20 @@ MCP server on `PATH` and exec it with `config/env.toml` tokens injected. The
 poster path uses these to create inline review threads; you can also point
 Codex at them directly if you want a chat-driven session with the same
 MCP surface the reviewer uses.
+
+## How the GitHub provider talks to GitHub
+
+The poller is provider-agnostic: a single `ScmProvider` abstraction
+(see `src/llm_reviewer/scm/`) drives both GitLab and GitHub. The
+GitHub-specific mechanics worth knowing:
+
+- **Inline-comment posting** goes through a GitHub MCP server. The MCP
+  tool name varies between server implementations and is overrideable
+  via the `LLM_REVIEWER_GITHUB_MCP_TOOL` environment variable. If the
+  MCP call fails or the tool is missing, the poster falls back to the
+  GitHub REST API for the same operation.
+- **Thread resolution** (used by `--sync-outcomes`) is read via GitHub's
+  GraphQL `reviewThreads` API, so resolved/unresolved counts reflect the
+  actual review-thread state. If GraphQL is unavailable or the comment's
+  thread can't be located, sync falls back to a resolution-blind REST
+  path that still records posted/deleted/replied transitions.
