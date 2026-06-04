@@ -38,6 +38,34 @@ jobs:
       - name: Build sdist and wheel
         run: uv build
 
+      - name: Build deploy bundle
+        # The sdist contains only the Python package (uv_build default
+        # behaviour). Operators deploying via scripts/install-package.sh
+        # need the full tree — wrapper scripts, prompts, deploy templates,
+        # the example config — none of which the sdist carries.
+        # llm-reviewer-deploy-X.Y.Z.tar.gz is the artifact operators
+        # should download for the install script. Exclude pattern mirrors
+        # scripts/deploy-package.sh exactly so the published bundle and
+        # an ad-hoc `deploy-package.sh user@host` ship the same bytes.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          COPYFILE_DISABLE=1 tar \
+            --exclude=.venv \
+            --exclude=.git \
+            --exclude=.pytest_cache \
+            --exclude=__pycache__ \
+            --exclude=config/env.toml \
+            --exclude=var/state \
+            --exclude=var/work \
+            --exclude=var/log \
+            --exclude=var/reports \
+            --exclude=var/jobs \
+            --exclude=./dist \
+            --transform "s,^\./,llm-reviewer-${version}/," \
+            -czf "dist/llm-reviewer-deploy-${version}.tar.gz" .
+          ls -la "dist/llm-reviewer-deploy-${version}.tar.gz"
+
       - name: Generate SBOM (SPDX JSON)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
@@ -53,8 +81,10 @@ jobs:
 
       - name: Sign release artifacts with cosign
         # Keyless signing via Sigstore + GitHub OIDC. Produces .sig + .pem
-        # for each artifact so downstream consumers can verify provenance
-        # with `cosign verify-blob` and the repo's workflow identity.
+        # for each artifact (wheel, sdist, deploy bundle, SBOM) so
+        # downstream consumers can verify provenance with `cosign
+        # verify-blob` and the repo's workflow identity. The glob pulls
+        # in *.tar.gz, which covers both the sdist and the deploy bundle.
         run: |
           for artifact in dist/*.whl dist/*.tar.gz dist/llm-reviewer-sbom.spdx.json; do
             cosign sign-blob --yes \

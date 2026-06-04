@@ -10,6 +10,47 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+### Fixed
+- **Codex profile written in a shape Codex doesn't load (production-
+  blocking).** The runtime invokes `codex --profile llm-reviewer`,
+  which Codex resolves against `[profiles.llm-reviewer]` in
+  `~/.codex/config.toml`. The installer was writing the profile to a
+  sibling `~/.codex/llm-reviewer.config.toml` file that Codex does NOT
+  auto-load for `--profile`, so every review aborted with `config
+  profile llm-reviewer not found`. Fixed by inlining the profile as a
+  `[profiles.llm-reviewer]` block inside `deploy/templates/codex-config.toml`,
+  dropping the orphaned `codex-profile.toml`, and adding a post-install
+  smoke check (`codex exec --profile llm-reviewer --skip-git-repo-check
+  "Return exactly: profile-ok"`) that warns loudly when the profile
+  does not round-trip. Closes #20 (Bug 1).
+- **Stale `uv.lock` shipped at release tag → `uv sync --locked` fails
+  on every install.** release-please-action bumps `pyproject.toml` but
+  does not regenerate `uv.lock`; the resulting release PR's CI failed,
+  and admin-merging it shipped a broken tarball. Fixed in two layers:
+  the v0.5.0 lockfile drift is committed (HEAD now matches
+  `pyproject.toml`), and a new `release-please-lockfile.yml` workflow
+  fires on release-please PRs to regenerate `uv.lock`, commit it back
+  under the release-please bot identity, and push so a fresh CI run
+  goes green before the operator merges. Closes #20 (Bug 2).
+- **sdist did not contain `config/`, `scripts/`, `deploy/`, `bin/`,
+  `prompts/`, `skills/`, or `plugins/`.** The `uv_build` backend
+  packages only the Python package by default; operators downloading
+  the sdist couldn't run `install-package.sh`. The release workflow now
+  builds a separate cosign-signed `llm-reviewer-deploy-X.Y.Z.tar.gz`
+  bundle (full deployable tree, same exclude pattern as
+  `scripts/deploy-package.sh`) and attaches it to every release.
+  Install docs updated to point at the bundle and to call out that
+  sdist/wheel are not the deploy contract. Closes #20 (Bug 3).
+- **Cron template shipped no locking guidance.** The example cron in
+  `deploy/templates/llm-reviewer.cron` was three bare invocations
+  with no `flock` — operators repeatedly invented their own locking,
+  and a single shared `poller.lock` (vs. separate locks per role)
+  caused the `*/5` health probe to block the `*/15` poll at the `:45`
+  collision. The template now ships with `flock -n` on a dedicated
+  lockfile per role (`poller.lock`, `outcome-sync.lock`, `health.lock`)
+  and an explanatory comment about why they must stay separate. Closes
+  #20 (Bug 4).
+
 ## [0.4.1] - 2026-06-04
 
 ### Changed

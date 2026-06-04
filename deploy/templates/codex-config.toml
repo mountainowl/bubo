@@ -11,6 +11,25 @@ memories = false
 [shell_environment_policy]
 inherit = "all"
 
+# Codex profile invoked by the review wrapper as
+#   codex --profile llm-reviewer exec ...
+# (see src/llm_reviewer/codex_runner.py and [agents].codex_profile in
+# config/env.toml). MUST live in the main config under [profiles.NAME] —
+# Codex does NOT auto-load `~/.codex/<NAME>.config.toml` for `--profile`,
+# despite what the filename suggests. Edits here change every review run
+# on this host.
+[profiles.llm-reviewer]
+model = "gpt-5.5"
+model_reasoning_effort = "medium"
+model_reasoning_summary = "none"
+model_verbosity = "low"
+review_model = "gpt-5.5"
+approval_policy = "never"
+sandbox_mode = "read-only"
+web_search = "disabled"
+project_doc_max_bytes = 8192
+hide_agent_reasoning = true
+
 [marketplaces.llm-code-review]
 last_updated = "2026-05-20T20:11:22Z"
 source_type = "local"

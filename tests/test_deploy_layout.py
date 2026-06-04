@@ -29,7 +29,6 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
         "bin/env",
         "config/env.example.toml",
         "deploy/templates/codex-config.toml",
-        "deploy/templates/codex-profile.toml",
         "deploy/templates/claude-settings.json",
         "prompts/00-meta.md",
         "skills/code-reviewer/SKILL.md",
@@ -80,9 +79,36 @@ def test_deploy_archive_excludes_runtime_noise() -> None:
     assert "preserved_state" in install
     assert "COPYFILE_DISABLE=1 tar" in deploy
     assert "COPYFILE_DISABLE=1 tar" in install
-    assert "llm-reviewer.config.toml" in install
+    # The orphaned ~/.codex/llm-reviewer.config.toml is no longer written —
+    # the profile lives inline in codex-config.toml under [profiles.llm-reviewer].
+    assert "llm-reviewer.config.toml" not in install
     assert "skills/code-review/scripts" not in install
     assert 'skills/code-review"' not in install
+
+
+def test_cron_template_uses_separate_locks_per_role() -> None:
+    cron = (ROOT / "deploy" / "templates" / "llm-reviewer.cron").read_text()
+    # All three roles must use distinct flock files. A single shared lock
+    # caused a real production incident where the `*/5` health probe held
+    # the lock at `:45` and the parallel `*/15` poll silently dropped.
+    assert "flock -n" in cron
+    for lock in ("poller.lock", "outcome-sync.lock", "health.lock"):
+        assert lock in cron, f"cron template must use a dedicated {lock}"
+
+
+def test_codex_config_carries_llm_reviewer_profile() -> None:
+    config = (ROOT / "deploy" / "templates" / "codex-config.toml").read_text()
+    # codex_runner.py invokes `codex --profile llm-reviewer`; without a
+    # [profiles.llm-reviewer] block in the main config, Codex aborts with
+    # "config profile llm-reviewer not found" and every review fails.
+    assert "[profiles.llm-reviewer]" in config
+    # Sanity-check the keys the wrapper depends on actually exist under
+    # that profile (loose check — full validity is exercised by the
+    # post-install smoke step in install-package.sh).
+    for key in ("model", "approval_policy", "sandbox_mode"):
+        assert key in config
+    # The orphaned sibling file is gone.
+    assert not (ROOT / "deploy" / "templates" / "codex-profile.toml").exists()
 
 
 def test_deploy_is_not_cron_or_single_host_coupled() -> None:

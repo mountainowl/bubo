@@ -6,26 +6,50 @@ credentials are in hand.
 
 ## Install
 
-Clone the repo and install in place. The install needs the bundled
-prompt, skill, config template, wrapper scripts, and deployment
-templates that ship with the checkout — pip-only installs are not
-supported.
+The install needs the bundled prompt, skill, config template, wrapper
+scripts, and deployment templates that ship with the checkout.
+**`pip install` is not a supported deploy path** — the
+`llm_reviewer-X.Y.Z-py3-none-any.whl` and `llm_reviewer-X.Y.Z.tar.gz`
+artifacts attached to each GitHub Release carry only the Python package
+(no `config/`, `scripts/`, `deploy/`, `bin/`, `prompts/`, or
+`skills/`). Use one of the two deploy artifacts below instead.
+
+### Option 1 — deploy bundle from the GitHub Release (recommended)
+
+Every release attaches an `llm-reviewer-deploy-X.Y.Z.tar.gz` bundle
+containing the full deployable tree (cosign-signed, with `.pem` + `.sig`
+sidecars).
+
+```sh
+version=0.5.1
+curl -LO "https://github.com/mountainowl/ai-code-review/releases/download/v${version}/llm-reviewer-deploy-${version}.tar.gz"
+tar -xzf "llm-reviewer-deploy-${version}.tar.gz"
+cd "llm-reviewer-${version}"
+./scripts/install-package.sh
+```
+
+Pass `--install-agent-config` on the first install to write the Codex
+profile and Claude settings, then drop the flag on subsequent upgrades
+to avoid clobbering local agent-config tweaks.
+
+### Option 2 — clone the repo
 
 ```sh
 git clone https://github.com/mountainowl/ai-code-review.git
 cd ai-code-review
-./scripts/install-package.sh
+git checkout v0.5.1                    # or whatever the latest tag is
+./scripts/install-package.sh --install-agent-config
 ```
 
-For a remote host:
+### Remote host
 
 ```sh
 ./scripts/deploy-package.sh user@host
 # or
-./scripts/deploy-package.sh user@host --root /opt/llm-reviewer --sudo
+./scripts/deploy-package.sh user@host --root /opt/llm-reviewer --sudo --install-agent-config
 ```
 
-For local development:
+### Local development
 
 ```sh
 uv sync --dev

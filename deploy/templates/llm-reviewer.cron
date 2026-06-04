@@ -10,16 +10,27 @@
 # in-flight backpressure inside poll() prevents overlapping cycles from
 # stacking up if a worker stalls.
 #
+# Each role uses a SEPARATE flock file. Do NOT collapse them into one
+# shared lock: at the :45 mark both `*/15` poll and `*/5` health probe
+# fire on the same minute, and a shared lock would cause one to silently
+# skip — usually the slower poll loses to the fast-acquiring health.
+# `flock -n` returns immediately when the lock is held, so overlapping
+# runs of the SAME role drop the duplicate rather than queue up.
+#
 # Schedule columns: minute hour dom month dow
 
 LLM_CODE_REVIEW_ROOT=/home/llm-reviewer/.local/share/llm-reviewer
+LLM_CODE_REVIEW_LOCK_DIR=/var/run/llm-reviewer
 PATH=/usr/local/bin:/usr/bin:/bin
 
 # Poll every 15 minutes.
-*/15 * * * *  llm-reviewer  $LLM_CODE_REVIEW_ROOT/bin/mr-review-poller >> $LLM_CODE_REVIEW_ROOT/var/log/poller.log 2>&1
+*/15 * * * *  llm-reviewer  flock -n $LLM_CODE_REVIEW_LOCK_DIR/poller.lock $LLM_CODE_REVIEW_ROOT/bin/mr-review-poller >> $LLM_CODE_REVIEW_ROOT/var/log/poller.log 2>&1
 
 # Outcome sync hourly — checks GitLab discussion state for posted findings.
-17   * * * *  llm-reviewer  $LLM_CODE_REVIEW_ROOT/bin/mr-review-poller --sync-outcomes >> $LLM_CODE_REVIEW_ROOT/var/log/outcome-sync.log 2>&1
+17   * * * *  llm-reviewer  flock -n $LLM_CODE_REVIEW_LOCK_DIR/outcome-sync.lock $LLM_CODE_REVIEW_ROOT/bin/mr-review-poller --sync-outcomes >> $LLM_CODE_REVIEW_ROOT/var/log/outcome-sync.log 2>&1
 
 # Health probe every 5 minutes — non-zero exit triggers your alerting MTA.
-*/5  * * * *  llm-reviewer  $LLM_CODE_REVIEW_ROOT/bin/mr-review-poller --health >> $LLM_CODE_REVIEW_ROOT/var/log/health.log 2>&1
+*/5  * * * *  llm-reviewer  flock -n $LLM_CODE_REVIEW_LOCK_DIR/health.lock $LLM_CODE_REVIEW_ROOT/bin/mr-review-poller --health >> $LLM_CODE_REVIEW_ROOT/var/log/health.log 2>&1
+
+# Before installing, create the lock dir owned by the runtime user:
+#   sudo install -d -o llm-reviewer -g llm-reviewer -m 0755 /var/run/llm-reviewer

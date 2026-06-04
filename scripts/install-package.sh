@@ -92,10 +92,24 @@ LLM_CODE_REVIEW_ROOT="$ROOT" "$ROOT/bin/mr-review-poller" --init-db
 if [ "$INSTALL_AGENT_CONFIG" -eq 1 ]; then
     mkdir -p "$HOME/.codex/skills" "$HOME/.claude"
     escaped_root="$(printf '%s' "$ROOT" | sed 's/[&|]/\\&/g')"
+    # codex-config.toml now carries the [profiles.llm-reviewer] block
+    # inline. The earlier sibling-file pattern under ~/.codex/ never
+    # worked — Codex does not auto-load sibling files for `--profile`.
     sed "s|{{ROOT}}|$escaped_root|g" "$ROOT/deploy/templates/codex-config.toml" > "$HOME/.codex/config.toml"
-    sed "s|{{ROOT}}|$escaped_root|g" "$ROOT/deploy/templates/codex-profile.toml" > "$HOME/.codex/llm-reviewer.config.toml"
     sed "s|{{ROOT}}|$escaped_root|g" "$ROOT/deploy/templates/claude-settings.json" > "$HOME/.claude/settings.json"
     ln -sfn "$ROOT/skills/code-reviewer" "$HOME/.codex/skills/code-reviewer"
+    # Best-effort smoke check: ask Codex to round-trip the profile so a
+    # broken config fails the install rather than every later poll cycle.
+    # Skipped silently if Codex isn't on PATH or doesn't accept the flags.
+    if command -v codex >/dev/null 2>&1; then
+        if codex exec --profile llm-reviewer --skip-git-repo-check \
+            "Return exactly: profile-ok" 2>/dev/null | grep -q "profile-ok"; then
+            echo "codex profile llm-reviewer verified"
+        else
+            echo "warning: codex --profile llm-reviewer smoke check did not return 'profile-ok'" >&2
+            echo "warning: review runs may fail; verify ~/.codex/config.toml" >&2
+        fi
+    fi
 fi
 
 echo "installed llm-reviewer at $ROOT"
