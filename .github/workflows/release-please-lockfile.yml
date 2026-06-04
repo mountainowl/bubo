@@ -51,13 +51,21 @@ jobs:
         run: uv lock
 
       - name: Commit and push if changed
+        # Commit identity is the repo owner, NOT release-please[bot]. When
+        # the release PR is later squash-merged, GitHub auto-attaches a
+        # `Co-authored-by:` trailer for each distinct identity on the
+        # branch — committing as the bot promotes the bot into the
+        # repo's Contributors widget. Using the owner's noreply email
+        # keeps the squashed merge attributed entirely to a single
+        # human identity. The PAT-driven push still triggers a fresh CI
+        # run (the default GITHUB_TOKEN does not).
         run: |
           if git diff --quiet uv.lock; then
             echo "uv.lock already in sync with pyproject.toml — no commit"
             exit 0
           fi
-          git config user.name "release-please[bot]"
-          git config user.email "55107282+release-please[bot]@users.noreply.github.com"
+          git config user.name "mountainowl"
+          git config user.email "mountainowl@users.noreply.github.com"
           git add uv.lock
           git commit -m "chore(release-please): regenerate uv.lock for new version"
           git push
