@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
+llm-reviewer = "llm_reviewer.cli:main"
 mr-review-poller = "llm_reviewer.poller:main"
 code-review-codex = "llm_reviewer.codex_runner:main"
 gh-review-poller = "llm_reviewer.github:main"
@@ -74,5 +75,57 @@ python_version = "3.14"
 strict = true
 
 [build-system]
-requires = ["uv_build>=0.10.0,<0.12.0"]
-build-backend = "uv_build"
+# Switched from uv_build to hatchling per #22 — hatchling's force-include
+# lets us ship the deploy assets (prompts, skills, plugins, deploy templates,
+# env.example.toml) at importlib.resources-reachable locations inside the
+# wheel WITHOUT physically moving the source files. uv_build's data-dir
+# directives are too narrow for this (scripts/data/headers only) and have
+# silently dropped the deploy tree in prior releases (#20 bug 3).
+#
+# uv still manages dependencies, the lockfile, and venv — only the build
+# backend changed. Recommended by uv maintainer konstin in astral-sh/uv#11502
+# for projects that need flexible non-Python asset packaging.
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+# Hatch is told the package code lives under src/llm_reviewer; the
+# force-include map below mirrors a curated set of repo-root assets into
+# the wheel under llm_reviewer/_assets/ so the new `llm-reviewer init`
+# subcommand can resolve them via importlib.resources.files("llm_reviewer._assets")
+# regardless of how the package was installed.
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_reviewer"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"deploy/templates/codex-config.toml" = "llm_reviewer/_assets/codex-config.toml"
+"deploy/templates/claude-settings.json" = "llm_reviewer/_assets/claude-settings.json"
+"deploy/templates/llm-reviewer.cron" = "llm_reviewer/_assets/llm-reviewer.cron"
+"deploy/templates/llm-reviewer.service" = "llm_reviewer/_assets/llm-reviewer.service"
+"deploy/templates/llm-reviewer.timer" = "llm_reviewer/_assets/llm-reviewer.timer"
+"prompts/00-meta.md" = "llm_reviewer/_assets/prompts/00-meta.md"
+"skills/code-reviewer/SKILL.md" = "llm_reviewer/_assets/skills/code-reviewer/SKILL.md"
+"plugins/superpowers/.codex-plugin/plugin.json" = "llm_reviewer/_assets/plugins/superpowers/.codex-plugin/plugin.json"
+"config/env.example.toml" = "llm_reviewer/_assets/env.example.toml"
+
+# Source distribution: ship the runtime assets at the natural repo-root
+# paths so a `pip install <sdist>` / `uv build` round-trips correctly
+# and `scripts/install-package.sh` (still supported during the
+# deprecation window) continues to find them. Hatchling's sdist defaults
+# already pick up src/, pyproject.toml, README.md, LICENSE, CHANGELOG.md
+# — we explicitly include the rest of the operator-facing tree.
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/",
+  "bin/",
+  "scripts/",
+  "deploy/",
+  "prompts/",
+  "skills/",
+  "plugins/",
+  "config/env.example.toml",
+  "README.md",
+  "CHANGELOG.md",
+  "LICENSE",
+  "pyproject.toml",
+  "uv.lock",
+]

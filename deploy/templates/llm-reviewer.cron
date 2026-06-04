@@ -19,7 +19,7 @@
 #
 # Schedule columns: minute hour dom month dow
 
-LLM_CODE_REVIEW_ROOT=/home/llm-reviewer/.local/share/llm-reviewer
+LLM_CODE_REVIEW_ROOT={{ROOT}}
 LLM_CODE_REVIEW_LOCK_DIR=/var/run/llm-reviewer
 PATH=/usr/local/bin:/usr/bin:/bin
 

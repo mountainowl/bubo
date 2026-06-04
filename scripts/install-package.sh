@@ -1,6 +1,34 @@
 #!/bin/sh
 set -eu
 
+# ---------------------------------------------------------------------------
+# DEPRECATED in v0.6.0 (issue #22). To be removed in v0.7.0.
+# ---------------------------------------------------------------------------
+# Use the new Python install path instead:
+#
+#     uv tool install git+https://github.com/mountainowl/ai-code-review@<tag>
+#     llm-reviewer init --install-agent-config
+#     llm-reviewer doctor
+#
+# `uv tool install` handles dependency resolution and PATH placement;
+# `llm-reviewer init` is the Python equivalent of this script. The new
+# path uses the same packaged templates and writes them with the same
+# {{ROOT}} substitution, but it's cross-platform, idempotent, dry-runnable
+# (--dry-run), version-aware, and skips when operator edits exist
+# (instead of silently clobbering them).
+# ---------------------------------------------------------------------------
+
+cat >&2 <<'WARN'
+WARNING: scripts/install-package.sh is deprecated as of v0.6.0 (issue #22)
+         and will be removed in v0.7.0. Migrate to:
+
+           uv tool install git+https://github.com/mountainowl/ai-code-review@<tag>
+           llm-reviewer init --install-agent-config
+
+         See docs/install-and-configure.md for the full new flow.
+
+WARN
+
 PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 export PATH
 

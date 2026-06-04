@@ -16,7 +16,7 @@ User=llm-reviewer
 Group=llm-reviewer
 
 # Adjust to your install path.
-Environment=LLM_CODE_REVIEW_ROOT=/home/llm-reviewer/.local/share/llm-reviewer
+Environment=LLM_CODE_REVIEW_ROOT={{ROOT}}
 
 # Inject secrets through systemd credentials rather than baking them into
 # config/env.toml. Reference them in TOML via `${VAR}` interpolation:
@@ -30,7 +30,7 @@ LoadCredential=LLM_API_KEY:/etc/llm-reviewer/credentials/llm-api-key
 Environment=GITLAB_TOKEN=%d/GITLAB_TOKEN
 Environment=LLM_API_KEY=%d/LLM_API_KEY
 
-ExecStart=/home/llm-reviewer/.local/share/llm-reviewer/bin/mr-review-poller
+ExecStart={{ROOT}}/bin/mr-review-poller
 TimeoutStopSec=120s
 
 # Hardening — the poller does not need root or write access outside its
@@ -39,7 +39,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/home/llm-reviewer/.local/share/llm-reviewer/var
+ReadWritePaths={{ROOT}}/var
 
 [Install]
 WantedBy=multi-user.target

@@ -86,6 +86,17 @@ def test_deploy_archive_excludes_runtime_noise() -> None:
     assert 'skills/code-review"' not in install
 
 
+def test_install_package_sh_prints_deprecation_warning() -> None:
+    install = (ROOT / "scripts" / "install-package.sh").read_text()
+    # Required by #22 Phase 3: operators reaching for the shell installer
+    # must be redirected to the `uv tool install` + `llm-reviewer init`
+    # path. The warning makes the deprecation discoverable without
+    # forcing a doc lookup.
+    assert "deprecated" in install.lower()
+    assert "uv tool install" in install
+    assert "llm-reviewer init" in install
+
+
 def test_cron_template_uses_separate_locks_per_role() -> None:
     cron = (ROOT / "deploy" / "templates" / "llm-reviewer.cron").read_text()
     # All three roles must use distinct flock files. A single shared lock

@@ -10,6 +10,44 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+### Added
+- **New `llm-reviewer` CLI with `init` and `doctor` subcommands.** Closes #22.
+  Operators now install via `uv tool install git+https://github.com/mountainowl/ai-code-review@<tag>`
+  and run `llm-reviewer init` to place per-host assets (Codex profile,
+  Claude settings, `config/env.toml` seed, `var/` workspace, prompts,
+  skills, plugins, SQLite schema). `init` is idempotent, supports
+  `--dry-run` / `--force` / `--no-agent-config` / `--root`, and writes
+  `~/.codex/config.toml` with a load-bearing `[profiles.llm-reviewer]`
+  block — the v0.5.0 incident's root cause (#20 bug 1) is locked out by
+  a doctor check that asserts the block is present. `llm-reviewer
+  doctor` is a non-mutating diagnostic: zero exit on a clean install,
+  non-zero if env.toml is missing, the DB hasn't been initialized, or
+  the Codex profile block isn't there. Suitable as a cron / monitoring
+  smoke test.
+
+### Changed
+- **Build backend swapped from `uv_build` to `hatchling`.** uv_build's
+  data-include shape was too narrow to ship the deploy assets (prompts,
+  skills, plugins, deploy templates, env.example.toml) at
+  `importlib.resources`-reachable locations; the silent-drop of those
+  assets was #20 bug 3. Hatchling's `force-include` maps each repo-root
+  asset into the wheel under `llm_reviewer/_assets/` so the new CLI
+  can read them via `importlib.resources` regardless of install path
+  (`uv tool install`, `pipx`, `pip`, or editable `uv sync --dev`).
+  Recommended by uv maintainer konstin in astral-sh/uv#11502 for
+  projects with non-Python assets. uv still owns dependency resolution
+  and the lockfile.
+
+### Deprecated
+- **`scripts/install-package.sh` and `scripts/deploy-package.sh`.** Still
+  functional in v0.6.x but print a deprecation warning on every run
+  pointing at `uv tool install` + `llm-reviewer init`. Scheduled for
+  removal in v0.7.0. The deploy assets and shell scripts continue to
+  ship in the sdist so existing operators are unaffected during the
+  deprecation window.
+
+## [0.5.1] - 2026-06-04
+
 ### Fixed
 - **Codex profile written in a shape Codex doesn't load (production-
   blocking).** The runtime invokes `codex --profile llm-reviewer`,

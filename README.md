@@ -58,15 +58,15 @@ Codex/Claude agent — see [prerequisites](docs/prerequisites.md) for the
 copy-paste blocks), then:
 
 ```sh
-git clone https://github.com/mountainowl/ai-code-review.git
-cd ai-code-review
-./scripts/install-package.sh
+uv tool install git+https://github.com/mountainowl/ai-code-review@v0.6.0
+llm-reviewer init                # idempotent; --dry-run to preview
 
-cp config/env.example.toml config/env.toml
-# Edit config/env.toml: set [gitlab].token, [agents].llm_api_key,
-# [agents].llm_model, and at least one [[projects]] entry.
+# Edit ~/.local/share/llm-reviewer/config/env.toml:
+#   [gitlab].token, [agents].llm_api_key, [agents].llm_model,
+#   and at least one [[projects]] entry.
 
-uv run mr-review-poller          # one poll cycle; exits at the end
+llm-reviewer doctor              # verify before first poll
+mr-review-poller                 # one poll cycle; exits at the end
 ```
 
 The first cycle runs with `[review].dry_run = true` (the default) — findings
@@ -120,7 +120,7 @@ in the configured CLI skill.
 | Doc | What's in it |
 |---|---|
 | [Prerequisites](docs/prerequisites.md) | macOS / Linux runtime, per-provider tools, credentials, install verification. |
-| [Install and configure](docs/install-and-configure.md) | `install-package.sh`, the minimum `config/env.toml`, GitLab and GitHub bot setup. |
+| [Install and configure](docs/install-and-configure.md) | `uv tool install`, `llm-reviewer init`, the minimum `config/env.toml`, GitLab and GitHub bot setup. |
 | [Run](docs/run.md) | One-off review, the GitLab poller, the bundled `mcp-llm-reviewer` MCP server (three deployment patterns) and upstream wrappers. |
 | [Configuration reference](docs/configuration.md) | Every `[scm]` / `[gitlab]` / `[github]` / `[review]` / `[poller]` / `[agents]` / `[telemetry]` / `[[projects]]` setting and its default. |
 | [Operate](docs/operate.md) | Remote deploy, scheduling under cron or systemd, `--sync-outcomes` grading, one-shot backfill. |

@@ -65,9 +65,13 @@ def test_launch_readiness_files_exist() -> None:
     assert missing == []
 
     readme = (ROOT / "README.md").read_text()
-    assert "./scripts/install-package.sh" in readme
-    assert "prompt, skill, config template, wrapper scripts" in readme
-    assert "pipx install git+" not in readme
+    # The quickstart in README is the canonical install path. After #22
+    # this points at `uv tool install` + `llm-reviewer init` rather than
+    # the deprecated shell installer. The shell installer reference
+    # moves to docs/install-and-configure.md under "Option 3 (deprecated)".
+    assert "uv tool install" in readme
+    assert "llm-reviewer init" in readme
+    assert "llm-reviewer doctor" in readme
     assert "actions/workflows/ci.yml/badge.svg" in readme
     assert "api.scorecard.dev/projects/github.com/mountainowl/ai-code-review/badge" in readme
     assert "Run it as a poller beside your" in readme
@@ -92,9 +96,7 @@ def test_readme_config_table_groups_sections() -> None:
         "[telemetry]",
         "[[projects]]",
     ):
-        assert (
-            f'<tr><th colspan="3"><code>{section}</code></th></tr>' in config_doc
-        )
+        assert f'<tr><th colspan="3"><code>{section}</code></th></tr>' in config_doc
     assert "<code>[telemetry.pricing.default]</code>" not in config_doc
 
 
