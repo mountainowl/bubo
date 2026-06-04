@@ -74,14 +74,14 @@ def test_launch_readiness_files_exist() -> None:
 
 
 def test_readme_config_table_groups_sections() -> None:
-    readme = (ROOT / "README.md").read_text()
+    config_doc = (ROOT / "docs" / "configuration.md").read_text()
 
-    assert "| Section | Setting | Default | Purpose / impact |" not in readme
-    assert "<th>Setting</th>" in readme
-    assert "<th>Default</th>" in readme
-    assert "<th>Purpose / impact</th>" in readme
-    assert "<code>[secrets]</code>" not in readme
-    assert "<code>[agent]</code>" not in readme
+    assert "| Section | Setting | Default | Purpose / impact |" not in config_doc
+    assert "<th>Setting</th>" in config_doc
+    assert "<th>Default</th>" in config_doc
+    assert "<th>Purpose / impact</th>" in config_doc
+    assert "<code>[secrets]</code>" not in config_doc
+    assert "<code>[agent]</code>" not in config_doc
     for section in (
         "[scm]",
         "[gitlab]",
@@ -92,8 +92,24 @@ def test_readme_config_table_groups_sections() -> None:
         "[telemetry]",
         "[[projects]]",
     ):
-        assert f'<tr><th colspan="3"><code>{section}</code></th></tr>' in readme
-    assert "<code>[telemetry.pricing.default]</code>" not in readme
+        assert (
+            f'<tr><th colspan="3"><code>{section}</code></th></tr>' in config_doc
+        )
+    assert "<code>[telemetry.pricing.default]</code>" not in config_doc
+
+
+def test_readme_links_to_split_docs() -> None:
+    readme = (ROOT / "README.md").read_text()
+    for doc in (
+        "docs/prerequisites.md",
+        "docs/install-and-configure.md",
+        "docs/run.md",
+        "docs/configuration.md",
+        "docs/operate.md",
+        "docs/telemetry.md",
+    ):
+        assert (ROOT / doc).is_file(), f"missing split doc: {doc}"
+        assert doc in readme, f"README does not link to {doc}"
 
 
 def test_meta_prompt_includes_concise_review_style_example() -> None:
