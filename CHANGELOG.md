@@ -10,6 +10,29 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-08
+
+### Fixed
+- **Release artifacts now publish.** The `v0.7.0` GitHub release was cut
+  but shipped **without** the wheel, sdist, deploy bundle, or SBOM: the
+  `release.yml` signing step failed because cosign v2.5+/v3 requires a
+  `--bundle` output on `sign-blob` (it errored with `create bundle file:
+  open : no such file or directory`). Fixed by adding `--bundle`
+  alongside the existing `--output-signature`/`--output-certificate`
+  and publishing the `.bundle` files. `v0.7.1` is `v0.7.0`'s code
+  (the Bubo rename) with a working signed-release pipeline — re-cut
+  rather than overwriting the immutable `v0.7.0` tag.
+- **GitHub Pages docs site deploys.** The `deploy-docs.yml` workflow
+  pinned `actions/deploy-pages` to a nonexistent commit SHA (and
+  `actions/upload-pages-artifact` to a mislabeled one), so the site
+  404'd. Repinned both to valid `v5.0.0` SHAs verified against the
+  GitHub API.
+
+### Added
+- **References & further reading page** on the docs site — curated,
+  link-verified citations for the sources behind Bubo's design,
+  packaging, and discoverability work.
+
 ## [0.7.0] - 2026-06-08
 
 ### Changed
