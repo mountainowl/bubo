@@ -28,6 +28,14 @@ dev = [
   "pytest>=9.0.1",
   "ruff>=0.15.16",
 ]
+# Documentation site published to GitHub Pages from docs/ via
+# .github/workflows/deploy-docs.yml. Pinned loosely — the docs are
+# rendered, not type-checked, so freshness > reproducibility here.
+docs = [
+  "mkdocs>=1.6",
+  "mkdocs-material>=9.5",
+  "pymdown-extensions>=10.7",
+]
 
 [tool.uv]
 package = true

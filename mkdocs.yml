@@ -1,0 +1,103 @@
+# MkDocs Material configuration for the GitHub Pages site at
+# https://mountainowl.github.io/ai-code-review/.
+#
+# The site is rendered from the existing docs/*.md files (no content
+# duplication). Each merge to main rebuilds the site via
+# .github/workflows/deploy-docs.yml.
+#
+# To preview locally:
+#   uv sync --group docs
+#   uv run mkdocs serve  # → http://127.0.0.1:8000
+
+site_name: llm-reviewer
+site_description: >-
+  Evidence-backed LLM code review for GitLab MRs and GitHub PRs. Runs
+  Codex/Claude review skills and posts inline review threads — no chatbot
+  noise, no praise, no summaries.
+site_url: https://mountainowl.github.io/ai-code-review/
+site_author: mountainowl
+
+repo_name: mountainowl/ai-code-review
+repo_url: https://github.com/mountainowl/ai-code-review
+edit_uri: edit/main/docs/
+
+# Source markdown lives in docs/; mkdocs reads it directly so this site
+# never drifts from what operators see when they browse the repo.
+docs_dir: docs
+
+theme:
+  name: material
+  # Toggleable dark / light mode driven by the user's system preference.
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant         # SPA-style page swaps (faster perceived load)
+    - navigation.tracking        # URL fragment follows scroll position
+    - navigation.sections        # Render top-level groups as sections in sidebar
+    - navigation.top             # "Back to top" button
+    - search.suggest             # Inline search-as-you-type
+    - search.highlight           # Highlight the query in result pages
+    - content.code.copy          # Per-code-block copy button
+    - content.code.annotate      # Inline numbered annotations on code blocks
+    - content.action.edit        # "Edit this page" -> repo
+  icon:
+    repo: fontawesome/brands/github
+
+# The order here drives the sidebar. index is the landing; the rest match
+# the existing docs/*.md filenames so anyone who linked to those files
+# from external posts keeps a working URL.
+nav:
+  - Overview: index.md
+  - Prerequisites: prerequisites.md
+  - Install and configure: install-and-configure.md
+  - Run: run.md
+  - Configuration reference: configuration.md
+  - Operate: operate.md
+  - Telemetry: telemetry.md
+  - Examples: examples/README.md
+
+markdown_extensions:
+  - admonition                   # !!! note / !!! warning blocks
+  - attr_list                    # {: .class } attributes on markdown elements
+  - md_in_html                   # Render markdown inside <div> blocks
+  - tables
+  - toc:
+      permalink: true            # ¶ anchor on each heading
+  - pymdownx.details             # Collapsible details/summary
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets            # ?include external file blocks
+  - pymdownx.superfences:        # Fenced code with attributes + mermaid
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/mountainowl/ai-code-review
+      name: Source on GitHub

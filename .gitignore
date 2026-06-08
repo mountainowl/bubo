@@ -18,3 +18,4 @@ var/state/*.sqlite
 var/state/*.sqlite-*
 
 config/env.toml
+site/

@@ -1,0 +1,79 @@
+name: Deploy docs to Pages
+
+# Builds the MkDocs Material site under docs/ and publishes it to
+# https://mountainowl.github.io/ai-code-review/. The repo's homepage
+# URL in About points at that origin.
+#
+# Triggers:
+#   * push to main when docs/, mkdocs.yml, or this workflow change
+#   * manual run via the Actions tab (workflow_dispatch) for re-deploys
+#     without a content change
+#
+# The Pages "GitHub Actions" source MUST be enabled in repo Settings
+# → Pages → Source = "GitHub Actions" for the deploy step to bind
+# its artifact to the live site.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - mkdocs.yml
+      - .github/workflows/deploy-docs.yml
+      - pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Allow only one concurrent deploy. If a newer push lands while a build
+# is mid-flight, cancel the older one — Pages only serves the latest.
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+
+      - name: Install docs dependencies
+        run: uv sync --locked --group docs
+
+      - name: Build the static site
+        # --strict fails on any warning (broken link, missing nav entry,
+        # malformed YAML) so a busted PR can't ship a broken site.
+        run: uv run mkdocs build --strict
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v4.0.0
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write          # publish to the Pages environment
+      id-token: write       # OIDC for the deploy-pages action
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@2533ba82d039914c9f17b277f99fc73d666fdc3f # v4.0.5

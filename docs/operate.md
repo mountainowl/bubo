@@ -73,7 +73,7 @@ both achieve the same cadence (poll every 15 min, sync outcomes
 hourly, health probe every 5 min) and both ship with **separate
 `flock` files per role** (poller / outcome-sync / health) to prevent
 the cross-role lock collision that broke a production deploy in 0.5.0
-(see [CHANGELOG.md](../CHANGELOG.md) `[0.5.1]`).
+(see [CHANGELOG.md](https://github.com/mountainowl/ai-code-review/blob/main/CHANGELOG.md) `[0.5.1]`).
 
 ### Cron
 
