@@ -49,20 +49,9 @@ GITHUB_TOKEN_ENV_NAMES = (
     "GH_TOKEN",
 )
 
-# Always set. Provider-agnostic — every supported review CLI honors it.
+# Generic name, always exported. Wrappers that honor it find the key with
+# zero per-host configuration.
 LLM_API_KEY_ENV_KEYS = ("LLM_API_KEY",)
-
-# Provider-specific env var names. Selected at export time by ``llm_model``
-# substring matching so a host configured for Anthropic does not leak its
-# key into ``OPENAI_API_KEY`` (which the env allowlist would then forward
-# wholesale into a Codex/Claude subprocess).
-#
-# Kept intentionally short: only the providers whose CLI wrappers ship in
-# this repo. Add a row here when a new wrapper lands.
-_PROVIDER_ENV_BY_MODEL_PREFIX = (
-    ("gpt", "OPENAI_API_KEY"),
-    ("claude", "ANTHROPIC_API_KEY"),
-)
 
 
 def env_config_path(root: Path) -> Path:
@@ -208,11 +197,16 @@ def credential_env(cfg: dict[str, Any]) -> dict[str, str]:
     """Compute credential env vars from ``[gitlab].token`` and ``[agents].llm_api_key``.
 
     GitLab token is set under three names because each tool reads a
-    different variable. The LLM key is set under the **provider-specific**
-    name (matched from ``[agents].llm_model``) plus the generic
-    ``LLM_API_KEY``, rather than fanned out into every known provider name
-    — that earlier behavior leaked an Anthropic key into ``OPENAI_API_KEY``
-    on hosts configured for Claude.
+    different variable.
+
+    The LLM key is exported under the generic ``LLM_API_KEY`` and,
+    optionally, under one **operator-named** variable from
+    ``[agents].llm_api_key_env``. Bubo is model-agnostic — it does NOT
+    guess a provider-specific env var name from the model. Operators set
+    ``llm_api_key_env`` to whatever their chosen LLM CLI reads
+    (``OPENAI_API_KEY`` for OpenAI/Codex, ``ANTHROPIC_API_KEY`` for
+    Claude, ``GEMINI_API_KEY`` for Gemini, …). Exactly one name is set,
+    so a key never leaks under a provider name the host isn't using.
     """
     gitlab = section(cfg, "gitlab")
     github = section(cfg, "github")
@@ -233,32 +227,16 @@ def credential_env(cfg: dict[str, Any]) -> dict[str, str]:
     llm_api_key = agent.get("llm_api_key")
     if llm_api_key:
         value = str(llm_api_key)
-        # Generic name first — every wrapper falls back to this.
+        # Generic name first — every wrapper that honors it falls back here.
         for env_key in LLM_API_KEY_ENV_KEYS:
             exports[env_key] = value
-        # Provider-specific name, selected from llm_model. Skipped when
-        # no model is configured — leaving the generic name as the only
-        # signal to the wrapper.
-        provider_env = _provider_env_for(agent.get("llm_model"))
-        if provider_env is not None:
-            exports[provider_env] = value
+        # Operator-named variable for the LLM CLI actually in use. No
+        # provider is inferred; the operator declares the name. Blank /
+        # whitespace-only is treated as unset.
+        key_env = agent.get("llm_api_key_env")
+        if isinstance(key_env, str) and key_env.strip():
+            exports[key_env.strip()] = value
     return exports
-
-
-def _provider_env_for(model: object) -> str | None:
-    """Return the provider-specific env var name for ``model``, or ``None``.
-
-    Matching is by lowercase prefix on the model name. Unknown models fall
-    through and only the generic ``LLM_API_KEY`` is exported — safer than
-    guessing and leaking the key under multiple names.
-    """
-    if not isinstance(model, str) or not model:
-        return None
-    lowered = model.strip().lower()
-    for prefix, env_name in _PROVIDER_ENV_BY_MODEL_PREFIX:
-        if lowered.startswith(prefix):
-            return env_name
-    return None
 
 
 def apply_runtime_env(root: Path, cfg: dict[str, Any]) -> None:

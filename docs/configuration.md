@@ -122,7 +122,12 @@ credentials live in that one TOML file.
     <tr>
       <td><code>llm_api_key</code></td>
       <td>unset</td>
-      <td>LLM provider key. Exported as <code>LLM_API_KEY</code>, <code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, and <code>QWEN_API_KEY</code>.</td>
+      <td>API key for whatever LLM you review with. Exported as the generic <code>LLM_API_KEY</code> plus the operator-named variable in <code>llm_api_key_env</code>.</td>
+    </tr>
+    <tr>
+      <td><code>llm_api_key_env</code></td>
+      <td><code>OPENAI_API_KEY</code></td>
+      <td>The env-var name your LLM CLI/SDK reads the key from — Bubo is model-agnostic and does not guess it. Set to <code>OPENAI_API_KEY</code> (OpenAI/Codex), <code>ANTHROPIC_API_KEY</code> (Claude), <code>GEMINI_API_KEY</code> (Gemini), or whatever your CLI expects. Blank exports only <code>LLM_API_KEY</code>.</td>
     </tr>
     <tr>
       <td><code>reasoning_effort</code></td>

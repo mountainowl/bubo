@@ -106,6 +106,7 @@ def test_runtime_env_exports_from_env_toml() -> None:
             "prompt_file": "prompts/00-meta.md",
             "llm_model": "gpt-test",
             "llm_api_key": "llm-secret",
+            "llm_api_key_env": "OPENAI_API_KEY",
             "reasoning_effort": "high",
             "dry_run": False,
             "codex_profile": "reviewer",
@@ -133,29 +134,38 @@ def test_runtime_env_exports_from_env_toml() -> None:
     assert env["GITLAB_TOKEN"] == "gitlab-secret"
     assert env["GITLAB_PERSONAL_ACCESS_TOKEN"] == "gitlab-secret"
     assert env["GLAB_TOKEN"] == "gitlab-secret"
-    # Generic LLM_API_KEY is always set. Provider-specific name is selected
-    # from llm_model — "gpt-test" prefix matches OPENAI_API_KEY. The other
-    # provider names (ANTHROPIC, QWEN) are NOT exported because the host
-    # is configured for an OpenAI model — leaking an OpenAI key into them
-    # would later get forwarded into the reviewer subprocess.
+    # Generic LLM_API_KEY is always set; the operator-named var
+    # (llm_api_key_env = "OPENAI_API_KEY") also gets it. No provider name
+    # is inferred from the model, so the others are never exported.
     assert env["LLM_API_KEY"] == "llm-secret"
     assert env["OPENAI_API_KEY"] == "llm-secret"
     assert "ANTHROPIC_API_KEY" not in env
     assert "QWEN_API_KEY" not in env
 
 
-def test_llm_key_selects_anthropic_for_claude_models() -> None:
+def test_llm_key_exports_under_operator_named_var() -> None:
+    # The operator names the env var their LLM CLI reads — no model-based
+    # guessing. Here Anthropic, despite no "claude" anywhere.
     env = runtime_env(
         Path("/opt/bubo"),
-        {"agents": {"llm_api_key": "secret", "llm_model": "claude-3-opus"}},
+        {"agents": {"llm_api_key": "secret", "llm_api_key_env": "ANTHROPIC_API_KEY"}},
     )
     assert env["LLM_API_KEY"] == "secret"
     assert env["ANTHROPIC_API_KEY"] == "secret"
     assert "OPENAI_API_KEY" not in env
-    assert "QWEN_API_KEY" not in env
 
 
-def test_llm_key_unknown_model_only_sets_generic() -> None:
+def test_llm_key_works_for_any_provider_name() -> None:
+    # Provider-agnostic: a name the tool has never heard of still works.
+    env = runtime_env(
+        Path("/opt/bubo"),
+        {"agents": {"llm_api_key": "secret", "llm_api_key_env": "GEMINI_API_KEY"}},
+    )
+    assert env["GEMINI_API_KEY"] == "secret"
+
+
+def test_llm_key_without_env_name_only_sets_generic() -> None:
+    # No llm_api_key_env -> only the generic LLM_API_KEY, no provider names.
     env = runtime_env(
         Path("/opt/bubo"),
         {"agents": {"llm_api_key": "secret", "llm_model": "custom-model-x"}},
@@ -163,6 +173,15 @@ def test_llm_key_unknown_model_only_sets_generic() -> None:
     assert env["LLM_API_KEY"] == "secret"
     assert "OPENAI_API_KEY" not in env
     assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_llm_key_blank_env_name_is_ignored() -> None:
+    env = runtime_env(
+        Path("/opt/bubo"),
+        {"agents": {"llm_api_key": "secret", "llm_api_key_env": "  "}},
+    )
+    assert env["LLM_API_KEY"] == "secret"
+    assert len([k for k in env if k.endswith("_API_KEY") and k != "LLM_API_KEY"]) == 0
 
 
 def test_agents_dry_run_controls_review_dry_run_export() -> None:

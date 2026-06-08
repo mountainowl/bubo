@@ -10,6 +10,24 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING (config): the LLM API-key env var is now operator-named, not
+  inferred from the model.** Bubo is "bring your own LLM," but the
+  credential plumbing hardcoded a model→env map (`gpt → OPENAI_API_KEY`,
+  `claude → ANTHROPIC_API_KEY`) and silently did nothing for any other
+  provider (Gemini, Qwen, Mistral, local, …). That map is removed. Add
+  `[agents].llm_api_key_env` to name the variable your LLM CLI/SDK reads
+  the key from; the key in `[agents].llm_api_key` is exported under that
+  name plus the generic `LLM_API_KEY`. The shipped `env.example.toml`
+  defaults it to `OPENAI_API_KEY` (matching the default `gpt-5.5` +
+  Codex), so fresh OpenAI installs are unaffected.
+
+  **Migration:** operators who relied on the old `claude → ANTHROPIC_API_KEY`
+  inference must add `llm_api_key_env = "ANTHROPIC_API_KEY"` to
+  `[agents]`. OpenAI users on the example config need no change. Anyone
+  on Gemini/other can now set the correct name instead of being stuck
+  with a key that only exported under `LLM_API_KEY`.
+
 ## [0.7.2] - 2026-06-08
 
 ### Changed

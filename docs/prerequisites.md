@@ -75,7 +75,7 @@ authorizes the REST/MCP calls that read MRs/PRs and post comments.
 | Credential | What it does | Notes |
 |---|---|---|
 | **Bot user + token** | The bot account whose name appears on review threads/comments. | **GitLab:** token with `api` scope. **GitHub:** token with pull-request read+write. Create a dedicated bot account and add it to every reviewed project. |
-| **LLM provider API key** | OpenAI, Anthropic, or another provider used by the review CLI. | Exported as `LLM_API_KEY` plus the provider-specific name matched from `[agents].llm_model`. |
+| **LLM API key** | OpenAI, Anthropic, Gemini, or whatever model your review CLI runs. | Exported as `LLM_API_KEY` plus the operator-named variable in `[agents].llm_api_key_env` (e.g. `OPENAI_API_KEY`). |
 
 ## Optional
 
