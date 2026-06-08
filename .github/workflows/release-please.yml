@@ -26,14 +26,15 @@ name: Release Please
 # `release.yml` would silently fail to fire without the PAT.
 
 on:
-  # DISABLED auto-run (was: push to main). release-please's version state
-  # diverged from this repo's history: it only recognizes tags it created
-  # itself (last: v0.7.0) and repeatedly proposed — and once merged —
-  # "release 0.7.1" PRs that REVERTED main's version after manual
-  # v0.7.1/v0.7.2 cuts. Until the manifest/tag state is re-bootstrapped,
-  # releases are cut manually (bump pyproject + manifest + CHANGELOG, tag
-  # vX.Y.Z, release.yml publishes). Left as workflow_dispatch so it can be
-  # run deliberately once the state is fixed, without auto-corrupting main.
+  # Re-enabled after a manual re-bootstrap. release-please had diverged —
+  # it only recognized tags it created itself (last: v0.7.0) and kept
+  # proposing/reverting "release 0.7.1" PRs after the manual v0.7.1/v0.7.2
+  # cuts. The state is now realigned: `.release-please-manifest.json` is
+  # `0.8.0` and a real `v0.8.0` tag + release exist, so release-please
+  # anchors at 0.8.0 and computes the next version from commits after it.
+  # workflow_dispatch is kept so a release can also be forced by hand.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
