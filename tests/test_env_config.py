@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
-from llm_reviewer import codex_runner
-from llm_reviewer.config_values import ConfigError
-from llm_reviewer.env_config import expand_env_placeholders, read_config_file, runtime_env
+from bubo import codex_runner
+from bubo.config_values import ConfigError
+from bubo.env_config import expand_env_placeholders, read_config_file, runtime_env
 
 
 def test_expand_env_placeholders_required_present() -> None:
@@ -90,7 +90,7 @@ max_findings_per_merge_request = 9
 
 
 def test_runtime_env_exports_from_env_toml() -> None:
-    root = Path("/opt/llm-reviewer")
+    root = Path("/opt/bubo")
     cfg = {
         "gitlab": {
             "api_url": "https://gitlab.example/api/v4",
@@ -115,12 +115,12 @@ def test_runtime_env_exports_from_env_toml() -> None:
 
     env = runtime_env(root, cfg)
 
-    assert env["LLM_CODE_REVIEW_ROOT"] == "/opt/llm-reviewer"
-    # LLM_CODE_REVIEW_HOME was removed — paths.py never read it and
-    # LLM_CODE_REVIEW_ROOT covers the same intent.
-    assert "LLM_CODE_REVIEW_HOME" not in env
-    assert env["LLM_CODE_REVIEW_BASE_DIR"] == "/opt/llm-reviewer/var"
-    assert env["LLM_CODE_REVIEW_PROMPT"] == "/opt/llm-reviewer/prompts/00-meta.md"
+    assert env["BUBO_ROOT"] == "/opt/bubo"
+    # BUBO_HOME was removed — paths.py never read it and
+    # BUBO_ROOT covers the same intent.
+    assert "BUBO_HOME" not in env
+    assert env["BUBO_BASE_DIR"] == "/opt/bubo/var"
+    assert env["BUBO_PROMPT"] == "/opt/bubo/prompts/00-meta.md"
     assert env["REVIEW_MODEL"] == "gpt-test"
     assert env["REVIEW_REASONING_EFFORT"] == "high"
     assert env["REVIEW_DRY_RUN"] == "false"
@@ -129,7 +129,7 @@ def test_runtime_env_exports_from_env_toml() -> None:
     assert env["CODEX_SANDBOX"] == "read-only"
     assert env["GITLAB_API_URL"] == "https://gitlab.example/api/v4"
     assert env["GITLAB_DENIED_TOOLS_REGEX"] == "^(delete_.*)$"
-    assert env["LLM_REVIEWER_GITLAB_USERNAME"] == "review-bot"
+    assert env["BUBO_GITLAB_USERNAME"] == "review-bot"
     assert env["GITLAB_TOKEN"] == "gitlab-secret"
     assert env["GITLAB_PERSONAL_ACCESS_TOKEN"] == "gitlab-secret"
     assert env["GLAB_TOKEN"] == "gitlab-secret"
@@ -146,7 +146,7 @@ def test_runtime_env_exports_from_env_toml() -> None:
 
 def test_llm_key_selects_anthropic_for_claude_models() -> None:
     env = runtime_env(
-        Path("/opt/llm-reviewer"),
+        Path("/opt/bubo"),
         {"agents": {"llm_api_key": "secret", "llm_model": "claude-3-opus"}},
     )
     assert env["LLM_API_KEY"] == "secret"
@@ -157,7 +157,7 @@ def test_llm_key_selects_anthropic_for_claude_models() -> None:
 
 def test_llm_key_unknown_model_only_sets_generic() -> None:
     env = runtime_env(
-        Path("/opt/llm-reviewer"),
+        Path("/opt/bubo"),
         {"agents": {"llm_api_key": "secret", "llm_model": "custom-model-x"}},
     )
     assert env["LLM_API_KEY"] == "secret"
@@ -167,22 +167,20 @@ def test_llm_key_unknown_model_only_sets_generic() -> None:
 
 def test_agents_dry_run_controls_review_dry_run_export() -> None:
     env = runtime_env(
-        Path("/opt/llm-reviewer"),
+        Path("/opt/bubo"),
         {"agents": {"dry_run": False}},
     )
     assert env["REVIEW_DRY_RUN"] == "false"
 
     env = runtime_env(
-        Path("/opt/llm-reviewer"),
+        Path("/opt/bubo"),
         {"agents": {"dry_run": True}},
     )
     assert env["REVIEW_DRY_RUN"] == "true"
 
 
 def test_empty_tokens_are_not_exported() -> None:
-    env = runtime_env(
-        Path("/opt/llm-reviewer"), {"gitlab": {"token": ""}, "agents": {"llm_api_key": ""}}
-    )
+    env = runtime_env(Path("/opt/bubo"), {"gitlab": {"token": ""}, "agents": {"llm_api_key": ""}})
 
     assert "GITLAB_TOKEN" not in env
     assert "GITLAB_PERSONAL_ACCESS_TOKEN" not in env
@@ -226,7 +224,7 @@ llm_api_key = "llm-secret"
     original_config = codex_runner.ENV_CONFIG
     try:
         codex_runner.ENV_CONFIG = env_file
-        with patch.dict(os.environ, {"LLM_REVIEWER_SKIP_AGENT_CONFIG_ENV": "1"}, clear=True):
+        with patch.dict(os.environ, {"BUBO_SKIP_AGENT_CONFIG_ENV": "1"}, clear=True):
             codex_runner.load_runtime_config()
 
             assert "GITLAB_TOKEN" not in os.environ

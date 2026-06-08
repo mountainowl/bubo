@@ -1,11 +1,15 @@
-# llm-reviewer
+# Bubo 🦉
 
-Evidence-backed LLM code review for GitLab MRs and GitHub PRs. Watches
-open changes, runs a structured agent review, and posts only actionable
-findings as inline review threads — no chatbot noise, no praise, no
-summaries.
+**Agentic AI code review — with the LLM of your choice.**
 
-![LLM Reviewer hero](images/llm-reviewer-hero.png)
+Bubo is an agentic AI code reviewer for GitLab MRs and GitHub PRs. It
+watches open changes, runs a structured agentic review with the LLM you
+choose (Codex, Claude, or any model your CLI drives), and posts only
+actionable findings as inline review threads — no chatbot noise, no
+praise, no summaries. Like the owl it's named for, it stays silent until
+it has something worth saying.
+
+![Bubo hero](images/bubo-hero.png)
 
 [Source on GitHub :material-github:](https://github.com/mountainowl/ai-code-review){ .md-button .md-button--primary }
 [60-second quickstart :material-rocket-launch:](install-and-configure.md){ .md-button }
@@ -78,9 +82,9 @@ review logic lives in the configured CLI skill.
 
 ```sh
 uv tool install git+https://github.com/mountainowl/ai-code-review@v0.6.0
-llm-reviewer init              # idempotent; --dry-run to preview
-llm-reviewer doctor            # verify before first poll
-mr-review-poller               # one poll cycle; exits at the end
+bubo init              # idempotent; --dry-run to preview
+bubo doctor            # verify before first poll
+bubo-poller               # one poll cycle; exits at the end
 ```
 
 Full walkthrough in **[Install and configure](install-and-configure.md)**.
@@ -90,8 +94,8 @@ Full walkthrough in **[Install and configure](install-and-configure.md)**.
 | Doc | What's in it |
 |---|---|
 | [Prerequisites](prerequisites.md) | macOS / Linux runtime, per-provider tools, credentials, install verification |
-| [Install and configure](install-and-configure.md) | `uv tool install`, `llm-reviewer init`, minimum `env.toml`, GitLab and GitHub bot setup |
-| [Run](run.md) | One-off review, the poller, the bundled `mcp-llm-reviewer` MCP server (three deployment patterns) |
+| [Install and configure](install-and-configure.md) | `uv tool install`, `bubo init`, minimum `env.toml`, GitLab and GitHub bot setup |
+| [Run](run.md) | One-off review, the poller, the bundled `bubo-mcp` MCP server (three deployment patterns) |
 | [Configuration reference](configuration.md) | Every `[scm]` / `[gitlab]` / `[github]` / `[review]` / `[poller]` / `[agents]` / `[telemetry]` / `[[projects]]` setting and its default |
 | [Operate](operate.md) | Remote deploy, scheduling under cron or systemd, `--sync-outcomes` grading, one-shot backfill |
 | [Telemetry](telemetry.md) | Emitted `llm_review.*` metrics, ready-made dashboard queries, cardinality discipline |
@@ -100,8 +104,8 @@ Full walkthrough in **[Install and configure](install-and-configure.md)**.
 
 - **GitLab posting via polling** — production path. Stable.
 - **GitHub posting via polling** — supported, at outcome-metric parity
-  with GitLab. Set `[scm].provider = "github"` or run `gh-review-poller`.
-- **MCP server (`mcp-llm-reviewer`)** — first-class. Two interfaces:
+  with GitLab. Set `[scm].provider = "github"` or run `bubo-gh-poller`.
+- **MCP server (`bubo-mcp`)** — first-class. Two interfaces:
   read-only metrics + triggered reviews. stdio or HTTP transport.
 - **Webhook-driven triggering** — not implemented; polling is the only path.
 

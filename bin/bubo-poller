@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT="${BUBO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
+exec "$ROOT/bin/env" uv run --project "$ROOT" bubo-poller "$@"

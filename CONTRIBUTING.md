@@ -65,7 +65,7 @@ Examples:
 
 ```
 feat(scm): add GitHub pull-request support
-fix(poller): honor LLM_REVIEWER_PROVIDER env override in load_review_config
+fix(poller): honor BUBO_PROVIDER env override in load_review_config
 docs(security): expand SECURITY.md with disclosure timelines
 chore(deps): bump ruff to 0.14.7
 feat(review)!: drop manual_review_dry_run alias

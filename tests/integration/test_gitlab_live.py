@@ -9,15 +9,15 @@ these tests exist to catch.
 
 They are skipped unless the operator supplies credentials:
 
-    LLM_REVIEWER_IT_GITLAB_TOKEN     PAT with ``read_api`` scope (read-only is enough)
-    LLM_REVIEWER_IT_GITLAB_PROJECT   project path, e.g. "group/repo"
-    LLM_REVIEWER_IT_GITLAB_URL       optional; defaults to https://gitlab.com
+    BUBO_IT_GITLAB_TOKEN     PAT with ``read_api`` scope (read-only is enough)
+    BUBO_IT_GITLAB_PROJECT   project path, e.g. "group/repo"
+    BUBO_IT_GITLAB_URL       optional; defaults to https://gitlab.com
 
 Nothing here mutates GitLab — no comments are posted, no threads created.
 Run locally with:
 
-    LLM_REVIEWER_IT_GITLAB_TOKEN=glpat-... \\
-    LLM_REVIEWER_IT_GITLAB_PROJECT=group/repo \\
+    BUBO_IT_GITLAB_TOKEN=glpat-... \\
+    BUBO_IT_GITLAB_PROJECT=group/repo \\
         uv run pytest -m integration -v
 """
 
@@ -28,21 +28,21 @@ import urllib.parse
 
 import pytest
 
-from llm_reviewer import gitlab
-from llm_reviewer.review_config import ReviewConfig
+from bubo import gitlab
+from bubo.review_config import ReviewConfig
 
 pytestmark = pytest.mark.integration
 
-_TOKEN = os.environ.get("LLM_REVIEWER_IT_GITLAB_TOKEN")
-_PROJECT = os.environ.get("LLM_REVIEWER_IT_GITLAB_PROJECT")
-_URL = os.environ.get("LLM_REVIEWER_IT_GITLAB_URL", "https://gitlab.com")
+_TOKEN = os.environ.get("BUBO_IT_GITLAB_TOKEN")
+_PROJECT = os.environ.get("BUBO_IT_GITLAB_PROJECT")
+_URL = os.environ.get("BUBO_IT_GITLAB_URL", "https://gitlab.com")
 
 # Every test in this module skips when credentials are absent. This keeps a
 # bare `pytest -m integration` green on a developer machine with no setup
 # while still exercising the live API in CI when secrets are configured.
 _skip_no_creds = pytest.mark.skipif(
     not (_TOKEN and _PROJECT),
-    reason="set LLM_REVIEWER_IT_GITLAB_TOKEN and LLM_REVIEWER_IT_GITLAB_PROJECT to run",
+    reason="set BUBO_IT_GITLAB_TOKEN and BUBO_IT_GITLAB_PROJECT to run",
 )
 
 # Fields the runtime reads off each payload. If GitLab renames or drops one
@@ -120,7 +120,7 @@ def test_discussion_payload_classifies_without_error(cfg: ReviewConfig) -> None:
         pytest.skip("no discussions on the first open MR")
 
     outcome = gitlab.classify_discussion_outcome(
-        discussions[0], bot_username="llm-reviewer", mr_state="opened"
+        discussions[0], bot_username="bubo", mr_state="opened"
     )
     assert outcome.keys() >= _OUTCOME_KEYS, (
         f"classifier output missing keys: {_OUTCOME_KEYS - outcome.keys()}"

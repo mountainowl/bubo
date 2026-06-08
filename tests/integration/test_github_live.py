@@ -7,15 +7,15 @@ GitLab live tests (``test_gitlab_live.py``) for the GitHub provider.
 
 They are skipped unless the operator supplies credentials:
 
-    LLM_REVIEWER_IT_GITHUB_TOKEN     PAT with ``repo`` (or read-only) scope
-    LLM_REVIEWER_IT_GITHUB_PROJECT   owner/repo, e.g. "octocat/Hello-World"
-    LLM_REVIEWER_IT_GITHUB_API_URL   optional; defaults to https://api.github.com
+    BUBO_IT_GITHUB_TOKEN     PAT with ``repo`` (or read-only) scope
+    BUBO_IT_GITHUB_PROJECT   owner/repo, e.g. "octocat/Hello-World"
+    BUBO_IT_GITHUB_API_URL   optional; defaults to https://api.github.com
 
 Nothing here mutates GitHub — no comments are posted, no threads created.
 Run locally with:
 
-    LLM_REVIEWER_IT_GITHUB_TOKEN=ghp_... \\
-    LLM_REVIEWER_IT_GITHUB_PROJECT=owner/repo \\
+    BUBO_IT_GITHUB_TOKEN=ghp_... \\
+    BUBO_IT_GITHUB_PROJECT=owner/repo \\
         uv run pytest -m integration -v
 """
 
@@ -25,22 +25,22 @@ import os
 
 import pytest
 
-from llm_reviewer import github
-from llm_reviewer.review_config import ReviewConfig
-from llm_reviewer.scm.github import GitHubProvider
+from bubo import github
+from bubo.review_config import ReviewConfig
+from bubo.scm.github import GitHubProvider
 
 pytestmark = pytest.mark.integration
 
-_TOKEN = os.environ.get("LLM_REVIEWER_IT_GITHUB_TOKEN")
-_PROJECT = os.environ.get("LLM_REVIEWER_IT_GITHUB_PROJECT")
-_API_URL = os.environ.get("LLM_REVIEWER_IT_GITHUB_API_URL", "https://api.github.com")
+_TOKEN = os.environ.get("BUBO_IT_GITHUB_TOKEN")
+_PROJECT = os.environ.get("BUBO_IT_GITHUB_PROJECT")
+_API_URL = os.environ.get("BUBO_IT_GITHUB_API_URL", "https://api.github.com")
 
 # Every test in this module skips when credentials are absent. This keeps a
 # bare `pytest -m integration` green on a developer machine with no setup
 # while still exercising the live API in CI when secrets are configured.
 _skip_no_creds = pytest.mark.skipif(
     not (_TOKEN and _PROJECT),
-    reason="set LLM_REVIEWER_IT_GITHUB_TOKEN and LLM_REVIEWER_IT_GITHUB_PROJECT to run",
+    reason="set BUBO_IT_GITHUB_TOKEN and BUBO_IT_GITHUB_PROJECT to run",
 )
 
 # Fields the runtime reads off each payload. If GitHub renames or drops one
@@ -143,7 +143,7 @@ def test_review_comment_payload_classifies_without_error(cfg: ReviewConfig) -> N
     replies = [c for c in comments if c.get("in_reply_to_id") == root_id]
 
     outcome = github.classify_review_thread_outcome(
-        root, replies, bot_username="llm-reviewer", pr_state=str(prs[0].get("state") or "open")
+        root, replies, bot_username="bubo", pr_state=str(prs[0].get("state") or "open")
     )
     assert outcome.keys() >= _OUTCOME_KEYS, (
         f"classifier output missing keys: {_OUTCOME_KEYS - outcome.keys()}"
@@ -174,7 +174,7 @@ def test_review_threads_graphql_exposes_resolution(cfg: ReviewConfig) -> None:
             assert comment.get("database_id") is not None or comment.get("node_id")
 
     outcome = github.classify_graphql_thread_outcome(
-        threads[0], bot_username="llm-reviewer", pr_state=str(prs[0].get("state") or "open")
+        threads[0], bot_username="bubo", pr_state=str(prs[0].get("state") or "open")
     )
     assert outcome.keys() >= _OUTCOME_KEYS, (
         f"classifier output missing keys: {_OUTCOME_KEYS - outcome.keys()}"

@@ -9,11 +9,11 @@
 #   uv sync --group docs
 #   uv run mkdocs serve  # → http://127.0.0.1:8000
 
-site_name: llm-reviewer
+site_name: Bubo
 site_description: >-
-  Evidence-backed LLM code review for GitLab MRs and GitHub PRs. Runs
-  Codex/Claude review skills and posts inline review threads — no chatbot
-  noise, no praise, no summaries.
+  Bubo — agentic AI code review for GitLab MRs and GitHub PRs, with the LLM
+  of your choice. Posts only actionable findings as inline review threads —
+  no chatbot noise, no praise, no summaries.
 site_url: https://mountainowl.github.io/ai-code-review/
 site_author: mountainowl
 

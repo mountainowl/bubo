@@ -1,0 +1,45 @@
+# systemd unit for one poll cycle. Pair with `bubo.timer` for
+# scheduling. Copy to /etc/systemd/system/ and `systemctl daemon-reload`.
+#
+# The service is Type=oneshot: each timer firing runs one poll cycle and
+# exits. SIGTERM is handled cooperatively — the poll loop drains the
+# current MR batch and exits cleanly.
+
+[Unit]
+Description=LLM Reviewer poll cycle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bubo
+Group=bubo
+
+# Adjust to your install path.
+Environment=BUBO_ROOT={{ROOT}}
+
+# Inject secrets through systemd credentials rather than baking them into
+# config/env.toml. Reference them in TOML via `${VAR}` interpolation:
+#
+#   [gitlab]
+#   token = "${GITLAB_TOKEN}"
+#
+# Set the credential files in /etc/bubo/credentials/ with mode 0400.
+LoadCredential=GITLAB_TOKEN:/etc/bubo/credentials/gitlab-token
+LoadCredential=LLM_API_KEY:/etc/bubo/credentials/llm-api-key
+Environment=GITLAB_TOKEN=%d/GITLAB_TOKEN
+Environment=LLM_API_KEY=%d/LLM_API_KEY
+
+ExecStart={{ROOT}}/bin/bubo-poller
+TimeoutStopSec=120s
+
+# Hardening — the poller does not need root or write access outside its
+# state directory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths={{ROOT}}/var
+
+[Install]
+WantedBy=multi-user.target

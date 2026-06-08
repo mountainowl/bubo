@@ -18,10 +18,10 @@ import string
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from llm_reviewer.config_values import ConfigError
-from llm_reviewer.env_config import expand_env_placeholders
-from llm_reviewer.findings import extract_findings
-from llm_reviewer.hash_utils import stable_hash
+from bubo.config_values import ConfigError
+from bubo.env_config import expand_env_placeholders
+from bubo.findings import extract_findings
+from bubo.hash_utils import stable_hash
 
 # Keep run-time small in default `pytest` while still useful as a fuzzer.
 _FUZZ_SETTINGS = settings(max_examples=50, deadline=None)

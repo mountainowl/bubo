@@ -11,7 +11,7 @@ Use this skill for technical code review only.
 
 Before reviewing, load the meta prompt from:
 
-`${LLM_CODE_REVIEW_PROMPT:-$LLM_CODE_REVIEW_ROOT/prompts/00-meta.md}`
+`${BUBO_PROMPT:-$BUBO_ROOT/prompts/00-meta.md}`
 
 Treat that file as the review contract. Follow its output format, evidence standard, uncertainty rule, tone, and false-positive constraints.
 

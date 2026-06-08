@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from llm_reviewer.poller import normalize_config
-from llm_reviewer.review_config import load_review_config
+from bubo.poller import normalize_config
+from bubo.review_config import load_review_config
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -68,11 +68,11 @@ def test_new_config_names_normalize_to_internal_poller_keys() -> None:
 def test_env_override_wins_over_toml_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # gh-review-poller exports LLM_REVIEWER_PROVIDER=github; it must override
+    # bubo-gh-poller exports BUBO_PROVIDER=github; it must override
     # whatever [scm].provider the on-disk env.toml declares.
     cfg_file = tmp_path / "env.toml"
     cfg_file.write_text('[scm]\nprovider = "gitlab"\n')
-    monkeypatch.setenv("LLM_REVIEWER_PROVIDER", "github")
+    monkeypatch.setenv("BUBO_PROVIDER", "github")
 
     assert load_review_config(cfg_file).provider == "github"
 
@@ -82,6 +82,6 @@ def test_toml_provider_used_when_env_override_absent(
 ) -> None:
     cfg_file = tmp_path / "env.toml"
     cfg_file.write_text('[scm]\nprovider = "github"\n')
-    monkeypatch.delenv("LLM_REVIEWER_PROVIDER", raising=False)
+    monkeypatch.delenv("BUBO_PROVIDER", raising=False)
 
     assert load_review_config(cfg_file).provider == "github"

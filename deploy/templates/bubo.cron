@@ -1,0 +1,36 @@
+# Example cron(8) entry for the bubo poller.
+#
+# Copy or symlink the relevant lines into /etc/cron.d/bubo (root) or
+# `crontab -e` (per-user) and adjust BUBO_ROOT to your install
+# path. Each `bubo-poller` invocation is a single poll cycle that
+# exits — there is no daemon mode.
+#
+# The poller forks per-MR workers in detached sessions; the parent exits as
+# soon as the work is queued, so a tight cron interval is safe. The
+# in-flight backpressure inside poll() prevents overlapping cycles from
+# stacking up if a worker stalls.
+#
+# Each role uses a SEPARATE flock file. Do NOT collapse them into one
+# shared lock: at the :45 mark both `*/15` poll and `*/5` health probe
+# fire on the same minute, and a shared lock would cause one to silently
+# skip — usually the slower poll loses to the fast-acquiring health.
+# `flock -n` returns immediately when the lock is held, so overlapping
+# runs of the SAME role drop the duplicate rather than queue up.
+#
+# Schedule columns: minute hour dom month dow
+
+BUBO_ROOT={{ROOT}}
+BUBO_LOCK_DIR=/var/run/bubo
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# Poll every 15 minutes.
+*/15 * * * *  bubo  flock -n $BUBO_LOCK_DIR/poller.lock $BUBO_ROOT/bin/bubo-poller >> $BUBO_ROOT/var/log/poller.log 2>&1
+
+# Outcome sync hourly — checks GitLab discussion state for posted findings.
+17   * * * *  bubo  flock -n $BUBO_LOCK_DIR/outcome-sync.lock $BUBO_ROOT/bin/bubo-poller --sync-outcomes >> $BUBO_ROOT/var/log/outcome-sync.log 2>&1
+
+# Health probe every 5 minutes — non-zero exit triggers your alerting MTA.
+*/5  * * * *  bubo  flock -n $BUBO_LOCK_DIR/health.lock $BUBO_ROOT/bin/bubo-poller --health >> $BUBO_ROOT/var/log/health.log 2>&1
+
+# Before installing, create the lock dir owned by the runtime user:
+#   sudo install -d -o bubo -g bubo -m 0755 /var/run/bubo

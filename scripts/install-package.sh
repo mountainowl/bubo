@@ -7,11 +7,11 @@ set -eu
 # Use the new Python install path instead:
 #
 #     uv tool install git+https://github.com/mountainowl/ai-code-review@<tag>
-#     llm-reviewer init --install-agent-config
-#     llm-reviewer doctor
+#     bubo init --install-agent-config
+#     bubo doctor
 #
 # `uv tool install` handles dependency resolution and PATH placement;
-# `llm-reviewer init` is the Python equivalent of this script. The new
+# `bubo init` is the Python equivalent of this script. The new
 # path uses the same packaged templates and writes them with the same
 # {{ROOT}} substitution, but it's cross-platform, idempotent, dry-runnable
 # (--dry-run), version-aware, and skips when operator edits exist
@@ -23,7 +23,7 @@ WARNING: scripts/install-package.sh is deprecated as of v0.6.0 (issue #22)
          and will be removed in v0.7.0. Migrate to:
 
            uv tool install git+https://github.com/mountainowl/ai-code-review@<tag>
-           llm-reviewer init --install-agent-config
+           bubo init --install-agent-config
 
          See docs/install-and-configure.md for the full new flow.
 
@@ -32,7 +32,7 @@ WARN
 PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 export PATH
 
-ROOT="${LLM_REVIEWER_INSTALL_ROOT:-${LLM_CODE_REVIEW_ROOT:-$HOME/.local/share/llm-reviewer}}"
+ROOT="${BUBO_INSTALL_ROOT:-${BUBO_ROOT:-$HOME/.local/share/bubo}}"
 SOURCE=""
 INSTALL_AGENT_CONFIG=0
 USE_SUDO=0
@@ -115,12 +115,12 @@ chmod +x "$ROOT"/bin/* "$ROOT"/scripts/*.sh
 
 mkdir -p "$ROOT/var/state" "$ROOT/var/log" "$ROOT/var/work" "$ROOT/var/reports" "$ROOT/var/jobs"
 uv sync --locked --no-dev --project "$ROOT"
-LLM_CODE_REVIEW_ROOT="$ROOT" "$ROOT/bin/mr-review-poller" --init-db
+BUBO_ROOT="$ROOT" "$ROOT/bin/bubo-poller" --init-db
 
 if [ "$INSTALL_AGENT_CONFIG" -eq 1 ]; then
     mkdir -p "$HOME/.codex/skills" "$HOME/.claude"
     escaped_root="$(printf '%s' "$ROOT" | sed 's/[&|]/\\&/g')"
-    # codex-config.toml now carries the [profiles.llm-reviewer] block
+    # codex-config.toml now carries the [profiles.bubo] block
     # inline. The earlier sibling-file pattern under ~/.codex/ never
     # worked — Codex does not auto-load sibling files for `--profile`.
     sed "s|{{ROOT}}|$escaped_root|g" "$ROOT/deploy/templates/codex-config.toml" > "$HOME/.codex/config.toml"
@@ -130,14 +130,14 @@ if [ "$INSTALL_AGENT_CONFIG" -eq 1 ]; then
     # broken config fails the install rather than every later poll cycle.
     # Skipped silently if Codex isn't on PATH or doesn't accept the flags.
     if command -v codex >/dev/null 2>&1; then
-        if codex exec --profile llm-reviewer --skip-git-repo-check \
+        if codex exec --profile bubo --skip-git-repo-check \
             "Return exactly: profile-ok" 2>/dev/null | grep -q "profile-ok"; then
-            echo "codex profile llm-reviewer verified"
+            echo "codex profile bubo verified"
         else
-            echo "warning: codex --profile llm-reviewer smoke check did not return 'profile-ok'" >&2
+            echo "warning: codex --profile bubo smoke check did not return 'profile-ok'" >&2
             echo "warning: review runs may fail; verify ~/.codex/config.toml" >&2
         fi
     fi
 fi
 
-echo "installed llm-reviewer at $ROOT"
+echo "installed bubo at $ROOT"

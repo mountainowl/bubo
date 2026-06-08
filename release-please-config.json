@@ -6,7 +6,7 @@
   "packages": {
     ".": {
       "release-type": "python",
-      "package-name": "llm-reviewer",
+      "package-name": "bubo",
       "changelog-path": ".release-please-changelog.md",
       "include-component-in-tag": false
     }

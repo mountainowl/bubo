@@ -1,9 +1,9 @@
-"""Unit tests for the llm-reviewer MCP server.
+"""Unit tests for the bubo MCP server.
 
 We exercise the tool functions directly rather than spawning the stdio
 process — the FastMCP wrapper is just a decorator over the same callables,
 and the contract we care about is the JSON-shaped return value. Spawning
-the actual ``mcp-llm-reviewer`` subprocess belongs in an integration test.
+the actual ``bubo-mcp`` subprocess belongs in an integration test.
 
 Each test seeds a fresh on-disk SQLite (via ``paths.DB`` monkey-patching)
 so the schema matches production exactly — we do not stub the DB layer.
@@ -21,8 +21,8 @@ from unittest.mock import patch
 
 import pytest
 
-from llm_reviewer import db, mcp_server, paths
-from llm_reviewer.statuses import FindingStatus, ReviewStatus
+from bubo import db, mcp_server, paths
+from bubo.statuses import FindingStatus, ReviewStatus
 
 
 def _seed_two_reviews(tmp_db: Path) -> None:
@@ -410,7 +410,7 @@ def test_review_change_dispatches_with_parsed_url() -> None:
         captured["args"] = args
         return subprocess.CompletedProcess(args, 0, '[{"title": "ok"}]', None)
 
-    with patch("llm_reviewer.mcp_server.run_bounded", side_effect=fake_run):
+    with patch("bubo.mcp_server.run_bounded", side_effect=fake_run):
         result = mcp_server.review_change(
             url="https://github.com/owner/repo/pull/5", timeout_seconds=10
         )
@@ -421,9 +421,9 @@ def test_review_change_dispatches_with_parsed_url() -> None:
     assert result["exit_code"] == 0
     assert result["findings"] == [{"title": "ok"}]
     assert "raw_output" in result
-    # The task string handed to code-review-codex must include the PR
+    # The task string handed to bubo-codex must include the PR
     # number and project so the agent knows what to fetch.
-    assert captured["args"][0].endswith("/bin/code-review-codex")
+    assert captured["args"][0].endswith("/bin/bubo-codex")
     assert "#5" in captured["args"][1]
     assert "owner/repo" in captured["args"][1]
 
@@ -437,7 +437,7 @@ def test_review_change_returns_raw_output_when_findings_unparseable() -> None:
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args, 1, "Codex crashed mid-stream", None)
 
-    with patch("llm_reviewer.mcp_server.run_bounded", side_effect=fake_run):
+    with patch("bubo.mcp_server.run_bounded", side_effect=fake_run):
         result = mcp_server.review_change(
             provider="gitlab", project="g/p", number=1, timeout_seconds=10
         )
@@ -607,9 +607,7 @@ def test_bearer_auth_rejects_request_with_wrong_token() -> None:
         raise AssertionError("inner app must not be reached with wrong token")
 
     wrapped = mcp_server._BearerAuthASGI(stub_inner, expected_token="secret")
-    status, _ = _drive_asgi(
-        wrapped, headers=[(b"authorization", b"Bearer not-the-right-token")]
-    )
+    status, _ = _drive_asgi(wrapped, headers=[(b"authorization", b"Bearer not-the-right-token")])
     assert status == 401
 
 
@@ -618,17 +616,17 @@ def test_bearer_auth_passes_request_with_matching_token() -> None:
 
     async def stub_inner(scope: object, receive: object, send: object) -> None:
         called["inner"] = True
-        await send({  # type: ignore[operator]
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [(b"content-type", b"text/plain")],
-        })
+        await send(
+            {  # type: ignore[operator]
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/plain")],
+            }
+        )
         await send({"type": "http.response.body", "body": b"ok"})  # type: ignore[operator]
 
     wrapped = mcp_server._BearerAuthASGI(stub_inner, expected_token="secret")
-    status, body = _drive_asgi(
-        wrapped, headers=[(b"authorization", b"Bearer secret")]
-    )
+    status, body = _drive_asgi(wrapped, headers=[(b"authorization", b"Bearer secret")])
     assert called["inner"] is True
     assert status == 200
     assert body == b"ok"
@@ -658,18 +656,18 @@ def test_bearer_auth_does_not_short_circuit_lifespan_events() -> None:
 
 def test_http_settings_reads_env_with_safe_defaults() -> None:
     env_keys = (
-        "LLM_REVIEWER_MCP_HOST",
-        "LLM_REVIEWER_MCP_PORT",
-        "LLM_REVIEWER_MCP_BEARER_TOKEN",
+        "BUBO_MCP_HOST",
+        "BUBO_MCP_PORT",
+        "BUBO_MCP_BEARER_TOKEN",
     )
     saved = {key: os.environ.pop(key, None) for key in env_keys}
     try:
-        os.environ["LLM_REVIEWER_MCP_BEARER_TOKEN"] = "tok-123"
+        os.environ["BUBO_MCP_BEARER_TOKEN"] = "tok-123"
         host, port, token = mcp_server._http_settings()
         assert (host, port, token) == ("127.0.0.1", 8765, "tok-123")
 
-        os.environ["LLM_REVIEWER_MCP_HOST"] = "0.0.0.0"
-        os.environ["LLM_REVIEWER_MCP_PORT"] = "9001"
+        os.environ["BUBO_MCP_HOST"] = "0.0.0.0"
+        os.environ["BUBO_MCP_PORT"] = "9001"
         host, port, _ = mcp_server._http_settings()
         assert (host, port) == ("0.0.0.0", 9001)
     finally:
@@ -681,27 +679,27 @@ def test_http_settings_reads_env_with_safe_defaults() -> None:
 
 
 def test_http_settings_refuses_to_start_without_bearer_token() -> None:
-    saved = os.environ.pop("LLM_REVIEWER_MCP_BEARER_TOKEN", None)
+    saved = os.environ.pop("BUBO_MCP_BEARER_TOKEN", None)
     try:
-        with pytest.raises(SystemExit, match="LLM_REVIEWER_MCP_BEARER_TOKEN must be set"):
+        with pytest.raises(SystemExit, match="BUBO_MCP_BEARER_TOKEN must be set"):
             mcp_server._http_settings()
     finally:
         if saved is not None:
-            os.environ["LLM_REVIEWER_MCP_BEARER_TOKEN"] = saved
+            os.environ["BUBO_MCP_BEARER_TOKEN"] = saved
 
 
 def test_http_settings_rejects_non_integer_port() -> None:
-    saved_port = os.environ.pop("LLM_REVIEWER_MCP_PORT", None)
-    saved_token = os.environ.pop("LLM_REVIEWER_MCP_BEARER_TOKEN", None)
+    saved_port = os.environ.pop("BUBO_MCP_PORT", None)
+    saved_token = os.environ.pop("BUBO_MCP_BEARER_TOKEN", None)
     try:
-        os.environ["LLM_REVIEWER_MCP_PORT"] = "not-a-number"
-        os.environ["LLM_REVIEWER_MCP_BEARER_TOKEN"] = "tok"
+        os.environ["BUBO_MCP_PORT"] = "not-a-number"
+        os.environ["BUBO_MCP_BEARER_TOKEN"] = "tok"
         with pytest.raises(SystemExit, match="must be an integer"):
             mcp_server._http_settings()
     finally:
         for key, value in (
-            ("LLM_REVIEWER_MCP_PORT", saved_port),
-            ("LLM_REVIEWER_MCP_BEARER_TOKEN", saved_token),
+            ("BUBO_MCP_PORT", saved_port),
+            ("BUBO_MCP_BEARER_TOKEN", saved_token),
         ):
             if value is None:
                 os.environ.pop(key, None)
@@ -710,20 +708,20 @@ def test_http_settings_rejects_non_integer_port() -> None:
 
 
 def test_main_rejects_unknown_transport() -> None:
-    saved = os.environ.pop("LLM_REVIEWER_MCP_TRANSPORT", None)
+    saved = os.environ.pop("BUBO_MCP_TRANSPORT", None)
     try:
-        os.environ["LLM_REVIEWER_MCP_TRANSPORT"] = "websocket"
+        os.environ["BUBO_MCP_TRANSPORT"] = "websocket"
         with pytest.raises(SystemExit, match="must be 'stdio' or 'http'"):
             mcp_server.main()
     finally:
         if saved is None:
-            os.environ.pop("LLM_REVIEWER_MCP_TRANSPORT", None)
+            os.environ.pop("BUBO_MCP_TRANSPORT", None)
         else:
-            os.environ["LLM_REVIEWER_MCP_TRANSPORT"] = saved
+            os.environ["BUBO_MCP_TRANSPORT"] = saved
 
 
 def test_env_config_exports_mcp_server_section() -> None:
-    from llm_reviewer.env_config import runtime_env
+    from bubo.env_config import runtime_env
 
     exports = runtime_env(
         Path("/tmp/fake-root"),
@@ -736,22 +734,22 @@ def test_env_config_exports_mcp_server_section() -> None:
             },
         },
     )
-    assert exports["LLM_REVIEWER_MCP_TRANSPORT"] == "http"
-    assert exports["LLM_REVIEWER_MCP_HOST"] == "0.0.0.0"
-    assert exports["LLM_REVIEWER_MCP_PORT"] == "9000"
-    assert exports["LLM_REVIEWER_MCP_BEARER_TOKEN"] == "tok-from-toml"
+    assert exports["BUBO_MCP_TRANSPORT"] == "http"
+    assert exports["BUBO_MCP_HOST"] == "0.0.0.0"
+    assert exports["BUBO_MCP_PORT"] == "9000"
+    assert exports["BUBO_MCP_BEARER_TOKEN"] == "tok-from-toml"
 
 
 def test_env_config_defaults_when_mcp_server_section_missing() -> None:
-    from llm_reviewer.env_config import runtime_env
+    from bubo.env_config import runtime_env
 
     exports = runtime_env(Path("/tmp/fake-root"), {})
-    assert exports["LLM_REVIEWER_MCP_TRANSPORT"] == "stdio"
-    assert exports["LLM_REVIEWER_MCP_HOST"] == "127.0.0.1"
-    assert exports["LLM_REVIEWER_MCP_PORT"] == "8765"
+    assert exports["BUBO_MCP_TRANSPORT"] == "stdio"
+    assert exports["BUBO_MCP_HOST"] == "127.0.0.1"
+    assert exports["BUBO_MCP_PORT"] == "8765"
     # No bearer token when none configured — stdio path doesn't need one,
     # http path fails loud at startup.
-    assert "LLM_REVIEWER_MCP_BEARER_TOKEN" not in exports
+    assert "BUBO_MCP_BEARER_TOKEN" not in exports
 
 
 @pytest.mark.parametrize(
@@ -774,14 +772,14 @@ def test_review_change_redacts_bearer_from_raw_output() -> None:
     # The codex subprocess inherits the env, including the bearer. If any
     # sub-tool prints `printenv` or a stack trace including the environ,
     # the bearer would leak through `raw_output` straight to the MCP
-    # client. The redactor must catch the `LLM_REVIEWER_MCP_BEARER_TOKEN=`
+    # client. The redactor must catch the `BUBO_MCP_BEARER_TOKEN=`
     # form before we return.
-    leaked = "Some output\nLLM_REVIEWER_MCP_BEARER_TOKEN=super-secret-xyz\nMore output\n[]"
+    leaked = "Some output\nBUBO_MCP_BEARER_TOKEN=super-secret-xyz\nMore output\n[]"
 
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args, 0, leaked, None)
 
-    with patch("llm_reviewer.mcp_server.run_bounded", side_effect=fake_run):
+    with patch("bubo.mcp_server.run_bounded", side_effect=fake_run):
         result = mcp_server.review_change(
             provider="github", project="o/r", number=1, timeout_seconds=10
         )
@@ -793,6 +791,6 @@ def test_review_change_redacts_bearer_from_raw_output() -> None:
 def test_secrets_secret_env_names_includes_mcp_bearer() -> None:
     # Anchor: SECRET_ENV_NAMES is the canonical list; if someone deletes
     # the bearer entry the redactor silently stops protecting `raw_output`.
-    from llm_reviewer.secrets import SECRET_ENV_NAMES
+    from bubo.secrets import SECRET_ENV_NAMES
 
-    assert "LLM_REVIEWER_MCP_BEARER_TOKEN" in SECRET_ENV_NAMES
+    assert "BUBO_MCP_BEARER_TOKEN" in SECRET_ENV_NAMES

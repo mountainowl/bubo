@@ -1,0 +1,45 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1280px; height:640px; overflow:hidden; }
+  body {
+    background:#0d1117;
+    font-family:-apple-system,"SF Pro Display","Helvetica Neue",sans-serif;
+    color:#e6edf3; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; text-align:center; padding:0 80px; position:relative;
+  }
+  body::before {
+    content:""; position:absolute; inset:0;
+    background:radial-gradient(58% 75% at 50% -8%, rgba(129,140,248,.24), transparent 70%);
+  }
+  .mark { font-size:25px; letter-spacing:.28em; color:#818cf8; font-weight:700;
+    margin-bottom:28px; text-transform:uppercase; position:relative;
+    display:flex; align-items:center; gap:14px; }
+  .mark .owl { font-size:30px; }
+  h1 { font-size:70px; font-weight:800; letter-spacing:-0.035em; line-height:1.06; position:relative; }
+  h1 .g { background:linear-gradient(90deg,#a5b4fc 0%,#818cf8 100%);
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .sub { font-size:27px; color:#9aa4b2; margin-top:30px; font-weight:400;
+    max-width:930px; line-height:1.5; position:relative; }
+  .pills { display:flex; gap:0; margin-top:46px; position:relative;
+    font-family:"SF Mono","Menlo",monospace; font-size:20px; color:#8b94a3; }
+  .pills span { padding:0 22px; border-right:1px solid #2a3142; }
+  .pills span:last-child { border-right:none; }
+  .pills b { color:#a5b4fc; font-weight:400; }
+  .handle { position:absolute; bottom:40px; display:flex; align-items:center; gap:11px;
+    font-family:"SF Mono","Menlo",monospace; font-size:20px; color:#6e7681; }
+  .handle svg { width:21px; height:21px; fill:#6e7681; }
+</style></head><body>
+  <div class="mark"><span class="owl">🦉</span>Bubo · Agentic AI Code Review</div>
+  <h1>AI code review that only speaks<br>when it has <span class="g">something to say</span>.</h1>
+  <div class="sub">Runs the LLM of your choice against the diff and posts only actionable findings as inline threads.</div>
+  <div class="pills">
+    <span><b>GitLab</b> MRs</span>
+    <span><b>GitHub</b> PRs</span>
+    <span><b>Codex</b> / <b>Claude</b></span>
+    <span><b>MCP</b> server</span>
+  </div>
+  <div class="handle">
+    <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+    github.com/mountainowl/ai-code-review
+  </div>
+</body></html>

@@ -87,10 +87,10 @@ authorizes the REST/MCP calls that read MRs/PRs and post comments.
 ## Verify the install
 
 `uv tool install` only verifies `uv` itself; the other prerequisites
-are runtime-resolved at first poll. `llm-reviewer doctor` checks the
+are runtime-resolved at first poll. `bubo doctor` checks the
 Python-side install (workspace, env.toml, DB, Codex profile), but it
 does NOT check that the external CLIs the worker shells out to are on
-`PATH`. Run this one-liner after `llm-reviewer init` to catch a
+`PATH`. Run this one-liner after `bubo init` to catch a
 missing tool before the first cycle — that's the most common cause
 of a first-cycle worker failure:
 

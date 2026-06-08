@@ -1,7 +1,7 @@
 [project]
-name = "llm-reviewer"
+name = "bubo"
 version = "0.6.0"
-description = "GitLab merge-request code review poller backed by Codex and Claude CLI skills."
+description = "Bubo — agentic AI code review for GitLab MRs and GitHub PRs, with the LLM of your choice."
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
@@ -13,11 +13,11 @@ dependencies = [
 ]
 
 [project.scripts]
-llm-reviewer = "llm_reviewer.cli:main"
-mr-review-poller = "llm_reviewer.poller:main"
-code-review-codex = "llm_reviewer.codex_runner:main"
-gh-review-poller = "llm_reviewer.github:main"
-mcp-llm-reviewer = "llm_reviewer.mcp_server:main"
+bubo = "bubo.cli:main"
+bubo-poller = "bubo.poller:main"
+bubo-codex = "bubo.codex_runner:main"
+bubo-gh-poller = "bubo.github:main"
+bubo-mcp = "bubo.mcp_server:main"
 
 [dependency-groups]
 dev = [
@@ -75,7 +75,7 @@ select = ["E", "F", "I", "B", "SIM", "UP", "PT", "RUF"]
 # `uv run pytest -m integration` (the command-line -m overrides this default).
 addopts = "-m 'not integration'"
 markers = [
-    "integration: live, read-only tests against a real GitLab instance; require LLM_REVIEWER_IT_* env vars",
+    "integration: live, read-only tests against a real GitLab instance; require BUBO_IT_* env vars",
 ]
 
 [tool.mypy]
@@ -96,24 +96,24 @@ strict = true
 requires = ["hatchling>=1.30.1"]
 build-backend = "hatchling.build"
 
-# Hatch is told the package code lives under src/llm_reviewer; the
+# Hatch is told the package code lives under src/bubo; the
 # force-include map below mirrors a curated set of repo-root assets into
-# the wheel under llm_reviewer/_assets/ so the new `llm-reviewer init`
-# subcommand can resolve them via importlib.resources.files("llm_reviewer._assets")
+# the wheel under bubo/_assets/ so the new `bubo init`
+# subcommand can resolve them via importlib.resources.files("bubo._assets")
 # regardless of how the package was installed.
 [tool.hatch.build.targets.wheel]
-packages = ["src/llm_reviewer"]
+packages = ["src/bubo"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"deploy/templates/codex-config.toml" = "llm_reviewer/_assets/codex-config.toml"
-"deploy/templates/claude-settings.json" = "llm_reviewer/_assets/claude-settings.json"
-"deploy/templates/llm-reviewer.cron" = "llm_reviewer/_assets/llm-reviewer.cron"
-"deploy/templates/llm-reviewer.service" = "llm_reviewer/_assets/llm-reviewer.service"
-"deploy/templates/llm-reviewer.timer" = "llm_reviewer/_assets/llm-reviewer.timer"
-"prompts/00-meta.md" = "llm_reviewer/_assets/prompts/00-meta.md"
-"skills/code-reviewer/SKILL.md" = "llm_reviewer/_assets/skills/code-reviewer/SKILL.md"
-"plugins/superpowers/.codex-plugin/plugin.json" = "llm_reviewer/_assets/plugins/superpowers/.codex-plugin/plugin.json"
-"config/env.example.toml" = "llm_reviewer/_assets/env.example.toml"
+"deploy/templates/codex-config.toml" = "bubo/_assets/codex-config.toml"
+"deploy/templates/claude-settings.json" = "bubo/_assets/claude-settings.json"
+"deploy/templates/bubo.cron" = "bubo/_assets/bubo.cron"
+"deploy/templates/bubo.service" = "bubo/_assets/bubo.service"
+"deploy/templates/bubo.timer" = "bubo/_assets/bubo.timer"
+"prompts/00-meta.md" = "bubo/_assets/prompts/00-meta.md"
+"skills/code-reviewer/SKILL.md" = "bubo/_assets/skills/code-reviewer/SKILL.md"
+"plugins/superpowers/.codex-plugin/plugin.json" = "bubo/_assets/plugins/superpowers/.codex-plugin/plugin.json"
+"config/env.example.toml" = "bubo/_assets/env.example.toml"
 
 # Source distribution: ship the runtime assets at the natural repo-root
 # paths so a `pip install <sdist>` / `uv build` round-trips correctly

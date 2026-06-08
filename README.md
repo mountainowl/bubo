@@ -1,4 +1,6 @@
-# Automated AI Based Code Reviewer
+# Bubo 🦉
+
+> **Agentic AI code review — with the LLM of your choice.**
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-3776ab?logo=python&logoColor=white)](pyproject.toml)
 [![Managed with uv](https://img.shields.io/badge/managed%20with-uv-2f3542)](pyproject.toml)
@@ -7,11 +9,13 @@
 [![OpenTelemetry](https://img.shields.io/badge/metrics-OpenTelemetry-4f62ad)](docs/telemetry.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827)](LICENSE)
 
-Evidence-backed LLM code review for merge requests. Watches GitLab MRs, runs a
-structured agent review, and posts only actionable findings as inline review
-threads — no chatbot noise, no praise, no summaries.
+Bubo is an **agentic AI code reviewer** for GitLab MRs and GitHub PRs. It watches
+open changes, runs a structured agentic review with **the LLM you choose** (Codex,
+Claude, or any model your CLI drives), and posts only actionable findings as inline
+review threads — no chatbot noise, no praise, no summaries. Like the owl it's named
+for, it stays silent until it has something worth saying.
 
-![LLM Reviewer hero](docs/images/llm-reviewer-hero.png)
+![Bubo hero](docs/images/bubo-hero.png)
 
 ---
 
@@ -47,7 +51,7 @@ Real (sanitized) inline findings on GitLab MRs:
 ![Sanitized inline finding — exception handler](docs/images/gitlab-mr-review-exception-handler.png)
 
 More sanitized examples are in [docs/examples/README.md](docs/examples/README.md).
-Demo GIF: [docs/media/llm-reviewer-demo.gif](docs/media/llm-reviewer-demo.gif).
+Demo GIF: [docs/media/bubo-demo.gif](docs/media/bubo-demo.gif).
 
 ---
 
@@ -59,14 +63,14 @@ copy-paste blocks), then:
 
 ```sh
 uv tool install git+https://github.com/mountainowl/ai-code-review@v0.6.0
-llm-reviewer init                # idempotent; --dry-run to preview
+bubo init                # idempotent; --dry-run to preview
 
-# Edit ~/.local/share/llm-reviewer/config/env.toml:
+# Edit ~/.local/share/bubo/config/env.toml:
 #   [gitlab].token, [agents].llm_api_key, [agents].llm_model,
 #   and at least one [[projects]] entry.
 
-llm-reviewer doctor              # verify before first poll
-mr-review-poller                 # one poll cycle; exits at the end
+bubo doctor              # verify before first poll
+bubo-poller                 # one poll cycle; exits at the end
 ```
 
 The first cycle runs with `[review].dry_run = true` (the default) — findings
@@ -120,8 +124,8 @@ in the configured CLI skill.
 | Doc | What's in it |
 |---|---|
 | [Prerequisites](docs/prerequisites.md) | macOS / Linux runtime, per-provider tools, credentials, install verification. |
-| [Install and configure](docs/install-and-configure.md) | `uv tool install`, `llm-reviewer init`, the minimum `config/env.toml`, GitLab and GitHub bot setup. |
-| [Run](docs/run.md) | One-off review, the GitLab poller, the bundled `mcp-llm-reviewer` MCP server (three deployment patterns) and upstream wrappers. |
+| [Install and configure](docs/install-and-configure.md) | `uv tool install`, `bubo init`, the minimum `config/env.toml`, GitLab and GitHub bot setup. |
+| [Run](docs/run.md) | One-off review, the GitLab poller, the bundled `bubo-mcp` MCP server (three deployment patterns) and upstream wrappers. |
 | [Configuration reference](docs/configuration.md) | Every `[scm]` / `[gitlab]` / `[github]` / `[review]` / `[poller]` / `[agents]` / `[telemetry]` / `[[projects]]` setting and its default. |
 | [Operate](docs/operate.md) | Remote deploy, scheduling under cron or systemd, `--sync-outcomes` grading, one-shot backfill. |
 | [Telemetry](docs/telemetry.md) | Emitted `llm_review.*` metrics, ready-made dashboard queries, cardinality discipline. |
@@ -132,7 +136,7 @@ in the configured CLI skill.
 
 - **GitLab posting via polling** — production path. Stable.
 - **GitHub posting via polling** — supported, at outcome-metric parity with
-  GitLab. Set `[scm].provider = "github"` (or run `gh-review-poller`, which
+  GitLab. Set `[scm].provider = "github"` (or run `bubo-gh-poller`, which
   forces it). See [how the GitHub provider talks to GitHub](docs/run.md#how-the-github-provider-talks-to-github)
   for the MCP/REST + GraphQL details.
 - **Webhook-driven triggering** — not implemented; polling is the only path.
@@ -150,7 +154,7 @@ Review execution is intentionally outside CI/CD. Run it as a poller beside your 
   `sk-…`, and credentialed Git URLs) before being written to reports, logs, or
   the database error column.
 - The reviewer subprocess is launched with a strict env allowlist (see
-  `REVIEWER_ENV_ALLOWLIST` in `src/llm_reviewer/poller.py`) — host secrets are
+  `REVIEWER_ENV_ALLOWLIST` in `src/bubo/poller.py`) — host secrets are
   not passed wholesale into the LLM agent.
 - Report vulnerabilities per [`SECURITY.md`](SECURITY.md).
 
@@ -158,10 +162,10 @@ Review execution is intentionally outside CI/CD. Run it as a poller beside your 
 
 ## Bot avatar
 
-Upload [`assets/llm-reviewer.png`](assets/llm-reviewer.png) as the GitLab (or
+Upload [`assets/bubo.png`](assets/bubo.png) as the GitLab (or
 future GitHub) bot avatar.
 
-![LLM Reviewer avatar preview](docs/images/llm-reviewer-avatar-preview.png)
+![LLM Reviewer avatar preview](docs/images/bubo-avatar-preview.png)
 
 ---
 

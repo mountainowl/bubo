@@ -40,14 +40,14 @@ jobs:
 
       - name: Run live integration tests
         env:
-          LLM_REVIEWER_IT_GITLAB_TOKEN: ${{ secrets.IT_GITLAB_TOKEN }}
-          LLM_REVIEWER_IT_GITLAB_PROJECT: ${{ vars.IT_GITLAB_PROJECT }}
-          LLM_REVIEWER_IT_GITLAB_URL: ${{ vars.IT_GITLAB_URL }}
-          LLM_REVIEWER_IT_GITHUB_TOKEN: ${{ secrets.IT_GITHUB_TOKEN }}
-          LLM_REVIEWER_IT_GITHUB_PROJECT: ${{ vars.IT_GITHUB_PROJECT }}
-          LLM_REVIEWER_IT_GITHUB_API_URL: ${{ vars.IT_GITHUB_API_URL }}
+          BUBO_IT_GITLAB_TOKEN: ${{ secrets.IT_GITLAB_TOKEN }}
+          BUBO_IT_GITLAB_PROJECT: ${{ vars.IT_GITLAB_PROJECT }}
+          BUBO_IT_GITLAB_URL: ${{ vars.IT_GITLAB_URL }}
+          BUBO_IT_GITHUB_TOKEN: ${{ secrets.IT_GITHUB_TOKEN }}
+          BUBO_IT_GITHUB_PROJECT: ${{ vars.IT_GITHUB_PROJECT }}
+          BUBO_IT_GITHUB_API_URL: ${{ vars.IT_GITHUB_API_URL }}
         run: |
-          if [ -z "${LLM_REVIEWER_IT_GITLAB_TOKEN}" ] && [ -z "${LLM_REVIEWER_IT_GITHUB_TOKEN}" ]; then
+          if [ -z "${BUBO_IT_GITLAB_TOKEN}" ] && [ -z "${BUBO_IT_GITHUB_TOKEN}" ]; then
             echo "Neither IT_GITLAB_TOKEN nor IT_GITHUB_TOKEN configured — skipping live tests."
             exit 0
           fi

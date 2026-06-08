@@ -2,7 +2,7 @@ name: Release-please lockfile sync
 
 # When release-please opens or updates its release PR, regenerate uv.lock
 # so the version bump in pyproject.toml stays in sync with the locked
-# llm-reviewer self-entry. Without this, every release PR ships with a
+# bubo self-entry. Without this, every release PR ships with a
 # stale lock — `uv sync --locked` fails in CI and again on every operator
 # install — and admin-merging the failing PR ships a broken tarball.
 #

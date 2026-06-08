@@ -24,9 +24,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from llm_reviewer.config_values import ConfigError
-from llm_reviewer.poller import post_no_findings_comment
-from llm_reviewer.review_config import (
+from bubo.config_values import ConfigError
+from bubo.poller import post_no_findings_comment
+from bubo.review_config import (
     DEFAULT_NO_FINDINGS_COMMENT,
     ReviewConfig,
     review_config_from_dict,
@@ -203,23 +203,23 @@ def test_post_no_findings_comment_soft_fails_on_provider_error() -> None:
 
 
 def test_gitlab_find_note_by_body_matches_exact_body() -> None:
-    from llm_reviewer import gitlab
+    from bubo import gitlab
 
     notes = [
         {"id": 1, "system": True, "body": "matched marker"},  # ignored: system note
         {"id": 2, "body": "other body"},
         {"id": 3, "body": "matched marker"},
     ]
-    with patch("llm_reviewer.gitlab.get_mr_notes", return_value=notes):
+    with patch("bubo.gitlab.get_mr_notes", return_value=notes):
         note_id = gitlab.find_note_by_body(ReviewConfig(), "tok", "grp/repo", 1, "matched marker")
 
     assert note_id == "3"
 
 
 def test_gitlab_find_note_by_body_returns_empty_when_no_match() -> None:
-    from llm_reviewer import gitlab
+    from bubo import gitlab
 
-    with patch("llm_reviewer.gitlab.get_mr_notes", return_value=[{"id": 1, "body": "nope"}]):
+    with patch("bubo.gitlab.get_mr_notes", return_value=[{"id": 1, "body": "nope"}]):
         note_id = gitlab.find_note_by_body(ReviewConfig(), "tok", "grp/repo", 1, "missing")
 
     assert note_id == ""
@@ -229,15 +229,15 @@ def test_gitlab_find_note_by_body_filters_by_bot_username() -> None:
     # A human reply that quotes the bot's body must NOT satisfy the
     # dedup, or the bot will silently stop posting its own
     # acknowledgement on subsequent re-reviews.
-    from llm_reviewer import gitlab
+    from bubo import gitlab
 
     notes = [
         {"id": 7, "body": "match", "author": {"username": "human-reviewer"}},
-        {"id": 8, "body": "match", "author": {"username": "llm-reviewer"}},
+        {"id": 8, "body": "match", "author": {"username": "bubo"}},
     ]
-    with patch("llm_reviewer.gitlab.get_mr_notes", return_value=notes):
+    with patch("bubo.gitlab.get_mr_notes", return_value=notes):
         note_id = gitlab.find_note_by_body(
-            ReviewConfig(), "tok", "grp/repo", 1, "match", bot_username="llm-reviewer"
+            ReviewConfig(), "tok", "grp/repo", 1, "match", bot_username="bubo"
         )
 
     assert note_id == "8"
@@ -249,10 +249,10 @@ def test_gitlab_find_note_by_body_filters_by_bot_username() -> None:
 
 
 def test_gitlab_provider_post_change_comment_reuses_existing_note() -> None:
-    from llm_reviewer.scm.gitlab import GitLabProvider
+    from bubo.scm.gitlab import GitLabProvider
 
-    with patch("llm_reviewer.gitlab.find_note_by_body", return_value="note-existing") as finder:
-        with patch("llm_reviewer.gitlab.create_mr_note") as creator:
+    with patch("bubo.gitlab.find_note_by_body", return_value="note-existing") as finder:
+        with patch("bubo.gitlab.create_mr_note") as creator:
             note_id = GitLabProvider().post_change_comment(
                 ReviewConfig(), "tok", "grp/repo", 1, "body"
             )
@@ -265,10 +265,10 @@ def test_gitlab_provider_post_change_comment_reuses_existing_note() -> None:
 
 
 def test_gitlab_provider_post_change_comment_creates_when_missing() -> None:
-    from llm_reviewer.scm.gitlab import GitLabProvider
+    from bubo.scm.gitlab import GitLabProvider
 
-    with patch("llm_reviewer.gitlab.find_note_by_body", return_value=""):
-        with patch("llm_reviewer.gitlab.create_mr_note", return_value={"id": 42}) as creator:
+    with patch("bubo.gitlab.find_note_by_body", return_value=""):
+        with patch("bubo.gitlab.create_mr_note", return_value={"id": 42}) as creator:
             note_id = GitLabProvider().post_change_comment(
                 ReviewConfig(), "tok", "grp/repo", 1, "body"
             )
@@ -278,10 +278,10 @@ def test_gitlab_provider_post_change_comment_creates_when_missing() -> None:
 
 
 def test_gitlab_provider_post_change_comment_returns_blank_when_create_lacks_id() -> None:
-    from llm_reviewer.scm.gitlab import GitLabProvider
+    from bubo.scm.gitlab import GitLabProvider
 
-    with patch("llm_reviewer.gitlab.find_note_by_body", return_value=""):
-        with patch("llm_reviewer.gitlab.create_mr_note", return_value={}):
+    with patch("bubo.gitlab.find_note_by_body", return_value=""):
+        with patch("bubo.gitlab.create_mr_note", return_value={}):
             note_id = GitLabProvider().post_change_comment(
                 ReviewConfig(), "tok", "grp/repo", 1, "body"
             )
@@ -295,13 +295,13 @@ def test_gitlab_provider_post_change_comment_returns_blank_when_create_lacks_id(
 
 
 def test_github_find_issue_comment_by_body_matches_exact_body() -> None:
-    from llm_reviewer import github
+    from bubo import github
 
     comments = [
         {"id": 11, "body": "different"},
         {"id": 22, "body": "match"},
     ]
-    with patch("llm_reviewer.github.get_issue_comments", return_value=comments):
+    with patch("bubo.github.get_issue_comments", return_value=comments):
         comment_id = github.find_issue_comment_by_body(
             ReviewConfig(provider="github"), "tok", "owner/repo", 5, "match"
         )
@@ -311,32 +311,30 @@ def test_github_find_issue_comment_by_body_matches_exact_body() -> None:
 
 def test_github_find_issue_comment_by_body_filters_by_bot_username() -> None:
     # Foreign-bot or human comments that quote the body must not match.
-    from llm_reviewer import github
+    from bubo import github
 
     comments = [
         {"id": 100, "body": "match", "user": {"login": "dependabot"}},
-        {"id": 200, "body": "match", "user": {"login": "llm-reviewer"}},
+        {"id": 200, "body": "match", "user": {"login": "bubo"}},
     ]
-    with patch("llm_reviewer.github.get_issue_comments", return_value=comments):
+    with patch("bubo.github.get_issue_comments", return_value=comments):
         comment_id = github.find_issue_comment_by_body(
             ReviewConfig(provider="github"),
             "tok",
             "owner/repo",
             5,
             "match",
-            bot_username="llm-reviewer",
+            bot_username="bubo",
         )
 
     assert comment_id == "200"
 
 
 def test_github_provider_post_change_comment_reuses_existing_comment() -> None:
-    from llm_reviewer.scm.github import GitHubProvider
+    from bubo.scm.github import GitHubProvider
 
-    with patch(
-        "llm_reviewer.github.find_issue_comment_by_body", return_value="comment-existing"
-    ) as finder:
-        with patch("llm_reviewer.github.create_issue_comment") as creator:
+    with patch("bubo.github.find_issue_comment_by_body", return_value="comment-existing") as finder:
+        with patch("bubo.github.create_issue_comment") as creator:
             comment_id = GitHubProvider().post_change_comment(
                 ReviewConfig(provider="github"), "tok", "owner/repo", 5, "body"
             )
@@ -348,10 +346,10 @@ def test_github_provider_post_change_comment_reuses_existing_comment() -> None:
 
 
 def test_github_provider_post_change_comment_creates_when_missing() -> None:
-    from llm_reviewer.scm.github import GitHubProvider
+    from bubo.scm.github import GitHubProvider
 
-    with patch("llm_reviewer.github.find_issue_comment_by_body", return_value=""):
-        with patch("llm_reviewer.github.create_issue_comment", return_value={"id": 99}) as creator:
+    with patch("bubo.github.find_issue_comment_by_body", return_value=""):
+        with patch("bubo.github.create_issue_comment", return_value={"id": 99}) as creator:
             comment_id = GitHubProvider().post_change_comment(
                 ReviewConfig(provider="github"), "tok", "owner/repo", 5, "body"
             )

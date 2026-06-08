@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from llm_reviewer.telemetry.config import ModelPricing, TelemetryConfig
-from llm_reviewer.telemetry.cost import TokenUsage, estimate_cost_usd, parse_codex_token_usage
-from llm_reviewer.telemetry.metrics import METRIC_ATTRIBUTE_KEYS, ReviewTelemetry, metric_attrs
+from bubo.telemetry.config import ModelPricing, TelemetryConfig
+from bubo.telemetry.cost import TokenUsage, estimate_cost_usd, parse_codex_token_usage
+from bubo.telemetry.metrics import METRIC_ATTRIBUTE_KEYS, ReviewTelemetry, metric_attrs
 
 
 def test_metric_attrs_exclude_high_cardinality_fields() -> None:
@@ -105,7 +105,7 @@ def test_telemetry_span_does_not_swallow_body_exceptions() -> None:
 
 
 def test_configure_otel_can_retry_after_init_failure(monkeypatch) -> None:
-    from llm_reviewer.telemetry import metrics as metrics_module
+    from bubo.telemetry import metrics as metrics_module
 
     metrics_module._CONFIGURED = False
 

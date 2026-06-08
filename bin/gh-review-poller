@@ -1,6 +1,0 @@
-#!/bin/sh
-set -eu
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-ROOT="${LLM_CODE_REVIEW_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
-exec "$ROOT/bin/env" uv run --project "$ROOT" gh-review-poller "$@"

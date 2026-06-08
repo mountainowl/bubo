@@ -4,13 +4,13 @@ One-off review of the current checkout (manual; no GitLab interaction beyond
 the agent's own MCP calls):
 
 ```sh
-uv run code-review-codex "Review the current changes."
+uv run bubo-codex "Review the current changes."
 ```
 
 The GitLab poller (one cycle):
 
 ```sh
-uv run mr-review-poller
+uv run bubo-poller
 ```
 
 Schedule it via cron or a systemd timer for continuous operation — there is
@@ -18,9 +18,9 @@ deliberately no daemon mode. Each invocation processes up to
 `max_merge_requests_per_poll` MRs and exits. See [operate.md](operate.md)
 for ready-to-copy cron/systemd templates.
 
-## MCP interface (`mcp-llm-reviewer`)
+## MCP interface (`bubo-mcp`)
 
-llm-reviewer ships its own MCP server with **two interfaces** — a metrics
+bubo ships its own MCP server with **two interfaces** — a metrics
 side for inspecting review state, and a review side for triggering a
 fresh review by URL or `(provider, project, number)`.
 
@@ -28,7 +28,7 @@ fresh review by URL or `(provider, project, number)`.
 
 | Tool | Returns |
 |---|---|
-| `health` | `{status, last_status, last_updated_at, age_seconds}` — same semantics as `mr-review-poller --health`. |
+| `health` | `{status, last_status, last_updated_at, age_seconds}` — same semantics as `bubo-poller --health`. |
 | `list_recent_reviews` | Recent `reviewed_mrs` rows newest-first, with optional `status` / `project` / `limit` filters. |
 | `get_review` | One review row by `(project, iid[, sha])`; resolves to the latest SHA when unspecified. |
 | `get_findings` | Per-finding rows (file, line, severity, category, confidence, posted body, discussion id). |
@@ -43,7 +43,7 @@ fresh review by URL or `(provider, project, number)`.
 
 `provider="auto"` (the default) infers the provider from the URL when one is
 given, otherwise falls back to `[scm].provider` in `config/env.toml`.
-`review_change` blocks until the underlying `code-review-codex` subprocess
+`review_change` blocks until the underlying `bubo-codex` subprocess
 completes — set the client-side `tool_timeout_sec` accordingly. **MCP-triggered
 reviews return findings inline; they do not write to `reviewed_mrs`**, so
 they will not show up in the metrics tools. Use the poller for state-tracked
@@ -60,28 +60,28 @@ reviewer actually live.
 
 ```toml
 # ~/.codex/config.toml
-[mcp_servers.llm-reviewer]
-command = "/absolute/path/to/llm-reviewer/bin/mcp-llm-reviewer"
+[mcp_servers.bubo]
+command = "/absolute/path/to/bubo/bin/bubo-mcp"
 args    = []
 startup_timeout_sec = 20
 tool_timeout_sec    = 1800   # ≥ [review].timeout_seconds for review_change
 ```
 
 No reviewer-side config change needed — `[mcp_server].transport` defaults
-to `"stdio"`. `~/` expansion is supported, so a `~/llm-reviewer/...` path
+to `"stdio"`. `~/` expansion is supported, so a `~/bubo/...` path
 works across machines that install to the same per-user location.
 
 **Pattern 2 — remote via SSH (laptop runs Codex; server runs the reviewer + holds the SQLite):**
 
 ```toml
 # ~/.codex/config.toml
-[mcp_servers.llm-reviewer]
+[mcp_servers.bubo]
 command = "ssh"
 args = [
     "-T",                                      # no pty; keeps stdout clean for MCP framing
     "-o", "ServerAliveInterval=30",            # keeps long review_change calls alive across NAT
-    "llm-reviewer.example.com",                # ssh_config Host alias, or user@host
-    "/opt/llm-reviewer/bin/mcp-llm-reviewer",  # absolute path on the server
+    "bubo.example.com",                # ssh_config Host alias, or user@host
+    "/opt/bubo/bin/bubo-mcp",  # absolute path on the server
 ]
 startup_timeout_sec = 30
 tool_timeout_sec    = 1800
@@ -102,17 +102,17 @@ On the reviewer host, set `config/env.toml`:
 transport    = "http"
 host         = "0.0.0.0"                     # or a specific interface
 port         = 8765
-bearer_token = "${LLM_REVIEWER_MCP_TOKEN}"   # generate: openssl rand -hex 32
+bearer_token = "${BUBO_MCP_TOKEN}"   # generate: openssl rand -hex 32
 ```
 
-Then run `bin/mcp-llm-reviewer` (e.g. under a systemd unit). On the client:
+Then run `bin/bubo-mcp` (e.g. under a systemd unit). On the client:
 
 ```toml
 # ~/.codex/config.toml — exact key for HTTP MCP servers varies across
 # Codex versions; check `codex --help` if these names look wrong.
-[mcp_servers.llm-reviewer]
+[mcp_servers.bubo]
 url           = "https://reviewer.example.com/mcp"
-bearer_token  = "..."                        # matches LLM_REVIEWER_MCP_TOKEN
+bearer_token  = "..."                        # matches BUBO_MCP_TOKEN
 startup_timeout_sec = 30
 tool_timeout_sec    = 1800
 ```
@@ -134,12 +134,12 @@ MCP surface the reviewer uses.
 ## How the GitHub provider talks to GitHub
 
 The poller is provider-agnostic: a single `ScmProvider` abstraction
-(see `src/llm_reviewer/scm/`) drives both GitLab and GitHub. The
+(see `src/bubo/scm/`) drives both GitLab and GitHub. The
 GitHub-specific mechanics worth knowing:
 
 - **Inline-comment posting** goes through a GitHub MCP server. The MCP
   tool name varies between server implementations and is overrideable
-  via the `LLM_REVIEWER_GITHUB_MCP_TOOL` environment variable. If the
+  via the `BUBO_GITHUB_MCP_TOOL` environment variable. If the
   MCP call fails or the tool is missing, the poster falls back to the
   GitHub REST API for the same operation.
 - **Thread resolution** (used by `--sync-outcomes`) is read via GitHub's

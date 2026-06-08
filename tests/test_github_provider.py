@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from llm_reviewer import github
-from llm_reviewer.review_config import ReviewConfig
-from llm_reviewer.scm import get_provider
-from llm_reviewer.scm.github import GitHubProvider
+from bubo import github
+from bubo.review_config import ReviewConfig
+from bubo.scm import get_provider
+from bubo.scm.github import GitHubProvider
 
 
 def test_get_provider_returns_github_for_github_config() -> None:
@@ -41,7 +41,7 @@ def test_api_pages_follows_link_header() -> None:
     def fake_request(url, token, method, body=None):
         return pages[url]
 
-    with patch("llm_reviewer.github._request", side_effect=fake_request):
+    with patch("bubo.github._request", side_effect=fake_request):
         cfg = ReviewConfig(provider="github")
         prs = github.open_prs(cfg, "o/r", "token")
 
@@ -59,7 +59,7 @@ def test_provider_change_number_and_head_sha() -> None:
 def test_provider_changed_lines_from_github_files() -> None:
     provider = GitHubProvider()
     files = [{"filename": "src/A.py", "patch": "@@ -1,1 +1,2 @@\n old\n+new\n"}]
-    with patch("llm_reviewer.github.get_pr_files", return_value=files):
+    with patch("bubo.github.get_pr_files", return_value=files):
         changed = provider.changed_lines(ReviewConfig(provider="github"), "tok", "o/r", 1)
     assert 2 in changed["src/A.py"]["new_lines"]
     assert 1 not in changed["src/A.py"]["new_lines"]
@@ -83,10 +83,10 @@ def test_provider_post_falls_back_to_rest_when_mcp_fails() -> None:
     provider = GitHubProvider()
     position = {"commit_id": "abc", "path": "src/A.py", "line": 7, "side": "RIGHT"}
 
-    with patch("llm_reviewer.mcp.call_tool", side_effect=RuntimeError("no such tool")):
-        with patch("llm_reviewer.github.find_review_comment_by_body", return_value=""):
+    with patch("bubo.mcp.call_tool", side_effect=RuntimeError("no such tool")):
+        with patch("bubo.github.find_review_comment_by_body", return_value=""):
             with patch(
-                "llm_reviewer.github.create_pr_review_comment",
+                "bubo.github.create_pr_review_comment",
                 return_value={"id": "gh-comment-1"},
             ):
                 comment_id = provider.post_inline_comment(
@@ -100,7 +100,7 @@ def test_provider_post_prefers_mcp_when_it_returns_id() -> None:
     provider = GitHubProvider()
     position = {"commit_id": "abc", "path": "src/A.py", "line": 7, "side": "RIGHT"}
 
-    with patch("llm_reviewer.mcp.call_tool", return_value={"id": "mcp-comment-9"}):
+    with patch("bubo.mcp.call_tool", return_value={"id": "mcp-comment-9"}):
         comment_id = provider.post_inline_comment(
             ReviewConfig(provider="github"), "tok", "o/r", 5, "body", position
         )
@@ -114,7 +114,7 @@ def test_classify_review_thread_outcome_reads_markers_and_replies() -> None:
         {"user": {"login": "dev1"}, "body": "[llm-review:false-positive] nope"},
     ]
     outcome = github.classify_review_thread_outcome(
-        comment, replies, bot_username="llm-reviewer", pr_state="merged"
+        comment, replies, bot_username="bubo", pr_state="merged"
     )
     assert outcome["developer_replied"] is True
     assert outcome["false_positive"] is True
@@ -135,7 +135,7 @@ def test_graphql_url_derivation() -> None:
 
 def test_graphql_raises_on_query_errors() -> None:
     body = {"data": None, "errors": [{"message": "Field 'foo' doesn't exist"}]}
-    with patch("llm_reviewer.github._request", return_value=(body, {})):
+    with patch("bubo.github._request", return_value=(body, {})):
         try:
             github.graphql("https://api.github.com", "tok", "query{}", {})
         except RuntimeError as exc:
@@ -158,7 +158,7 @@ def test_get_pr_review_threads_paginates_and_normalizes() -> None:
                                     {
                                         "databaseId": 100,
                                         "id": "PRRC_a",
-                                        "author": {"login": "llm-reviewer"},
+                                        "author": {"login": "bubo"},
                                         "body": "finding",
                                         "path": "src/A.py",
                                         "line": 7,
@@ -186,7 +186,7 @@ def test_get_pr_review_threads_paginates_and_normalizes() -> None:
             }
         }
     }
-    with patch("llm_reviewer.github.graphql", side_effect=[page1, page2]) as mock_graphql:
+    with patch("bubo.github.graphql", side_effect=[page1, page2]) as mock_graphql:
         threads = github.get_pr_review_threads(ReviewConfig(provider="github"), "tok", "o/r", 5)
 
     assert mock_graphql.call_count == 2
@@ -194,7 +194,7 @@ def test_get_pr_review_threads_paginates_and_normalizes() -> None:
     first = threads[0]["comments"][0]
     assert first["database_id"] == 100
     assert first["node_id"] == "PRRC_a"
-    assert first["login"] == "llm-reviewer"
+    assert first["login"] == "bubo"
     assert first["path"] == "src/A.py"
     assert first["line"] == 7
 
@@ -219,13 +219,11 @@ def test_classify_graphql_thread_outcome_reads_resolution() -> None:
     thread = {
         "is_resolved": True,
         "comments": [
-            {"login": "llm-reviewer", "body": "finding"},
+            {"login": "bubo", "body": "finding"},
             {"login": "dev1", "body": "[llm-review:false-positive] nope"},
         ],
     }
-    outcome = github.classify_graphql_thread_outcome(
-        thread, bot_username="llm-reviewer", pr_state="merged"
-    )
+    outcome = github.classify_graphql_thread_outcome(thread, bot_username="bubo", pr_state="merged")
     assert outcome["resolved"] is True
     assert outcome["developer_replied"] is True
     assert outcome["false_positive"] is True
@@ -235,10 +233,8 @@ def test_classify_graphql_thread_outcome_reads_resolution() -> None:
 
 
 def test_classify_graphql_thread_outcome_marks_merged_unresolved() -> None:
-    thread = {"is_resolved": False, "comments": [{"login": "llm-reviewer", "body": "finding"}]}
-    outcome = github.classify_graphql_thread_outcome(
-        thread, bot_username="llm-reviewer", pr_state="merged"
-    )
+    thread = {"is_resolved": False, "comments": [{"login": "bubo", "body": "finding"}]}
+    outcome = github.classify_graphql_thread_outcome(thread, bot_username="bubo", pr_state="merged")
     assert outcome["resolved"] is False
     assert outcome["merged_unresolved"] is True
 
@@ -248,28 +244,28 @@ def test_fetch_outcome_uses_graphql_resolution() -> None:
     threads = [
         {
             "is_resolved": True,
-            "comments": [{"database_id": 100, "node_id": "PRRC_a", "login": "llm-reviewer"}],
+            "comments": [{"database_id": 100, "node_id": "PRRC_a", "login": "bubo"}],
         }
     ]
-    with patch("llm_reviewer.github.get_pr", return_value={"state": "open"}):
-        with patch("llm_reviewer.github.get_pr_review_threads", return_value=threads):
+    with patch("bubo.github.get_pr", return_value={"state": "open"}):
+        with patch("bubo.github.get_pr_review_threads", return_value=threads):
             outcome = provider.fetch_outcome(
-                ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "llm-reviewer"
+                ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "bubo"
             )
     assert outcome["resolved"] is True
 
 
 def test_fetch_outcome_falls_back_to_rest_on_graphql_failure() -> None:
     provider = GitHubProvider()
-    with patch("llm_reviewer.github.get_pr", return_value={"state": "closed", "merged": True}):
+    with patch("bubo.github.get_pr", return_value={"state": "closed", "merged": True}):
         with patch(
-            "llm_reviewer.github.get_pr_review_threads",
+            "bubo.github.get_pr_review_threads",
             side_effect=RuntimeError("graphql down"),
         ):
-            with patch("llm_reviewer.github.get_pr_review_comment", return_value={"id": "100"}):
-                with patch("llm_reviewer.github.get_pr_review_comments", return_value=[]):
+            with patch("bubo.github.get_pr_review_comment", return_value={"id": "100"}):
+                with patch("bubo.github.get_pr_review_comments", return_value=[]):
                     outcome = provider.fetch_outcome(
-                        ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "llm-reviewer"
+                        ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "bubo"
                     )
     # REST classifier is resolution-blind, but a merged PR -> merged_unresolved.
     assert outcome["resolved"] is False
@@ -294,7 +290,7 @@ def test_pulls_updated_after_stops_at_cutoff() -> None:
     def fake_request(req_url, token, method, body=None):
         return pages[req_url]
 
-    with patch("llm_reviewer.github._request", side_effect=fake_request):
+    with patch("bubo.github._request", side_effect=fake_request):
         prs = github.pulls_updated_after(
             ReviewConfig(provider="github"), "o/r", "tok", "2026-05-25T00:00:00Z"
         )

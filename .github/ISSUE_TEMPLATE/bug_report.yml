@@ -20,7 +20,7 @@ body:
       label: Reproduction
       description: Exact command, config shape, MR state, or log excerpt needed to reproduce.
       placeholder: |
-        uv run mr-review-poller
+        uv run bubo-poller
         ...
     validations:
       required: true
@@ -28,7 +28,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: Commit SHA, release tag, or `llm-reviewer --version` when available.
+      description: Commit SHA, release tag, or `bubo --version` when available.
     validations:
       required: false
   - type: dropdown

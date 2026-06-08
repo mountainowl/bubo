@@ -2,7 +2,7 @@
 
 LLM Reviewer emits OpenTelemetry metrics and traces so dashboard rollups
 stay outside the poller. All metrics are namespaced `llm_review.*` and
-registered in `src/llm_reviewer/telemetry/metrics.py`.
+registered in `src/bubo/telemetry/metrics.py`.
 
 ## Emitted metrics
 

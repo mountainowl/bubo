@@ -1,0 +1,23 @@
+# systemd timer that fires the poll cycle defined in
+# `bubo.service`. Copy to /etc/systemd/system/ and:
+#
+#   systemctl daemon-reload
+#   systemctl enable --now bubo.timer
+#
+# Pair with `bubo-outcome-sync.timer` (separate file) for periodic
+# outcome sync; or put `OnCalendar=*:17` etc. on a `Type=oneshot --sync-outcomes`
+# service in a sibling unit.
+
+[Unit]
+Description=Run the LLM Reviewer poll cycle every 15 minutes
+Requires=bubo.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+AccuracySec=30s
+Unit=bubo.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

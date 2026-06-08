@@ -7,11 +7,11 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
-from llm_reviewer import gitlab, paths, poller
-from llm_reviewer.findings import build_position, changed_lines_from_diffs
-from llm_reviewer.review_config import ReviewConfig
-from llm_reviewer.telemetry.config import TelemetryConfig
-from llm_reviewer.telemetry.cost import TokenUsage
+from bubo import gitlab, paths, poller
+from bubo.findings import build_position, changed_lines_from_diffs
+from bubo.review_config import ReviewConfig
+from bubo.telemetry.config import TelemetryConfig
+from bubo.telemetry.cost import TokenUsage
 
 
 class _FakeProvider:
@@ -373,8 +373,8 @@ def test_gitlab_api_retries_retryable_errors() -> None:
             raise item
         return item
 
-    with patch("llm_reviewer.gitlab.urllib.request.urlopen", side_effect=fake_urlopen):
-        with patch("llm_reviewer.gitlab.time.sleep") as sleep:
+    with patch("bubo.gitlab.urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("bubo.gitlab.time.sleep") as sleep:
             data, _headers = gitlab.api("https://gitlab.example", "token", "GET", "/projects")
 
     assert data == {"ok": True}

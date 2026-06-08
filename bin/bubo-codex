@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT="${BUBO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
+if [ "${BUBO_SKIP_AGENT_CONFIG_ENV:-0}" = "1" ]; then
+    PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+    export PATH BUBO_ROOT="$ROOT"
+    exec uv run --project "$ROOT" bubo-codex "$@"
+fi
+exec "$ROOT/bin/env" uv run --project "$ROOT" bubo-codex "$@"

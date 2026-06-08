@@ -5,9 +5,9 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from llm_reviewer import gitlab, paths, poller
-from llm_reviewer.review_config import ReviewConfig
-from llm_reviewer.telemetry.config import TelemetryConfig
+from bubo import gitlab, paths, poller
+from bubo.review_config import ReviewConfig
+from bubo.telemetry.config import TelemetryConfig
 
 
 class _FakeProvider:
@@ -23,7 +23,7 @@ class _FakeProvider:
         return "token"
 
     def bot_username(self) -> str:
-        return "llm-reviewer"
+        return "bubo"
 
     def fetch_outcome(self, cfg, token, project, number, thread_id, bot_username):
         if self._error is not None:
@@ -35,7 +35,7 @@ class _FakeGitLabProvider(_FakeProvider):
     name = "gitlab"
 
     def bot_username(self) -> str:
-        return "lt-llm-reviewer"
+        return "lt-bubo"
 
     def head_sha(self, change):
         return change.get("sha") or "head-sha"
@@ -45,7 +45,7 @@ class _FakeGitHubProvider(_FakeProvider):
     name = "github"
 
     def bot_username(self) -> str:
-        return "lt-llm-reviewer"
+        return "lt-bubo"
 
 
 def test_classify_discussion_outcome_uses_explicit_manual_markers() -> None:
@@ -53,15 +53,13 @@ def test_classify_discussion_outcome_uses_explicit_manual_markers() -> None:
         "id": "disc1",
         "resolved": True,
         "notes": [
-            {"author": {"username": "llm-reviewer"}, "body": "finding"},
+            {"author": {"username": "bubo"}, "body": "finding"},
             {"author": {"username": "dev1"}, "body": "[llm-review:false-positive] not an issue"},
             {"author": {"username": "dev2"}, "body": "[llm-review:duplicate] already covered"},
         ],
     }
 
-    outcome = gitlab.classify_discussion_outcome(
-        discussion, bot_username="llm-reviewer", mr_state="merged"
-    )
+    outcome = gitlab.classify_discussion_outcome(discussion, bot_username="bubo", mr_state="merged")
 
     assert outcome["resolved"] is True
     assert outcome["developer_replied"] is True
@@ -73,9 +71,7 @@ def test_classify_discussion_outcome_uses_explicit_manual_markers() -> None:
 def test_classify_discussion_outcome_marks_unresolved_after_merge() -> None:
     discussion = {"id": "disc1", "resolved": False, "notes": []}
 
-    outcome = gitlab.classify_discussion_outcome(
-        discussion, bot_username="llm-reviewer", mr_state="merged"
-    )
+    outcome = gitlab.classify_discussion_outcome(discussion, bot_username="bubo", mr_state="merged")
 
     assert outcome["resolved"] is False
     assert outcome["merged_unresolved"] is True
@@ -86,7 +82,7 @@ def test_classify_discussion_outcome_uses_note_resolved_state() -> None:
         "id": "disc1",
         "notes": [
             {
-                "author": {"username": "llm-reviewer"},
+                "author": {"username": "bubo"},
                 "body": "finding",
                 "resolvable": True,
                 "resolved": True,
@@ -94,9 +90,7 @@ def test_classify_discussion_outcome_uses_note_resolved_state() -> None:
         ],
     }
 
-    outcome = gitlab.classify_discussion_outcome(
-        discussion, bot_username="llm-reviewer", mr_state="merged"
-    )
+    outcome = gitlab.classify_discussion_outcome(discussion, bot_username="bubo", mr_state="merged")
 
     assert outcome["resolved"] is True
     assert outcome["merged_unresolved"] is False
@@ -154,11 +148,9 @@ def test_outcome_sync_flag_suppresses_outcome_metric_emission() -> None:
                 }
             )
 
-            with patch("llm_reviewer.poller.read_config", return_value=cfg):
-                with patch("llm_reviewer.poller.get_provider", return_value=provider):
-                    with patch(
-                        "llm_reviewer.poller.ReviewTelemetry.from_config", return_value=fake
-                    ):
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=provider):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
                         assert poller.sync_outcomes(limit=1) == 1
 
             assert fake.finding_metrics == 0
@@ -204,11 +196,9 @@ def test_outcome_sync_failure_advances_last_checked_at() -> None:
             cfg = ReviewConfig(gitlab_url="https://gitlab.com", telemetry_config=fake.config)
             provider = _FakeProvider(error=RuntimeError("404"))
 
-            with patch("llm_reviewer.poller.read_config", return_value=cfg):
-                with patch("llm_reviewer.poller.get_provider", return_value=provider):
-                    with patch(
-                        "llm_reviewer.poller.ReviewTelemetry.from_config", return_value=fake
-                    ):
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=provider):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
                         assert poller.sync_outcomes(limit=1) == 0
 
             with sqlite3.connect(paths.DB) as db:
@@ -235,7 +225,7 @@ def test_backfill_gitlab_bot_comments_imports_resolved_discussions() -> None:
                 "notes": [
                     {
                         "id": 99,
-                        "author": {"username": "lt-llm-reviewer"},
+                        "author": {"username": "lt-bubo"},
                         "created_at": "2026-05-29T00:00:00Z",
                         "body": "**Issue (blocking, correctness):** bad path\n\n**Confidence:** 0.91",
                         "position": {
@@ -249,14 +239,14 @@ def test_backfill_gitlab_bot_comments_imports_resolved_discussions() -> None:
                 ],
             }
 
-            with patch("llm_reviewer.poller.read_config", return_value=cfg):
-                with patch("llm_reviewer.poller.get_provider", return_value=_FakeGitLabProvider()):
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeGitLabProvider()):
                     with patch(
-                        "llm_reviewer.poller.gitlab.merge_requests_updated_after",
+                        "bubo.poller.gitlab.merge_requests_updated_after",
                         return_value=[{"iid": 7, "state": "opened", "sha": "sha"}],
                     ):
                         with patch(
-                            "llm_reviewer.poller.gitlab.get_mr_discussions",
+                            "bubo.poller.gitlab.get_mr_discussions",
                             return_value=[discussion],
                         ):
                             assert poller.backfill_gitlab_bot_comments("2026-05-25T00:00:00Z") == 1
@@ -318,7 +308,7 @@ def test_backfill_gitlab_bot_comments_reuses_existing_discussion_row() -> None:
                 "notes": [
                     {
                         "id": 99,
-                        "author": {"username": "lt-llm-reviewer"},
+                        "author": {"username": "lt-bubo"},
                         "created_at": "2026-05-29T00:00:00Z",
                         "body": "**Issue (blocking, correctness):** bad path\n\n**Confidence:** 0.91",
                         "position": {"head_sha": "sha", "new_path": "src/A.java", "new_line": 12},
@@ -328,14 +318,14 @@ def test_backfill_gitlab_bot_comments_reuses_existing_discussion_row() -> None:
                 ],
             }
 
-            with patch("llm_reviewer.poller.read_config", return_value=cfg):
-                with patch("llm_reviewer.poller.get_provider", return_value=_FakeGitLabProvider()):
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeGitLabProvider()):
                     with patch(
-                        "llm_reviewer.poller.gitlab.merge_requests_updated_after",
+                        "bubo.poller.gitlab.merge_requests_updated_after",
                         return_value=[{"iid": 7, "state": "opened", "sha": "sha"}],
                     ):
                         with patch(
-                            "llm_reviewer.poller.gitlab.get_mr_discussions",
+                            "bubo.poller.gitlab.get_mr_discussions",
                             return_value=[discussion],
                         ):
                             assert poller.backfill_gitlab_bot_comments("2026-05-25T00:00:00Z") == 0
@@ -369,7 +359,7 @@ def test_backfill_github_bot_comments_imports_resolved_threads() -> None:
                     {
                         "database_id": 555,
                         "node_id": "PRRC_x",
-                        "login": "lt-llm-reviewer",
+                        "login": "lt-bubo",
                         "body": (
                             "**Issue (blocking, correctness):** bad path\n\n**Confidence:** 0.91"
                         ),
@@ -380,11 +370,11 @@ def test_backfill_github_bot_comments_imports_resolved_threads() -> None:
                 ],
             }
 
-            with patch("llm_reviewer.poller.read_config", return_value=cfg):
-                with patch("llm_reviewer.poller.get_provider", return_value=_FakeGitHubProvider()):
-                    with patch("llm_reviewer.poller.github.pulls_updated_after", return_value=[pr]):
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeGitHubProvider()):
+                    with patch("bubo.poller.github.pulls_updated_after", return_value=[pr]):
                         with patch(
-                            "llm_reviewer.poller.github.get_pr_review_threads",
+                            "bubo.poller.github.get_pr_review_threads",
                             return_value=[thread],
                         ):
                             imported = poller.backfill_github_bot_comments("2026-05-25T00:00:00Z")
@@ -456,7 +446,7 @@ def test_backfill_github_bot_comments_reuses_existing_discussion_row() -> None:
                     {
                         "database_id": 555,
                         "node_id": "PRRC_x",
-                        "login": "lt-llm-reviewer",
+                        "login": "lt-bubo",
                         "body": "**Issue (blocking, correctness):** bad path",
                         "path": "src/A.java",
                         "line": 12,
@@ -464,11 +454,11 @@ def test_backfill_github_bot_comments_reuses_existing_discussion_row() -> None:
                 ],
             }
 
-            with patch("llm_reviewer.poller.read_config", return_value=cfg):
-                with patch("llm_reviewer.poller.get_provider", return_value=_FakeGitHubProvider()):
-                    with patch("llm_reviewer.poller.github.pulls_updated_after", return_value=[pr]):
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeGitHubProvider()):
+                    with patch("bubo.poller.github.pulls_updated_after", return_value=[pr]):
                         with patch(
-                            "llm_reviewer.poller.github.get_pr_review_threads",
+                            "bubo.poller.github.get_pr_review_threads",
                             return_value=[thread],
                         ):
                             assert poller.backfill_github_bot_comments("2026-05-25T00:00:00Z") == 0
@@ -490,8 +480,8 @@ def test_backfill_github_bot_comments_noops_on_gitlab_provider() -> None:
             paths.DB = Path(tmp) / "reviewer.sqlite"
             poller.init_db()
             cfg = ReviewConfig(provider="gitlab", projects=["group/repo"])
-            with patch("llm_reviewer.poller.read_config", return_value=cfg):
-                with patch("llm_reviewer.poller.get_provider", return_value=_FakeGitLabProvider()):
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeGitLabProvider()):
                     assert poller.backfill_github_bot_comments("2026-05-25T00:00:00Z") == 0
     finally:
         paths.DB = original_db

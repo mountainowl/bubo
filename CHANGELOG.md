@@ -10,16 +10,67 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING: renamed the project to `bubo`.** The package, CLI commands,
+  Codex profile, environment-variable namespace, install path, and all
+  branding moved from `llm-reviewer` to **Bubo** 🦉 — an agentic AI code
+  reviewer that runs the LLM of your choice. The GitHub repository slug
+  (`mountainowl/ai-code-review`) is unchanged. Rename map:
+
+  | Old | New |
+  |---|---|
+  | package `llm_reviewer` | `bubo` |
+  | dist / `uv tool install` name `llm-reviewer` | `bubo` |
+  | CLI `llm-reviewer` | `bubo` |
+  | CLI `mr-review-poller` | `bubo-poller` |
+  | CLI `gh-review-poller` | `bubo-gh-poller` |
+  | CLI `code-review-codex` | `bubo-codex` |
+  | CLI `mcp-llm-reviewer` | `bubo-mcp` |
+  | Codex profile `[profiles.llm-reviewer]` | `[profiles.bubo]` |
+  | env `LLM_CODE_REVIEW_*`, `LLM_REVIEWER_*` | `BUBO_*` |
+  | install root `~/.local/share/llm-reviewer` | `~/.local/share/bubo` |
+  | deploy templates `llm-reviewer.{cron,service,timer}` | `bubo.{cron,service,timer}` |
+
+  External contracts are untouched: `GITLAB_TOKEN`, `GITHUB_TOKEN`,
+  `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `LLM_API_KEY`, the `REVIEW_*` /
+  `CODEX_*` subprocess vars, and the `llm_review.*` OpenTelemetry metric
+  namespace (kept stable so existing dashboards keep working).
+
+  **Migration for existing operators** (one-time):
+
+  ```sh
+  # 1. Replace the install.
+  uv tool uninstall llm-reviewer
+  uv tool install git+https://github.com/mountainowl/ai-code-review@v0.7.0
+
+  # 2. Move your state + config to the new root.
+  mv ~/.local/share/llm-reviewer ~/.local/share/bubo    # SQLite state + env.toml
+
+  # 3. In config/env.toml, rename any LLM_CODE_REVIEW_* / LLM_REVIEWER_*
+  #    overrides to BUBO_* (most operators have none).
+
+  # 4. Re-stamp agent config + cron/systemd templates under the new name.
+  bubo init
+  bubo doctor
+
+  # 5. If you scheduled via cron/systemd, reinstall the renamed templates
+  #    ($BUBO_ROOT/deploy/templates/bubo.{cron,service,timer}) and remove
+  #    the old llm-reviewer.* units.
+  ```
+
+  The old `[profiles.llm-reviewer]` block in `~/.codex/config.toml` can be
+  deleted after `bubo init` writes `[profiles.bubo]`.
+
 ### Added
-- **New `llm-reviewer` CLI with `init` and `doctor` subcommands.** Closes #22.
+- **New `bubo` CLI with `init` and `doctor` subcommands.** Closes #22.
   Operators now install via `uv tool install git+https://github.com/mountainowl/ai-code-review@<tag>`
-  and run `llm-reviewer init` to place per-host assets (Codex profile,
+  and run `bubo init` to place per-host assets (Codex profile,
   Claude settings, `config/env.toml` seed, `var/` workspace, prompts,
   skills, plugins, SQLite schema). `init` is idempotent, supports
   `--dry-run` / `--force` / `--no-agent-config` / `--root`, and writes
-  `~/.codex/config.toml` with a load-bearing `[profiles.llm-reviewer]`
+  `~/.codex/config.toml` with a load-bearing `[profiles.bubo]`
   block — the v0.5.0 incident's root cause (#20 bug 1) is locked out by
-  a doctor check that asserts the block is present. `llm-reviewer
+  a doctor check that asserts the block is present. `bubo
   doctor` is a non-mutating diagnostic: zero exit on a clean install,
   non-zero if env.toml is missing, the DB hasn't been initialized, or
   the Codex profile block isn't there. Suitable as a cron / monitoring
@@ -31,7 +82,7 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   skills, plugins, deploy templates, env.example.toml) at
   `importlib.resources`-reachable locations; the silent-drop of those
   assets was #20 bug 3. Hatchling's `force-include` maps each repo-root
-  asset into the wheel under `llm_reviewer/_assets/` so the new CLI
+  asset into the wheel under `bubo/_assets/` so the new CLI
   can read them via `importlib.resources` regardless of install path
   (`uv tool install`, `pipx`, `pip`, or editable `uv sync --dev`).
   Recommended by uv maintainer konstin in astral-sh/uv#11502 for
@@ -41,7 +92,7 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 ### Deprecated
 - **`scripts/install-package.sh` and `scripts/deploy-package.sh`.** Still
   functional in v0.6.x but print a deprecation warning on every run
-  pointing at `uv tool install` + `llm-reviewer init`. Scheduled for
+  pointing at `uv tool install` + `bubo init`. Scheduled for
   removal in v0.7.0. The deploy assets and shell scripts continue to
   ship in the sdist so existing operators are unaffected during the
   deprecation window.
@@ -50,15 +101,15 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ### Fixed
 - **Codex profile written in a shape Codex doesn't load (production-
-  blocking).** The runtime invokes `codex --profile llm-reviewer`,
-  which Codex resolves against `[profiles.llm-reviewer]` in
+  blocking).** The runtime invokes `codex --profile bubo`,
+  which Codex resolves against `[profiles.bubo]` in
   `~/.codex/config.toml`. The installer was writing the profile to a
-  sibling `~/.codex/llm-reviewer.config.toml` file that Codex does NOT
+  sibling `~/.codex/bubo.config.toml` file that Codex does NOT
   auto-load for `--profile`, so every review aborted with `config
-  profile llm-reviewer not found`. Fixed by inlining the profile as a
-  `[profiles.llm-reviewer]` block inside `deploy/templates/codex-config.toml`,
+  profile bubo not found`. Fixed by inlining the profile as a
+  `[profiles.bubo]` block inside `deploy/templates/codex-config.toml`,
   dropping the orphaned `codex-profile.toml`, and adding a post-install
-  smoke check (`codex exec --profile llm-reviewer --skip-git-repo-check
+  smoke check (`codex exec --profile bubo --skip-git-repo-check
   "Return exactly: profile-ok"`) that warns loudly when the profile
   does not round-trip. Closes #20 (Bug 1).
 - **Stale `uv.lock` shipped at release tag → `uv sync --locked` fails
@@ -74,13 +125,13 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   `prompts/`, `skills/`, or `plugins/`.** The `uv_build` backend
   packages only the Python package by default; operators downloading
   the sdist couldn't run `install-package.sh`. The release workflow now
-  builds a separate cosign-signed `llm-reviewer-deploy-X.Y.Z.tar.gz`
+  builds a separate cosign-signed `bubo-deploy-X.Y.Z.tar.gz`
   bundle (full deployable tree, same exclude pattern as
   `scripts/deploy-package.sh`) and attaches it to every release.
   Install docs updated to point at the bundle and to call out that
   sdist/wheel are not the deploy contract. Closes #20 (Bug 3).
 - **Cron template shipped no locking guidance.** The example cron in
-  `deploy/templates/llm-reviewer.cron` was three bare invocations
+  `deploy/templates/bubo.cron` was three bare invocations
   with no `flock` — operators repeatedly invented their own locking,
   and a single shared `poller.lock` (vs. separate locks per role)
   caused the `*/5` health probe to block the `*/15` poll at the `:45`
@@ -139,7 +190,7 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 ## [0.3.0] - 2026-06-01
 
 ### Added
-- **`mcp-llm-reviewer` server.** New MCP server with two interfaces
+- **`bubo-mcp` server.** New MCP server with two interfaces
   exposed to any MCP-capable client (Codex, Claude Desktop, Cline).
   *Metrics interface* (read-only against SQLite): `health`,
   `list_recent_reviews`, `get_review`, `get_findings`,
@@ -147,7 +198,7 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   sums over a configurable window). *Review interface*: `review_change`
   triggers a one-shot review by URL or
   `(provider={gitlab,github,auto}, project, number)`, blocks until the
-  underlying `code-review-codex` subprocess finishes, and returns the
+  underlying `bubo-codex` subprocess finishes, and returns the
   parsed findings JSON alongside the raw transcript. MCP-triggered
   reviews intentionally do not write to `reviewed_mrs` — metrics reflect
   only poller-driven reviews. Two transports selectable via the new
@@ -158,7 +209,7 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   with constant-time bearer compare; the server does not terminate TLS
   (front with nginx/caddy or bind only to localhost). Backed by the
   official `mcp` Python SDK (FastMCP). New console script +
-  `bin/mcp-llm-reviewer` launcher; new readers in `db.py`
+  `bin/bubo-mcp` launcher; new readers in `db.py`
   (`list_recent_reviews`, `get_review_row`, `findings_for`,
   `outcomes_for`, `metrics_summary`).
 - **OpenSSF Scorecard hardening pass.** Pinned every GitHub Action by full
@@ -212,7 +263,7 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   `min_confidence` to express policies like "post only blocking +
   security findings at 0.9 confidence or above".
 - **GitHub pull-request support.** Set `[scm].provider = "github"` (or run
-  `gh-review-poller`). New GitHub REST client (`github.py`, Link-header
+  `bubo-gh-poller`). New GitHub REST client (`github.py`, Link-header
   pagination + Bearer auth + retry), GitHub provider (`scm/github.py`:
   `gh repo clone` + `refs/pull/*/head` checkout, `line`+`side` comment
   anchors, posting via a GitHub MCP server with REST fallback, REST-based
@@ -226,10 +277,10 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   `${VAR:-default}` (optional fallback). Use `$$` for a literal `$`.
   Pairs with systemd `LoadCredential=` so tokens stay out of on-disk
   config.
-- **`mr-review-poller --health` flag.** Reads the most recent
+- **`bubo-poller --health` flag.** Reads the most recent
   `reviewed_mrs` row; exits `0` healthy, `1` stale (older than 3×
   `timeout_seconds`), `2` config error.
-- **systemd + cron deploy templates.** `deploy/templates/llm-reviewer.{cron,service,timer}`
+- **systemd + cron deploy templates.** `deploy/templates/bubo.{cron,service,timer}`
   with hardening defaults (`NoNewPrivileges=true`, `ProtectSystem=strict`,
   credential-based secret loading).
 - **Cooperative SIGTERM/SIGINT shutdown.** The poll loop checks the
@@ -243,7 +294,7 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   failures silently — emits one `otel_init_failed` JSON line on stderr
   and leaves itself retryable.
 - **`[poller].state_dir` is now honored.** `paths.py` reads
-  `LLM_CODE_REVIEW_BASE_DIR`, so runtime state can live on a different
+  `BUBO_BASE_DIR`, so runtime state can live on a different
   volume from the install root.
 - **Detailed `config/env.example.toml`** — every section and key has an
   inline comment (purpose, safe default, footguns).
@@ -254,7 +305,7 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   `tests/integration/test_gitlab_live.py` and
   `tests/integration/test_github_live.py`, read-only, deselected from the
   default run (`-m 'not integration'`) and self-skipping without
-  `LLM_REVIEWER_IT_*` credentials. `.github/workflows/integration.yml` runs
+  `BUBO_IT_*` credentials. `.github/workflows/integration.yml` runs
   both nightly/on-demand when the matching `IT_GITLAB_TOKEN` /
   `IT_GITHUB_TOKEN` secret is set. Regression guard for the API-shape class
   of bug (GitLab `classify_discussion_outcome`, GitHub PR/review-comment
@@ -294,18 +345,18 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 - **README** restructured to a linear onboarding flow and prerequisites
   filled in (`glab`, GitLab MCP server, Superpowers + `code-reviewer`
   skill, bot user, LLM key).
-- **Docstrings** added to every module under `src/llm_reviewer/`.
+- **Docstrings** added to every module under `src/bubo/`.
 
 ### Removed
 - **`bin/code-review-claude`** — orphaned wrapper, zero references.
 - **`manual_review_dry_run` legacy alias** and the speculative
   `o1`/`o3`/`o4`/`qwen` provider mappings — pre-emptive flexibility for a
   project with no prior release.
-- **Dead `LLM_CODE_REVIEW_HOME` export** — no consumer.
+- **Dead `BUBO_HOME` export** — no consumer.
 
 ### Fixed
-- **`gh-review-poller` provider override now takes effect.**
-  `load_review_config` reads the `LLM_REVIEWER_PROVIDER` env var and
+- **`bubo-gh-poller` provider override now takes effect.**
+  `load_review_config` reads the `BUBO_PROVIDER` env var and
   overrides `[scm].provider` from the on-disk config, so the GitHub entry
   point actually forces `provider = "github"` instead of silently falling
   back to whatever `env.toml` declares. Regression test added.

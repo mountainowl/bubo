@@ -4,7 +4,7 @@
 # GitHub provider posts inline PR review comments through this server.
 set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-ROOT="${LLM_CODE_REVIEW_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
+ROOT="${BUBO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
 if command -v github-mcp-server >/dev/null 2>&1; then
     MCP_BIN="$(command -v github-mcp-server)"
 elif command -v mcp-github >/dev/null 2>&1; then

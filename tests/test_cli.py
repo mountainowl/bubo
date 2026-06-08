@@ -1,4 +1,4 @@
-"""Tests for the ``llm-reviewer`` CLI introduced in #22.
+"""Tests for the ``bubo`` CLI introduced in #22.
 
 Covers:
 
@@ -10,7 +10,7 @@ Covers:
   on re-run.
 * ``cmd_doctor`` returns 0 on a successful install and non-zero on
   missing env.toml / missing DB / missing Codex profile.
-* ``_asset`` resolves both via packaged ``llm_reviewer._assets`` (when
+* ``_asset`` resolves both via packaged ``bubo._assets`` (when
   installed as a wheel) and via the editable-install fallback (this
   test suite hits the fallback path because ``uv sync --dev`` is
   editable).
@@ -23,13 +23,13 @@ from pathlib import Path
 
 import pytest
 
-from llm_reviewer import cli, paths
+from bubo import cli, paths
 
 
 @pytest.fixture
 def isolated_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Re-target paths so cli/init_db writes under tmp_path, not $HOME."""
-    monkeypatch.setenv("LLM_CODE_REVIEW_ROOT", str(tmp_path))
+    monkeypatch.setenv("BUBO_ROOT", str(tmp_path))
     monkeypatch.setattr(paths, "ROOT", tmp_path)
     state = tmp_path / "var"
     monkeypatch.setattr(paths, "CONFIG", tmp_path / "config" / "env.toml")
@@ -156,14 +156,14 @@ def test_cmd_init_renders_deploy_templates_with_root_substituted(
 
     cli.cmd_init(args)
 
-    for name in ("llm-reviewer.cron", "llm-reviewer.service", "llm-reviewer.timer"):
+    for name in ("bubo.cron", "bubo.service", "bubo.timer"):
         rendered = (isolated_root / "deploy" / "templates" / name).read_text()
         assert "{{ROOT}}" not in rendered, f"{name} kept unrendered placeholder"
 
     # cron + service reference ROOT (paths to bin/log dirs); timer
     # references only the systemd unit name and has no ROOT to render.
-    cron = (isolated_root / "deploy" / "templates" / "llm-reviewer.cron").read_text()
-    service = (isolated_root / "deploy" / "templates" / "llm-reviewer.service").read_text()
+    cron = (isolated_root / "deploy" / "templates" / "bubo.cron").read_text()
+    service = (isolated_root / "deploy" / "templates" / "bubo.service").read_text()
     assert str(isolated_root) in cron
     assert str(isolated_root) in service
 
@@ -221,7 +221,7 @@ def test_cmd_init_agent_config_writes_codex_with_profile(
     codex_config = (fake_home / ".codex" / "config.toml").read_text()
     # The load-bearing block — the v0.5.0 incident's root cause was this
     # being absent.
-    assert "[profiles.llm-reviewer]" in codex_config
+    assert "[profiles.bubo]" in codex_config
     # ROOT placeholder substituted with the actual root.
     assert "{{ROOT}}" not in codex_config
     assert str(isolated_root) in codex_config
@@ -268,7 +268,7 @@ def test_cmd_doctor_flags_missing_codex_profile_block(
 ) -> None:
     fake_home = tmp_path / "home"
     (fake_home / ".codex").mkdir(parents=True)
-    # Codex config exists but DOES NOT contain [profiles.llm-reviewer]
+    # Codex config exists but DOES NOT contain [profiles.bubo]
     # — the exact shape that caused the v0.5.0 incident.
     (fake_home / ".codex" / "config.toml").write_text("[history]\npersistence = 'none'\n")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
@@ -289,11 +289,11 @@ def test_cmd_doctor_flags_missing_codex_profile_block(
 
 def test_asset_resolves_packaged_template() -> None:
     # In the editable install the fallback resolves to deploy/templates/codex-config.toml.
-    # In a wheel install it resolves to llm_reviewer/_assets/codex-config.toml.
-    # Either way the content must contain the [profiles.llm-reviewer] block
+    # In a wheel install it resolves to bubo/_assets/codex-config.toml.
+    # Either way the content must contain the [profiles.bubo] block
     # — the bug that motivated #20 was this block being absent.
     src = cli._asset("codex-config.toml")
-    assert "[profiles.llm-reviewer]" in src.read_text()
+    assert "[profiles.bubo]" in src.read_text()
 
 
 def test_asset_fallback_finds_prompts_tree() -> None:
@@ -326,7 +326,7 @@ def test_cmd_init_db_has_review_findings_table(isolated_root: Path) -> None:
     finally:
         conn.close()
 
-    # init_db is the same call mr-review-poller --init-db makes; expect
+    # init_db is the same call bubo-poller --init-db makes; expect
     # the canonical reviewed_mrs / review_findings tables to exist.
     assert "reviewed_mrs" in names
     assert "review_findings" in names

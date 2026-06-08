@@ -17,7 +17,7 @@ credentials live in that one TOML file.
     <tr>
       <td><code>provider</code></td>
       <td><code>gitlab</code></td>
-      <td>Source-control backend: <code>gitlab</code> or <code>github</code>. Selects which provider the poller drives. <code>gh-review-poller</code> forces <code>github</code>.</td>
+      <td>Source-control backend: <code>gitlab</code> or <code>github</code>. Selects which provider the poller drives. <code>bubo-gh-poller</code> forces <code>github</code>.</td>
     </tr>
     <tr><th colspan="3"><code>[gitlab]</code></th></tr>
     <tr>
@@ -32,7 +32,7 @@ credentials live in that one TOML file.
     </tr>
     <tr>
       <td><code>bot_username</code></td>
-      <td><code>llm-reviewer</code></td>
+      <td><code>bubo</code></td>
       <td>Lets outcome sync separate bot comments from developer replies.</td>
     </tr>
     <tr>
@@ -53,7 +53,7 @@ credentials live in that one TOML file.
     </tr>
     <tr>
       <td><code>bot_username</code></td>
-      <td><code>llm-reviewer</code></td>
+      <td><code>bubo</code></td>
       <td>Lets outcome sync separate bot comments from developer replies.</td>
     </tr>
     <tr>
@@ -132,11 +132,11 @@ credentials live in that one TOML file.
     <tr>
       <td><code>dry_run</code></td>
       <td><code>true</code></td>
-      <td>Dry-run default for the manual <code>code-review-codex</code> wrapper, separate from <code>[review].dry_run</code> which controls poller posting.</td>
+      <td>Dry-run default for the manual <code>bubo-codex</code> wrapper, separate from <code>[review].dry_run</code> which controls poller posting.</td>
     </tr>
     <tr>
       <td><code>codex_profile</code></td>
-      <td><code>llm-reviewer</code></td>
+      <td><code>bubo</code></td>
       <td>Codex profile used by the Codex wrapper.</td>
     </tr>
     <tr>
@@ -162,7 +162,7 @@ credentials live in that one TOML file.
     </tr>
     <tr>
       <td><code>service_name</code></td>
-      <td><code>llm-reviewer</code></td>
+      <td><code>bubo</code></td>
       <td>Service name shown in the OTel backend.</td>
     </tr>
     <tr>

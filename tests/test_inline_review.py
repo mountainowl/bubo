@@ -5,15 +5,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from llm_reviewer import codex_runner, paths, poller
-from llm_reviewer.review_config import ReviewConfig
+from bubo import codex_runner, paths, poller
+from bubo.review_config import ReviewConfig
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class InlineReviewTests(unittest.TestCase):
     def test_filter_findings_by_policy_drops_low_confidence(self):
-        from llm_reviewer.findings import filter_findings_by_policy
+        from bubo.findings import filter_findings_by_policy
 
         findings = [
             {"severity": "blocking", "confidence": 0.95, "title": "high"},
@@ -33,7 +33,7 @@ class InlineReviewTests(unittest.TestCase):
         self.assertEqual("confidence_below_threshold", dropped_reasons["garbled"])
 
     def test_filter_findings_by_policy_applies_allowed_kinds_whitelist(self):
-        from llm_reviewer.findings import filter_findings_by_policy
+        from bubo.findings import filter_findings_by_policy
 
         findings = [
             {"severity": "blocking", "category": "correctness", "confidence": 0.9, "title": "a"},
@@ -54,7 +54,7 @@ class InlineReviewTests(unittest.TestCase):
         self.assertEqual("kind_not_allowed", dropped[0][1])
 
     def test_filter_findings_by_policy_empty_allowed_kinds_is_no_filter(self):
-        from llm_reviewer.findings import filter_findings_by_policy
+        from bubo.findings import filter_findings_by_policy
 
         findings = [
             {"severity": "blocking", "confidence": 0.9, "title": "a"},
@@ -67,7 +67,7 @@ class InlineReviewTests(unittest.TestCase):
         self.assertEqual([], dropped)
 
     def test_review_config_parses_min_confidence_and_allowed_kinds(self):
-        from llm_reviewer.review_config import review_config_from_dict
+        from bubo.review_config import review_config_from_dict
 
         cfg = review_config_from_dict(
             {
@@ -83,7 +83,7 @@ class InlineReviewTests(unittest.TestCase):
         self.assertEqual(["blocking", "security"], cfg.allowed_kinds)
 
     def test_review_config_default_min_confidence_is_eighty_five_percent(self):
-        from llm_reviewer.review_config import DEFAULT_MIN_CONFIDENCE, review_config_from_dict
+        from bubo.review_config import DEFAULT_MIN_CONFIDENCE, review_config_from_dict
 
         cfg = review_config_from_dict({})
 
@@ -121,7 +121,7 @@ class InlineReviewTests(unittest.TestCase):
                 return ("", None)
 
         fake = FakeProcess()
-        with patch("llm_reviewer.poller.subprocess.Popen", return_value=fake) as mocked:
+        with patch("bubo.poller.subprocess.Popen", return_value=fake) as mocked:
             poller.run(["cmd"])
 
         self.assertIs(mocked.call_args.kwargs["stdin"], subprocess.DEVNULL)
@@ -133,7 +133,7 @@ class InlineReviewTests(unittest.TestCase):
         # assert the codex_runner stays decoupled from real subprocess
         # execution without depending on the underlying Popen call shape.
         completed = subprocess.CompletedProcess(["codex"], 0, "[]", None)
-        with patch("llm_reviewer.codex_runner.run_bounded", return_value=completed) as mocked:
+        with patch("bubo.codex_runner.run_bounded", return_value=completed) as mocked:
             with patch.object(codex_runner, "PROMPT_FILE", ROOT / "prompts" / "00-meta.md"):
                 with tempfile.TemporaryDirectory() as tmp:
                     with patch.object(codex_runner, "LOG_DIR", Path(tmp)):
@@ -212,7 +212,7 @@ class InlineReviewTests(unittest.TestCase):
         self.assertIn("--ask-for-approval", cmd)
         self.assertIn("never", cmd)
         self.assertIn("--profile", cmd)
-        self.assertIn("llm-reviewer", cmd)
+        self.assertIn("bubo", cmd)
         self.assertNotIn("--output-schema", cmd)
         self.assertIn("--skip-git-repo-check", cmd)
         self.assertNotIn("--output-last-message", cmd)
@@ -303,7 +303,7 @@ No findings for optional categories: []
         env = poller.reviewer_env(source, Path("/tmp/prompt.md"), 8)
 
         self.assertEqual("/usr/bin", env["PATH"])
-        self.assertEqual("/tmp/prompt.md", env["LLM_CODE_REVIEW_PROMPT"])
+        self.assertEqual("/tmp/prompt.md", env["BUBO_PROMPT"])
         self.assertEqual("8", env["LLM_REVIEW_MAX_FINDINGS"])
         self.assertNotIn("GITLAB_TOKEN", env)
         self.assertNotIn("OPENAI_API_KEY", env)
@@ -335,12 +335,12 @@ No findings for optional categories: []
                 return None
 
         fake = FakeProcess()
-        # The MCP client now lives in `llm_reviewer.mcp`. Patch its
+        # The MCP client now lives in `bubo.mcp`. Patch its
         # subprocess import and import MCP_TIMEOUT_SECONDS from the same
         # module rather than from poller.
-        from llm_reviewer import mcp as mcp_module
+        from bubo import mcp as mcp_module
 
-        with patch("llm_reviewer.mcp.subprocess.Popen", return_value=fake):
+        with patch("bubo.mcp.subprocess.Popen", return_value=fake):
             result = poller.mcp_call_tool("tool", {"a": 1})
 
         self.assertEqual({"ok": True}, result)
@@ -360,7 +360,7 @@ No findings for optional categories: []
         fake_log = FakeLog()
         with tempfile.TemporaryDirectory() as tmp, patch.object(paths, "LOGS", Path(tmp)):
             with patch("pathlib.Path.open", return_value=fake_log):
-                with patch("llm_reviewer.poller.subprocess.Popen", return_value=FakeProc()):
+                with patch("bubo.poller.subprocess.Popen", return_value=FakeProc()):
                     pid = poller.fork_worker(Path("job.json"))
 
         self.assertEqual(99, pid)
@@ -384,9 +384,9 @@ No findings for optional categories: []
                 return self.returncode
 
         fake = FakeProcess()
-        with patch("llm_reviewer.poller.subprocess.Popen", return_value=fake):
-            with patch("llm_reviewer.poller.os.killpg") as killpg:
-                with patch("llm_reviewer.poller.os.getpgid", return_value=456):
+        with patch("bubo.poller.subprocess.Popen", return_value=fake):
+            with patch("bubo.poller.os.killpg") as killpg:
+                with patch("bubo.poller.os.getpgid", return_value=456):
                     with self.assertRaises(subprocess.TimeoutExpired):
                         poller.run(["cmd"], timeout=1)
 
@@ -474,7 +474,7 @@ max_findings_per_merge_request = 9
             "diff": "@@ -10,2 +10,3 @@\n old\n+new one\n same\n+new two\n",
         }
 
-        from llm_reviewer.findings import changed_lines_from_diffs
+        from bubo.findings import changed_lines_from_diffs
 
         changed = changed_lines_from_diffs([diff])
 
@@ -483,7 +483,7 @@ max_findings_per_merge_request = 9
         self.assertNotIn(10, changed["src/A.java"]["new_lines"])
 
     def test_build_position_requires_changed_line(self):
-        from llm_reviewer.findings import build_position
+        from bubo.findings import build_position
 
         mr = {"diff_refs": {"base_sha": "b", "start_sha": "s", "head_sha": "h"}}
         changed = {
@@ -510,7 +510,7 @@ max_findings_per_merge_request = 9
         self.assertEqual(64, len(one))
 
     def test_mcp_thread_args_url_encode_project_and_string_iid(self):
-        from llm_reviewer import mcp
+        from bubo import mcp
 
         args = mcp.thread_args(
             "example/enabled-repo",
@@ -525,9 +525,9 @@ max_findings_per_merge_request = 9
         self.assertEqual(12, args["position"]["new_line"])
 
     def test_gitlab_provider_post_uses_mcp_discussion_id(self):
-        from llm_reviewer.scm.gitlab import GitLabProvider
+        from bubo.scm.gitlab import GitLabProvider
 
-        with patch("llm_reviewer.mcp.call_tool", return_value={"id": "disc-1"}):
+        with patch("bubo.mcp.call_tool", return_value={"id": "disc-1"}):
             discussion_id = GitLabProvider().post_inline_comment(
                 ReviewConfig(), "token", "group/repo", 1, "body", {"position_type": "text"}
             )
@@ -535,13 +535,13 @@ max_findings_per_merge_request = 9
         self.assertEqual("disc-1", discussion_id)
 
     def test_gitlab_provider_post_falls_back_to_existing_body_match(self):
-        from llm_reviewer.scm.gitlab import GitLabProvider
+        from bubo.scm.gitlab import GitLabProvider
 
-        with patch("llm_reviewer.mcp.call_tool", return_value={}):
+        with patch("bubo.mcp.call_tool", return_value={}):
             with patch(
-                "llm_reviewer.gitlab.find_discussion_by_body", return_value="disc-existing"
+                "bubo.gitlab.find_discussion_by_body", return_value="disc-existing"
             ) as finder:
-                with patch("llm_reviewer.gitlab.create_merge_request_discussion") as creator:
+                with patch("bubo.gitlab.create_merge_request_discussion") as creator:
                     discussion_id = GitLabProvider().post_inline_comment(
                         ReviewConfig(), "token", "group/repo", 1, "body", {"position_type": "text"}
                     )
@@ -551,12 +551,12 @@ max_findings_per_merge_request = 9
         creator.assert_not_called()
 
     def test_gitlab_provider_post_falls_back_to_rest_create(self):
-        from llm_reviewer.scm.gitlab import GitLabProvider
+        from bubo.scm.gitlab import GitLabProvider
 
-        with patch("llm_reviewer.mcp.call_tool", return_value={}):
-            with patch("llm_reviewer.gitlab.find_discussion_by_body", return_value=""):
+        with patch("bubo.mcp.call_tool", return_value={}):
+            with patch("bubo.gitlab.find_discussion_by_body", return_value=""):
                 with patch(
-                    "llm_reviewer.gitlab.create_merge_request_discussion",
+                    "bubo.gitlab.create_merge_request_discussion",
                     return_value={"id": "disc-rest"},
                 ):
                     discussion_id = GitLabProvider().post_inline_comment(

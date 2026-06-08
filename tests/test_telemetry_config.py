@@ -3,8 +3,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from llm_reviewer import poller
-from llm_reviewer.telemetry.config import TelemetryConfig, telemetry_config_from_dict
+from bubo import poller
+from bubo.telemetry.config import TelemetryConfig, telemetry_config_from_dict
 
 
 def test_telemetry_defaults_to_disabled() -> None:
@@ -12,7 +12,7 @@ def test_telemetry_defaults_to_disabled() -> None:
 
     assert cfg == TelemetryConfig()
     assert cfg.enabled is False
-    assert cfg.service_name == "llm-reviewer"
+    assert cfg.service_name == "bubo"
     assert not hasattr(cfg, "otlp_protocol")
 
 
