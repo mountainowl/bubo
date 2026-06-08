@@ -10,6 +10,8 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-08
+
 ### Changed
 - **BREAKING (config): the LLM API-key env var is now operator-named, not
   inferred from the model.** Bubo is "bring your own LLM," but the
