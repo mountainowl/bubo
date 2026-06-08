@@ -21,7 +21,7 @@ mcp-llm-reviewer = "llm_reviewer.mcp_server:main"
 
 [dependency-groups]
 dev = [
-  "commitizen>=4.16.2",
+  "commitizen>=4.16.3",
   "hypothesis>=6.115",
   "mypy>=1.18.2",
   "pre-commit>=4.5.0",
