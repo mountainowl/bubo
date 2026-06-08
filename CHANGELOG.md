@@ -10,6 +10,8 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-08
+
 ### Changed
 - **BREAKING: renamed the project to `bubo`.** The package, CLI commands,
   Codex profile, environment-variable namespace, install path, and all
