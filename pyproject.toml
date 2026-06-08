@@ -26,7 +26,7 @@ dev = [
   "mypy>=1.18.2",
   "pre-commit>=4.5.0",
   "pytest>=9.0.1",
-  "ruff>=0.14.6",
+  "ruff>=0.15.16",
 ]
 
 [tool.uv]
