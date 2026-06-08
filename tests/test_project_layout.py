@@ -73,7 +73,7 @@ def test_launch_readiness_files_exist() -> None:
     assert "bubo init" in readme
     assert "bubo doctor" in readme
     assert "actions/workflows/ci.yml/badge.svg" in readme
-    assert "api.scorecard.dev/projects/github.com/mountainowl/ai-code-review/badge" in readme
+    assert "api.scorecard.dev/projects/github.com/mountainowl/bubo/badge" in readme
     assert "Run it as a poller beside your" in readme
 
 

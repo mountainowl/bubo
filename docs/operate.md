@@ -6,7 +6,7 @@ Recommended single-host install:
 
 ```sh
 # 1. Install the Python package + entry points into an isolated venv.
-uv tool install git+https://github.com/mountainowl/ai-code-review@v0.6.0
+uv tool install git+https://github.com/mountainowl/bubo@v0.6.0
 
 # 2. Place the per-host workspace, Codex profile, Claude settings,
 #    rendered cron/systemd templates, and SQLite schema.
@@ -27,7 +27,7 @@ refresh-overwrite for the packaged prompts/skills/plugins. Use
 
 ```sh
 ssh user@host '
-  uv tool install git+https://github.com/mountainowl/ai-code-review@v0.6.0 &&
+  uv tool install git+https://github.com/mountainowl/bubo@v0.6.0 &&
   bubo init &&
   bubo doctor
 '
@@ -41,7 +41,7 @@ v0.6.x with a warning, but will be removed in v0.7.0.
 ### Upgrades
 
 ```sh
-uv tool install --reinstall git+https://github.com/mountainowl/ai-code-review@v0.6.1
+uv tool install --reinstall git+https://github.com/mountainowl/bubo@v0.6.1
 bubo init                         # idempotent — refreshes packaged assets
 bubo doctor                       # confirm
 ```
@@ -73,7 +73,7 @@ both achieve the same cadence (poll every 15 min, sync outcomes
 hourly, health probe every 5 min) and both ship with **separate
 `flock` files per role** (poller / outcome-sync / health) to prevent
 the cross-role lock collision that broke a production deploy in 0.5.0
-(see [CHANGELOG.md](https://github.com/mountainowl/ai-code-review/blob/main/CHANGELOG.md) `[0.5.1]`).
+(see [CHANGELOG.md](https://github.com/mountainowl/bubo/blob/main/CHANGELOG.md) `[0.5.1]`).
 
 ### Cron
 
@@ -186,7 +186,7 @@ Migrate at your convenience before v0.7.0:
 
 ```sh
 # On the host that has a working v0.5.x install:
-uv tool install git+https://github.com/mountainowl/ai-code-review@v0.6.0
+uv tool install git+https://github.com/mountainowl/bubo@v0.6.0
 bubo init                                # idempotent — keeps env.toml
 bubo doctor                              # confirm
 

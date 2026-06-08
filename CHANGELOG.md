@@ -10,23 +10,42 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-06-08
+
+### Changed
+- **Repository renamed** `mountainowl/ai-code-review` →
+  [`mountainowl/bubo`](https://github.com/mountainowl/bubo) for full
+  brand consistency. GitHub redirects the old paths, so existing clones,
+  links, and `uv tool install git+https://github.com/mountainowl/ai-code-review@…`
+  commands keep working — but update to the `…/bubo` URL when convenient.
+  The docs site moved to `https://mountainowl.github.io/bubo/`.
+
+### Fixed
+- **Release artifacts now actually publish.** `v0.7.0` and `v0.7.1` both
+  cut a GitHub Release that was missing the wheel, sdist, and deploy
+  bundle. Root cause, finally nailed from the actual run log: cosign v3
+  (installed by `cosign-installer`) writes a single Sigstore `.bundle`
+  per artifact and **ignores** the legacy `--output-signature` /
+  `--output-certificate` flags (`"deprecated when using
+  --new-bundle-format and will be ignored"`). The publish step still
+  globbed for `dist/*.sig`, matched nothing, and `fail_on_unmatched_files:
+  true` aborted before the artifacts uploaded. Fixed by signing with
+  `--bundle` only and publishing `dist/*.bundle`. Verify an artifact
+  with `cosign verify-blob --bundle <artifact>.bundle …`.
+
 ## [0.7.1] - 2026-06-08
 
 ### Fixed
-- **Release artifacts now publish.** The `v0.7.0` GitHub release was cut
-  but shipped **without** the wheel, sdist, deploy bundle, or SBOM: the
-  `release.yml` signing step failed because cosign v2.5+/v3 requires a
-  `--bundle` output on `sign-blob` (it errored with `create bundle file:
-  open : no such file or directory`). Fixed by adding `--bundle`
-  alongside the existing `--output-signature`/`--output-certificate`
-  and publishing the `.bundle` files. `v0.7.1` is `v0.7.0`'s code
-  (the Bubo rename) with a working signed-release pipeline — re-cut
-  rather than overwriting the immutable `v0.7.0` tag.
 - **GitHub Pages docs site deploys.** The `deploy-docs.yml` workflow
   pinned `actions/deploy-pages` to a nonexistent commit SHA (and
   `actions/upload-pages-artifact` to a mislabeled one), so the site
   404'd. Repinned both to valid `v5.0.0` SHAs verified against the
   GitHub API.
+- **Release signing (first attempt).** Added a cosign `--bundle` output
+  to `sign-blob` to clear the `v0.7.0` `create bundle file: open :`
+  error. This unblocked *signing* but the release still published
+  without artifacts — the publish glob expected `.sig`/`.pem` files
+  that cosign v3 no longer writes. Fully resolved in **[0.7.2]**.
 
 ### Added
 - **References & further reading page** on the docs site — curated,

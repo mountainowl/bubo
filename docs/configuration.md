@@ -1,6 +1,6 @@
 # Configuration reference
 
-Public defaults live in [`config/env.example.toml`](https://github.com/mountainowl/ai-code-review/blob/main/config/env.example.toml).
+Public defaults live in [`config/env.example.toml`](https://github.com/mountainowl/bubo/blob/main/config/env.example.toml).
 Copy it to ignored `config/env.toml` before running. Runtime config and
 credentials live in that one TOML file.
 

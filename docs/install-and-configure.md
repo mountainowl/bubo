@@ -18,7 +18,7 @@ Single command, isolated venv managed by uv, entry points placed on
 
 ```sh
 # Install the latest tagged release.
-uv tool install git+https://github.com/mountainowl/ai-code-review@v0.6.0
+uv tool install git+https://github.com/mountainowl/bubo@v0.6.0
 
 # Place ~/.codex/config.toml, ~/.claude/settings.json, config/env.toml seed,
 # the var/ workspace, prompts, skills, plugins, and initialize the SQLite DB.
@@ -40,7 +40,7 @@ bubo doctor
 To upgrade, re-run `uv tool install` against the new tag:
 
 ```sh
-uv tool install --reinstall git+https://github.com/mountainowl/ai-code-review@v0.6.1
+uv tool install --reinstall git+https://github.com/mountainowl/bubo@v0.6.1
 bubo init     # idempotent — re-applies packaged template updates
 bubo doctor
 ```
@@ -50,7 +50,7 @@ bubo doctor
 For hosts that don't have uv but already use pipx:
 
 ```sh
-pipx install git+https://github.com/mountainowl/ai-code-review@v0.6.0
+pipx install git+https://github.com/mountainowl/bubo@v0.6.0
 bubo init
 ```
 
@@ -60,7 +60,7 @@ Still works in v0.6.x but prints a deprecation warning on every run. Will
 be removed in v0.7.0:
 
 ```sh
-git clone https://github.com/mountainowl/ai-code-review.git
+git clone https://github.com/mountainowl/bubo.git
 cd ai-code-review
 git checkout v0.6.0
 ./scripts/install-package.sh --install-agent-config

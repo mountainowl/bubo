@@ -11,7 +11,7 @@ it has something worth saying.
 
 ![Bubo hero](images/bubo-hero.png)
 
-[Source on GitHub :material-github:](https://github.com/mountainowl/ai-code-review){ .md-button .md-button--primary }
+[Source on GitHub :material-github:](https://github.com/mountainowl/bubo){ .md-button .md-button--primary }
 [60-second quickstart :material-rocket-launch:](install-and-configure.md){ .md-button }
 
 ---
@@ -81,7 +81,7 @@ review logic lives in the configured CLI skill.
 ## Install
 
 ```sh
-uv tool install git+https://github.com/mountainowl/ai-code-review@v0.6.0
+uv tool install git+https://github.com/mountainowl/bubo@v0.6.0
 bubo init              # idempotent; --dry-run to preview
 bubo doctor            # verify before first poll
 bubo-poller               # one poll cycle; exits at the end
@@ -121,4 +121,4 @@ Full walkthrough in **[Install and configure](install-and-configure.md)**.
 - Releases are cosign-signed via Sigstore keyless OIDC; SBOM (SPDX
   JSON) attached to every release.
 - Report vulnerabilities per
-  [SECURITY.md](https://github.com/mountainowl/ai-code-review/blob/main/SECURITY.md).
+  [SECURITY.md](https://github.com/mountainowl/bubo/blob/main/SECURITY.md).

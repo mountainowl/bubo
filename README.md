@@ -4,8 +4,8 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-3776ab?logo=python&logoColor=white)](pyproject.toml)
 [![Managed with uv](https://img.shields.io/badge/managed%20with-uv-2f3542)](pyproject.toml)
-[![CI](https://github.com/mountainowl/ai-code-review/actions/workflows/ci.yml/badge.svg)](https://github.com/mountainowl/ai-code-review/actions/workflows/ci.yml)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/mountainowl/ai-code-review/badge)](https://scorecard.dev/viewer/?uri=github.com/mountainowl/ai-code-review)
+[![CI](https://github.com/mountainowl/bubo/actions/workflows/ci.yml/badge.svg)](https://github.com/mountainowl/bubo/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/mountainowl/bubo/badge)](https://scorecard.dev/viewer/?uri=github.com/mountainowl/bubo)
 [![OpenTelemetry](https://img.shields.io/badge/metrics-OpenTelemetry-4f62ad)](docs/telemetry.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827)](LICENSE)
 
@@ -62,7 +62,7 @@ Codex/Claude agent — see [prerequisites](docs/prerequisites.md) for the
 copy-paste blocks), then:
 
 ```sh
-uv tool install git+https://github.com/mountainowl/ai-code-review@v0.6.0
+uv tool install git+https://github.com/mountainowl/bubo@v0.6.0
 bubo init                # idempotent; --dry-run to preview
 
 # Edit ~/.local/share/bubo/config/env.toml:

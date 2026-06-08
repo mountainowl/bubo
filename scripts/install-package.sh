@@ -6,7 +6,7 @@ set -eu
 # ---------------------------------------------------------------------------
 # Use the new Python install path instead:
 #
-#     uv tool install git+https://github.com/mountainowl/ai-code-review@<tag>
+#     uv tool install git+https://github.com/mountainowl/bubo@<tag>
 #     bubo init --install-agent-config
 #     bubo doctor
 #
@@ -22,7 +22,7 @@ cat >&2 <<'WARN'
 WARNING: scripts/install-package.sh is deprecated as of v0.6.0 (issue #22)
          and will be removed in v0.7.0. Migrate to:
 
-           uv tool install git+https://github.com/mountainowl/ai-code-review@<tag>
+           uv tool install git+https://github.com/mountainowl/bubo@<tag>
            bubo init --install-agent-config
 
          See docs/install-and-configure.md for the full new flow.

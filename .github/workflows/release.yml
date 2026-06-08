@@ -80,19 +80,22 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Sign release artifacts with cosign
-        # Keyless signing via Sigstore + GitHub OIDC. Produces .sig + .pem
-        # AND a Sigstore .bundle for each artifact (wheel, sdist, deploy
-        # bundle, SBOM). cosign v2.5+/v3 requires a --bundle output on
-        # sign-blob — omitting it errors with "create bundle file: open :
-        # no such file or directory" (an empty bundle path). The .sig/.pem
-        # are kept so the documented `cosign verify-blob --signature
-        # --certificate` flow still works; the .bundle is the modern
-        # single-file alternative for `cosign verify-blob --bundle`.
+        # Keyless signing via Sigstore + GitHub OIDC. Produces a single
+        # Sigstore .bundle per artifact (wheel, sdist, deploy bundle,
+        # SBOM) — the bundle carries both the signature and the signing
+        # certificate. cosign v3 (installed by cosign-installer) writes
+        # the new bundle format and explicitly IGNORES the legacy
+        # --output-signature / --output-certificate flags ("deprecated
+        # when using --new-bundle-format and will be ignored"), so we
+        # don't pass them — doing so produced no .sig/.pem and broke the
+        # publish step's glob. Verify with:
+        #   cosign verify-blob --bundle <artifact>.bundle \
+        #     --certificate-identity-regexp '…' \
+        #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+        #     <artifact>
         run: |
           for artifact in dist/*.whl dist/*.tar.gz dist/bubo-sbom.spdx.json; do
             cosign sign-blob --yes \
-              --output-signature "${artifact}.sig" \
-              --output-certificate "${artifact}.pem" \
               --bundle "${artifact}.bundle" \
               "${artifact}"
           done
@@ -104,8 +107,6 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
             dist/bubo-sbom.spdx.json
-            dist/*.sig
-            dist/*.pem
             dist/*.bundle
           generate_release_notes: true
           fail_on_unmatched_files: true

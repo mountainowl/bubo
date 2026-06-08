@@ -1,7 +1,7 @@
 name: Deploy docs to Pages
 
 # Builds the MkDocs Material site under docs/ and publishes it to
-# https://mountainowl.github.io/ai-code-review/. The repo's homepage
+# https://mountainowl.github.io/bubo/. The repo's homepage
 # URL in About points at that origin.
 #
 # Triggers:

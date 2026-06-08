@@ -309,9 +309,9 @@ def test_seeded_db_row_count_matches_writer_path() -> None:
 
 def test_parse_github_pr_url_yields_owner_repo_and_number() -> None:
     provider, project, number = mcp_server._parse_change_url(
-        "https://github.com/mountainowl/ai-code-review/pull/42"
+        "https://github.com/mountainowl/bubo/pull/42"
     )
-    assert (provider, project, number) == ("github", "mountainowl/ai-code-review", 42)
+    assert (provider, project, number) == ("github", "mountainowl/bubo", 42)
 
 
 def test_parse_gitlab_mr_url_handles_nested_groups_and_selfhosted_host() -> None:

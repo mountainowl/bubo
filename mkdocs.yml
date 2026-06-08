@@ -1,5 +1,5 @@
 # MkDocs Material configuration for the GitHub Pages site at
-# https://mountainowl.github.io/ai-code-review/.
+# https://mountainowl.github.io/bubo/.
 #
 # The site is rendered from the existing docs/*.md files (no content
 # duplication). Each merge to main rebuilds the site via
@@ -14,11 +14,11 @@ site_description: >-
   Bubo — agentic AI code review for GitLab MRs and GitHub PRs, with the LLM
   of your choice. Posts only actionable findings as inline review threads —
   no chatbot noise, no praise, no summaries.
-site_url: https://mountainowl.github.io/ai-code-review/
+site_url: https://mountainowl.github.io/bubo/
 site_author: mountainowl
 
-repo_name: mountainowl/ai-code-review
-repo_url: https://github.com/mountainowl/ai-code-review
+repo_name: mountainowl/bubo
+repo_url: https://github.com/mountainowl/bubo
 edit_uri: edit/main/docs/
 
 # Source markdown lives in docs/; mkdocs reads it directly so this site
@@ -100,5 +100,5 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/mountainowl/ai-code-review
+      link: https://github.com/mountainowl/bubo
       name: Source on GitHub

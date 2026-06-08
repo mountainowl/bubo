@@ -20,7 +20,7 @@ Report privately via [GitHub Security Advisories][advisories] on this
 repository. If GitHub Advisories is unavailable to you, email
 **security@mountainowl.dev** instead.
 
-[advisories]: https://github.com/mountainowl/ai-code-review/security/advisories/new
+[advisories]: https://github.com/mountainowl/bubo/security/advisories/new
 
 Please include:
 
