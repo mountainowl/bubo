@@ -68,6 +68,7 @@ nav:
   - Operate: operate.md
   - Telemetry: telemetry.md
   - Examples: examples/README.md
+  - References: references.md
 
 markdown_extensions:
   - admonition                   # !!! note / !!! warning blocks
