@@ -81,15 +81,19 @@ jobs:
 
       - name: Sign release artifacts with cosign
         # Keyless signing via Sigstore + GitHub OIDC. Produces .sig + .pem
-        # for each artifact (wheel, sdist, deploy bundle, SBOM) so
-        # downstream consumers can verify provenance with `cosign
-        # verify-blob` and the repo's workflow identity. The glob pulls
-        # in *.tar.gz, which covers both the sdist and the deploy bundle.
+        # AND a Sigstore .bundle for each artifact (wheel, sdist, deploy
+        # bundle, SBOM). cosign v2.5+/v3 requires a --bundle output on
+        # sign-blob — omitting it errors with "create bundle file: open :
+        # no such file or directory" (an empty bundle path). The .sig/.pem
+        # are kept so the documented `cosign verify-blob --signature
+        # --certificate` flow still works; the .bundle is the modern
+        # single-file alternative for `cosign verify-blob --bundle`.
         run: |
           for artifact in dist/*.whl dist/*.tar.gz dist/bubo-sbom.spdx.json; do
             cosign sign-blob --yes \
               --output-signature "${artifact}.sig" \
               --output-certificate "${artifact}.pem" \
+              --bundle "${artifact}.bundle" \
               "${artifact}"
           done
 
@@ -102,5 +106,6 @@ jobs:
             dist/bubo-sbom.spdx.json
             dist/*.sig
             dist/*.pem
+            dist/*.bundle
           generate_release_notes: true
           fail_on_unmatched_files: true
