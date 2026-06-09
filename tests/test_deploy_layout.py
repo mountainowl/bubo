@@ -1,21 +1,8 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def test_package_deploy_scripts_exist_and_parse() -> None:
-    scripts = [
-        ROOT / "scripts" / "install-package.sh",
-        ROOT / "scripts" / "deploy-package.sh",
-    ]
-
-    for script in scripts:
-        assert script.is_file()
-        assert script.stat().st_mode & 0o111
-        subprocess.run(["sh", "-n", str(script)], check=True)
 
 
 def test_deployable_tree_contains_all_runtime_assets() -> None:
@@ -55,48 +42,6 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
     assert "bubo-mcp" in own_wrapper
 
 
-def test_deploy_archive_excludes_runtime_noise() -> None:
-    deploy = (ROOT / "scripts" / "deploy-package.sh").read_text()
-    install = (ROOT / "scripts" / "install-package.sh").read_text()
-    env_wrapper = (ROOT / "bin" / "env").read_text()
-
-    for pattern in [
-        ".venv",
-        ".git",
-        "config/env.toml",
-        "var/state",
-        "var/work",
-        "var/log",
-        "var/reports",
-        "__pycache__",
-    ]:
-        assert f"--exclude={pattern}" in deploy
-
-    assert 'rm -rf "$ROOT"' not in install
-    assert 'find "$ROOT" -mindepth 1 -maxdepth 1 -exec rm -rf {} +' in install
-    assert 'PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"' in install
-    assert 'PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"' in env_wrapper
-    assert "preserved_state" in install
-    assert "COPYFILE_DISABLE=1 tar" in deploy
-    assert "COPYFILE_DISABLE=1 tar" in install
-    # The orphaned ~/.codex/bubo.config.toml is no longer written —
-    # the profile lives inline in codex-config.toml under [profiles.bubo].
-    assert "bubo.config.toml" not in install
-    assert "skills/code-review/scripts" not in install
-    assert 'skills/code-review"' not in install
-
-
-def test_install_package_sh_prints_deprecation_warning() -> None:
-    install = (ROOT / "scripts" / "install-package.sh").read_text()
-    # Required by #22 Phase 3: operators reaching for the shell installer
-    # must be redirected to the `uv tool install` + `bubo init`
-    # path. The warning makes the deprecation discoverable without
-    # forcing a doc lookup.
-    assert "deprecated" in install.lower()
-    assert "uv tool install" in install
-    assert "bubo init" in install
-
-
 def test_cron_template_uses_separate_locks_per_role() -> None:
     cron = (ROOT / "deploy" / "templates" / "bubo.cron").read_text()
     # All three roles must use distinct flock files. A single shared lock
@@ -114,8 +59,8 @@ def test_codex_config_carries_bubo_profile() -> None:
     # "config profile bubo not found" and every review fails.
     assert "[profiles.bubo]" in config
     # Sanity-check the keys the wrapper depends on actually exist under
-    # that profile (loose check — full validity is exercised by the
-    # post-install smoke step in install-package.sh).
+    # that profile (loose check — full validity is exercised when Codex
+    # loads the profile at review time).
     for key in ("model", "approval_policy", "sandbox_mode"):
         assert key in config
     # The orphaned sibling file is gone.

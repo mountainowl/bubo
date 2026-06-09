@@ -1,9 +1,8 @@
 """Top-level ``bubo`` CLI — install, doctor, and asset placement.
 
 Replaces the hand-rolled ``scripts/install-package.sh`` shell installer
-for users who installed via ``uv tool install`` / ``pipx install``. The
-shell script remains for one minor version with a deprecation warning;
-see issue #22.
+(deprecated in v0.6.0 and now removed; see issue #22) for users who
+installed via ``uv tool install`` / ``pipx install``.
 
 Two subcommands so far:
 

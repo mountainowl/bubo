@@ -8,8 +8,8 @@ credentials are in hand.
 
 The recommended install path is `uv tool install` against the GitHub
 release. The previous shell-installer scripts (`scripts/install-package.sh`
-and `scripts/deploy-package.sh`) still work with a deprecation warning, but
-are slated for removal in a future release.
+and `scripts/deploy-package.sh`) have been removed — use the `uv tool
+install` flow below (or pipx) instead.
 
 ### Option 1 — `uv tool install` (recommended)
 
@@ -52,18 +52,6 @@ For hosts that don't have uv but already use pipx:
 ```sh
 pipx install git+https://github.com/mountainowl/bubo@v0.8.0
 bubo init
-```
-
-### Option 3 (deprecated) — shell installer
-
-Still works but prints a deprecation warning on every run; slated for
-removal in a future release:
-
-```sh
-git clone https://github.com/mountainowl/bubo.git
-cd bubo
-git checkout v0.8.0
-./scripts/install-package.sh --install-agent-config
 ```
 
 ### Local development

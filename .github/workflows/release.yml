@@ -40,13 +40,12 @@ jobs:
 
       - name: Build deploy bundle
         # The sdist contains only the Python package (uv_build default
-        # behaviour). Operators deploying via scripts/install-package.sh
-        # need the full tree — wrapper scripts, prompts, deploy templates,
-        # the example config — none of which the sdist carries.
-        # bubo-deploy-X.Y.Z.tar.gz is the artifact operators
-        # should download for the install script. Exclude pattern mirrors
-        # scripts/deploy-package.sh exactly so the published bundle and
-        # an ad-hoc `deploy-package.sh user@host` ship the same bytes.
+        # behaviour). The deploy bundle ships the full operator-facing
+        # tree — bin/ wrappers, prompts, deploy templates, the example
+        # config — none of which the sdist carries, as one signed
+        # bubo-deploy-X.Y.Z.tar.gz artifact per release. The exclude
+        # pattern drops runtime noise (venv, caches, local var/ state,
+        # operator config).
         run: |
           version="${GITHUB_REF_NAME#v}"
           mkdir -p dist

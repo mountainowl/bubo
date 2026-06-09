@@ -20,9 +20,17 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   full manual to a teaser (kept the visuals, example output, badges,
   quickstart, and doc links; moved the deep "how it works" walkthrough to
   the docs site). Refreshed every stale `@v0.6.0` install pin to `@v0.8.0`
-  and removed the already-passed "removed in v0.7.0" deprecation deadline
-  (the shell installers are still present and now read "slated for removal
-  in a future release").
+  and removed the already-passed "removed in v0.7.0" deprecation deadline.
+
+### Removed
+- **BREAKING: the deprecated shell installers `scripts/install-package.sh`
+  and `scripts/deploy-package.sh` have been deleted.** They were deprecated
+  in v0.6.0 (#22) in favor of `uv tool install` + `bubo init`. Operators
+  still on the shell-installer path must switch to the supported flow:
+  `uv tool install git+https://github.com/mountainowl/bubo@<tag>`, then
+  `bubo init` and `bubo doctor` (see [docs/operate.md](docs/operate.md),
+  "Migrating from the shell installer"). State (`var/state/reviewer.sqlite`)
+  and `config/env.toml` are preserved across the migration.
 
 ## [0.8.0] - 2026-06-08
 

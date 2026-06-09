@@ -116,16 +116,14 @@ packages = ["src/bubo"]
 "config/env.example.toml" = "bubo/_assets/env.example.toml"
 
 # Source distribution: ship the runtime assets at the natural repo-root
-# paths so a `pip install <sdist>` / `uv build` round-trips correctly
-# and `scripts/install-package.sh` (still supported during the
-# deprecation window) continues to find them. Hatchling's sdist defaults
-# already pick up src/, pyproject.toml, README.md, LICENSE, CHANGELOG.md
-# — we explicitly include the rest of the operator-facing tree.
+# paths so a `pip install <sdist>` / `uv build` round-trips correctly and
+# the release deploy bundle carries the full operator-facing tree.
+# Hatchling's sdist defaults already pick up src/, pyproject.toml,
+# README.md, LICENSE, CHANGELOG.md — we explicitly include the rest.
 [tool.hatch.build.targets.sdist]
 include = [
   "src/",
   "bin/",
-  "scripts/",
   "deploy/",
   "prompts/",
   "skills/",

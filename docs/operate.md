@@ -35,8 +35,8 @@ ssh user@host '
 
 For a fleet, wrap the three lines in your config-management tool of
 choice (Ansible, Pyinfra, Salt). The previous bespoke
-`scripts/deploy-package.sh` is deprecated; it still works with a
-warning, but is slated for removal in a future release.
+`scripts/deploy-package.sh` has been removed; use the `uv tool install`
+flow above.
 
 ### Upgrades
 
@@ -179,13 +179,13 @@ safe.
 
 ## Migrating from the shell installer
 
-Existing operators who deployed with `scripts/install-package.sh` /
-`scripts/deploy-package.sh` (v0.5.x and earlier) can stay on that path
-for now — it prints a deprecation warning but still works.
-Migrate at your convenience before it is removed in a future release:
+The `scripts/install-package.sh` / `scripts/deploy-package.sh` shell
+installers (used by v0.5.x and earlier) have been **removed**. Operators
+still running an old shell-installer deployment should migrate to the
+`uv tool install` path:
 
 ```sh
-# On the host that has a working v0.5.x install:
+# On the host that has a working shell-installer deploy:
 uv tool install git+https://github.com/mountainowl/bubo@v0.8.0
 bubo init                                # idempotent — keeps env.toml
 bubo doctor                              # confirm
@@ -197,6 +197,5 @@ rm -rf "$BUBO_ROOT/bin" \
 ```
 
 State (`var/state/reviewer.sqlite`) and operator config
-(`config/env.toml`) are preserved across the migration — the new
-`bubo init` shares the same workspace layout as the old shell
-installer.
+(`config/env.toml`) are preserved across the migration — `bubo init`
+shares the same workspace layout as the old shell installer.
