@@ -6,7 +6,7 @@ Recommended single-host install:
 
 ```sh
 # 1. Install the Python package + entry points into an isolated venv.
-uv tool install git+https://github.com/mountainowl/bubo@v0.6.0
+uv tool install git+https://github.com/mountainowl/bubo@v0.8.0
 
 # 2. Place the per-host workspace, Codex profile, Claude settings,
 #    rendered cron/systemd templates, and SQLite schema.
@@ -27,7 +27,7 @@ refresh-overwrite for the packaged prompts/skills/plugins. Use
 
 ```sh
 ssh user@host '
-  uv tool install git+https://github.com/mountainowl/bubo@v0.6.0 &&
+  uv tool install git+https://github.com/mountainowl/bubo@v0.8.0 &&
   bubo init &&
   bubo doctor
 '
@@ -35,13 +35,13 @@ ssh user@host '
 
 For a fleet, wrap the three lines in your config-management tool of
 choice (Ansible, Pyinfra, Salt). The previous bespoke
-`scripts/deploy-package.sh` is deprecated; it still works through
-v0.6.x with a warning, but will be removed in v0.7.0.
+`scripts/deploy-package.sh` is deprecated; it still works with a
+warning, but is slated for removal in a future release.
 
 ### Upgrades
 
 ```sh
-uv tool install --reinstall git+https://github.com/mountainowl/bubo@v0.6.1
+uv tool install --reinstall git+https://github.com/mountainowl/bubo@v0.8.1
 bubo init                         # idempotent — refreshes packaged assets
 bubo doctor                       # confirm
 ```
@@ -181,12 +181,12 @@ safe.
 
 Existing operators who deployed with `scripts/install-package.sh` /
 `scripts/deploy-package.sh` (v0.5.x and earlier) can stay on that path
-through v0.6.x — it prints a deprecation warning but still works.
-Migrate at your convenience before v0.7.0:
+for now — it prints a deprecation warning but still works.
+Migrate at your convenience before it is removed in a future release:
 
 ```sh
 # On the host that has a working v0.5.x install:
-uv tool install git+https://github.com/mountainowl/bubo@v0.6.0
+uv tool install git+https://github.com/mountainowl/bubo@v0.8.0
 bubo init                                # idempotent — keeps env.toml
 bubo doctor                              # confirm
 

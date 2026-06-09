@@ -10,6 +10,21 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+### Changed
+- **Docs: the GitHub Pages site is now the canonical reference, and the
+  README/MD files are teasers that link to it.** Added a copy-paste
+  [Recipes](docs/recipes.md) page that frames the review agent as the
+  operator's choice via `[agents].reviewer_command` — Codex (the bundled
+  `bin/bubo-codex` default) gets worked GitLab and GitHub recipes, and a
+  Claude section shows how to point Bubo at `claude -p` instead. Surfaced it
+  in the MkDocs nav and on the Overview page, and trimmed the README from a
+  full manual to a teaser (kept the visuals, example output, badges,
+  quickstart, and doc links; moved the deep "how it works" walkthrough to
+  the docs site). Refreshed every stale `@v0.6.0` install pin to `@v0.8.0`
+  and removed the already-passed "removed in v0.7.0" deprecation deadline
+  (the shell installers are still present and now read "slated for removal
+  in a future release").
+
 ## [0.8.0] - 2026-06-08
 
 ### Changed

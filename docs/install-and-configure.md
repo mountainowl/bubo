@@ -8,8 +8,8 @@ credentials are in hand.
 
 The recommended install path is `uv tool install` against the GitHub
 release. The previous shell-installer scripts (`scripts/install-package.sh`
-and `scripts/deploy-package.sh`) still work for one minor version with a
-deprecation warning, but they will be removed in v0.7.0.
+and `scripts/deploy-package.sh`) still work with a deprecation warning, but
+are slated for removal in a future release.
 
 ### Option 1 — `uv tool install` (recommended)
 
@@ -18,7 +18,7 @@ Single command, isolated venv managed by uv, entry points placed on
 
 ```sh
 # Install the latest tagged release.
-uv tool install git+https://github.com/mountainowl/bubo@v0.6.0
+uv tool install git+https://github.com/mountainowl/bubo@v0.8.0
 
 # Place ~/.codex/config.toml, ~/.claude/settings.json, config/env.toml seed,
 # the var/ workspace, prompts, skills, plugins, and initialize the SQLite DB.
@@ -40,7 +40,7 @@ bubo doctor
 To upgrade, re-run `uv tool install` against the new tag:
 
 ```sh
-uv tool install --reinstall git+https://github.com/mountainowl/bubo@v0.6.1
+uv tool install --reinstall git+https://github.com/mountainowl/bubo@v0.8.1
 bubo init     # idempotent — re-applies packaged template updates
 bubo doctor
 ```
@@ -50,19 +50,19 @@ bubo doctor
 For hosts that don't have uv but already use pipx:
 
 ```sh
-pipx install git+https://github.com/mountainowl/bubo@v0.6.0
+pipx install git+https://github.com/mountainowl/bubo@v0.8.0
 bubo init
 ```
 
 ### Option 3 (deprecated) — shell installer
 
-Still works in v0.6.x but prints a deprecation warning on every run. Will
-be removed in v0.7.0:
+Still works but prints a deprecation warning on every run; slated for
+removal in a future release:
 
 ```sh
 git clone https://github.com/mountainowl/bubo.git
-cd ai-code-review
-git checkout v0.6.0
+cd bubo
+git checkout v0.8.0
 ./scripts/install-package.sh --install-agent-config
 ```
 
@@ -93,13 +93,19 @@ Open it and fill in the minimum to get a first review running:
 token = "glpat-..."          # api scope
 
 [agents]
-llm_api_key = "..."          # your LLM provider key
-llm_model = "gpt-5.5"        # match what your CLI is configured for
+llm_model = "gpt-5.5"            # match what your CLI is configured for
+llm_api_key = "..."             # your LLM key
+llm_api_key_env = "OPENAI_API_KEY"  # the env var your LLM CLI reads it from
+                                    # (ANTHROPIC_API_KEY, GEMINI_API_KEY, …)
 
 [[projects]]
 path = "your-group/your-repo"
 enabled = true
 ```
+
+Bubo is model-agnostic — `llm_api_key_env` names the variable your LLM
+CLI/SDK reads the key from, so you're never locked to one provider. See
+the [recipes](recipes.md) for end-to-end setups.
 
 Keep `[review].dry_run = true` (the default) until your first real
 review output looks right — the poller will plan findings without
