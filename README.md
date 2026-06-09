@@ -98,9 +98,9 @@ plain Markdown in the repo:
 - **GitLab & GitHub posting via polling** — production path, at outcome-metric
   parity. Set `[scm].provider = "github"` (or run `bubo-gh-poller`).
 - **MCP server (`bubo-mcp`)** — read-only metrics + triggered reviews; stdio or HTTP.
-- **Bring your own agent** — the review runs through the CLI you set in
-  `[agents].reviewer_command`; **Codex** ships as the bundled default and
-  **Claude** (`claude -p`) is a drop-in alternative.
+- **Codex or Claude** — Bubo runs the review through a wrapper around your
+  agent CLI. Codex ships pre-wired as the bundled default; Claude works the
+  same way once you point the wrapper at it.
 - **Webhook-driven triggering** — not implemented; polling is the only path.
 
 Review execution is intentionally outside CI/CD. Run it as a poller beside your existing pipelines.

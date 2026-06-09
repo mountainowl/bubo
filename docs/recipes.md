@@ -1,18 +1,13 @@
 # Recipes
 
 Copy-paste setups you can follow top to bottom — replace the values in
-`< >` with your own. The Codex recipes are the bundled default path; the
-[Claude](#claude) section covers pointing Bubo at a different agent.
+`< >` with your own. Codex is the bundled default; the [Claude](#claude)
+section covers reviewing with Claude instead.
 
-!!! tip "Which agent runs the review"
-    Bubo runs the review through whatever agent CLI you set in
-    `[agents].reviewer_command`: the poller appends the rendered review prompt
-    to that command and reads a JSON array of findings from its stdout.
-    **Codex is the bundled default** (`bin/bubo-codex`, so you don't set
-    `reviewer_command` at all); pointing it at **Claude** (`claude -p`) is
-    just as valid — see [Claude](#claude). The worked examples below use
-    Codex; everything except `reviewer_command` and the agent's own
-    setup is identical for any agent.
+!!! tip "Codex or Claude"
+    Bubo runs the review through a small wrapper around your agent CLI.
+    **Codex is bundled and works out of the box**, so the recipes below use
+    it; you can review with **Claude** instead — see [Claude](#claude).
 
 ---
 
@@ -128,40 +123,19 @@ llm_api_key_env = "<THE_ENV_VAR_YOUR_CLI_READS>"   # e.g. OPENAI_API_KEY
 
 ## Claude
 
-To run reviews with Claude instead of Codex, point `[agents].reviewer_command`
-at a headless Claude invocation. The poller appends the rendered review prompt
-as the final argument, so Claude gets the same instructions Codex does and
-prints the findings JSON to stdout — everything else in your `[scm]` /
-`[gitlab]` / `[[projects]]` config is unchanged.
+Bubo runs the review through a wrapper around your agent CLI, so Claude works
+the same way as Codex — only the CLI it calls and the key it uses change.
+Install the Claude CLI, then set Claude as your agent in `[agents]`:
 
 ```toml
 [agents]
-# Run the review through Claude Code in headless (-p / print) mode instead of
-# the bundled Codex wrapper. Keep the DEFAULT text output — Bubo parses a JSON
-# array from stdout, so do NOT add `--output-format json` (that wraps the array
-# in an envelope Bubo won't read).
-reviewer_command = ["claude", "-p", "--allowedTools", "Read,Bash"]
-
-llm_model = "<your-claude-model>"      # used for cost/metric labels
+llm_model = "<your-claude-model>"
 llm_api_key = "<your-anthropic-key>"
-llm_api_key_env = "ANTHROPIC_API_KEY"  # the env var the Claude CLI reads
+llm_api_key_env = "ANTHROPIC_API_KEY"   # the env var the Claude CLI reads
 ```
 
-Because Claude is bring-your-own-command (there's no bundled wrapper like
-`bin/bubo-codex`), confirm it can do the review **non-interactively** before
-going live:
-
-- **Tools / permissions.** The review reads the diff and the MR/PR through
-  MCP, so Claude must be allowed to use those tools without prompting — extend
-  `--allowedTools` (e.g. add the git/GitLab MCP tool names) or pick a
-  `--permission-mode` that matches your security posture.
-- **MCP servers.** Register the same git + GitLab/GitHub MCP servers the Codex
-  profile uses — `claude mcp add …`, a project `.mcp.json`, or
-  `--mcp-config <file>`.
-- **Skills.** Headless `-p` mode does not load slash-command skills like
-  `/code-review`; Bubo passes the full rendered review prompt as the argument
-  instead, so none is needed.
-
-Then verify exactly as you would for Codex: keep `[review].dry_run = true`, run
-`bubo-poller` once, and read the transcript under `var/reports/` to confirm
-Claude's output parses into findings before you flip `dry_run` to `false`.
+Codex is the agent that ships pre-wired, so reviewing with Claude needs one
+extra step — having the wrapper call the Claude CLI for the review. Verify it
+the same way as Codex: keep `[review].dry_run = true`, run `bubo-poller` once,
+and read the transcript under `var/reports/` to confirm findings come through
+before you flip `dry_run` to `false`.
