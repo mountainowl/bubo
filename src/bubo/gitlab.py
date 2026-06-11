@@ -240,9 +240,17 @@ def classify_discussion_outcome(
         bool(note.get("resolvable")) and bool(note.get("resolved")) for note in notes
     )
     active_notes = [note for note in notes if not note.get("deleted")]
-    developer_replied = any(
-        ((note.get("author") or {}).get("username") or "") != bot_username for note in active_notes
-    )
+    reply_notes = [
+        note
+        for note in active_notes
+        if ((note.get("author") or {}).get("username") or "") != bot_username
+    ]
+    bot_notes = [
+        note
+        for note in active_notes
+        if ((note.get("author") or {}).get("username") or "") == bot_username
+    ]
+    developer_replied = bool(reply_notes)
     note_text = "\n".join(str(note.get("body") or "").lower() for note in active_notes)
     false_positive = "[llm-review:false-positive]" in note_text
     duplicate = "[llm-review:duplicate]" in note_text
@@ -256,4 +264,8 @@ def classify_discussion_outcome(
         "duplicate": duplicate,
         "resolved_at": discussion.get("resolved_at"),
         "merged_unresolved": mr_state == "merged" and not resolved,
+        # Original-case text for the LLM reply classifier (transient; ignored
+        # by record_finding_outcome). Bot's finding + the developer replies.
+        "_finding_text": str(bot_notes[0].get("body") or "") if bot_notes else "",
+        "_reply_text": "\n\n".join(str(note.get("body") or "") for note in reply_notes),
     }

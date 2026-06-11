@@ -68,6 +68,22 @@ def test_classify_discussion_outcome_uses_explicit_manual_markers() -> None:
     assert outcome["merged_unresolved"] is False
 
 
+def test_classify_discussion_outcome_extracts_finding_and_reply_text() -> None:
+    # GitLab path: the LLM reply classifier needs the bot's finding and the
+    # developer's reply in original case.
+    discussion = {
+        "id": "disc1",
+        "resolved": True,
+        "notes": [
+            {"author": {"username": "bubo"}, "body": "The Finding Body"},
+            {"author": {"username": "dev1"}, "body": "Working As Intended"},
+        ],
+    }
+    outcome = gitlab.classify_discussion_outcome(discussion, bot_username="bubo", mr_state="merged")
+    assert outcome["_finding_text"] == "The Finding Body"
+    assert "Working As Intended" in outcome["_reply_text"]
+
+
 def test_classify_discussion_outcome_marks_unresolved_after_merge() -> None:
     discussion = {"id": "disc1", "resolved": False, "notes": []}
 
@@ -155,6 +171,164 @@ def test_outcome_sync_flag_suppresses_outcome_metric_emission() -> None:
 
             assert fake.finding_metrics == 0
     finally:
+        paths.DB = original_db
+
+
+def _seed_posted_finding(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """
+            insert into review_findings(project,iid,sha,fingerprint,file,line,status,discussion_id,body,updated_at)
+            values(?,?,?,?,?,?,?,?,?,?)
+            """,
+            ("group/repo", 1, "sha", "fp", "src/A.py", 1, "posted", "disc", "body", poller.now()),
+        )
+
+
+def _replied_unresolved_outcome() -> dict[str, object]:
+    return {
+        "resolved": True,
+        "deleted": False,
+        "developer_replied": True,
+        "disputed": False,
+        "false_positive": False,
+        "duplicate": False,
+        "resolved_at": None,
+        "merged_unresolved": False,
+        "_finding_text": "the finding",
+        "_reply_text": "this is working as intended",
+    }
+
+
+class _SilentTelemetry:
+    config = TelemetryConfig(enabled=True, emit_outcome_sync=False)
+
+    def record_finding(self, **_: object) -> None:
+        pass
+
+    def record_failure(self, **_: object) -> None:
+        raise AssertionError("unexpected failure metric")
+
+
+def test_outcome_sync_classifies_rejecting_reply_as_disputed() -> None:
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            _seed_posted_finding(paths.DB)
+            fake = _SilentTelemetry()
+            cfg = ReviewConfig(gitlab_url="https://gitlab.com", telemetry_config=fake.config)
+            provider = _FakeProvider(outcome=_replied_unresolved_outcome())
+            rejected = {"verdict": "rejected", "false_positive": False}
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=provider):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
+                        with patch(
+                            "bubo.poller.classify_developer_reply", return_value=rejected
+                        ) as mocked:
+                            assert poller.sync_outcomes(limit=1) == 1
+            mocked.assert_called_once()
+            with sqlite3.connect(paths.DB) as db:
+                row = db.execute(
+                    "select disputed, reply_classified from finding_outcomes"
+                ).fetchone()
+            assert row == (1, 1)
+    finally:
+        paths.DB = original_db
+
+
+def test_outcome_sync_classifies_each_finding_only_once() -> None:
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            _seed_posted_finding(paths.DB)
+            fake = _SilentTelemetry()
+            cfg = ReviewConfig(gitlab_url="https://gitlab.com", telemetry_config=fake.config)
+            provider = _FakeProvider(outcome=_replied_unresolved_outcome())
+            accepted = {"verdict": "accepted", "false_positive": False}
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=provider):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
+                        with patch(
+                            "bubo.poller.classify_developer_reply", return_value=accepted
+                        ) as mocked:
+                            poller.sync_outcomes(limit=1)
+                            # reply_classified is now set; a second pass must
+                            # not re-invoke the (paid) LLM classifier.
+                            poller.sync_outcomes(limit=1)
+            assert mocked.call_count == 1
+    finally:
+        paths.DB = original_db
+
+
+def test_outcome_sync_retries_after_transient_classifier_error() -> None:
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            _seed_posted_finding(paths.DB)
+            fake = _SilentTelemetry()
+            cfg = ReviewConfig(gitlab_url="https://gitlab.com", telemetry_config=fake.config)
+            provider = _FakeProvider(outcome=_replied_unresolved_outcome())
+            error = {"verdict": "error", "false_positive": False}
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=provider):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
+                        with patch(
+                            "bubo.poller.classify_developer_reply", return_value=error
+                        ) as mocked:
+                            poller.sync_outcomes(limit=1)
+                            # A transient error must NOT mark the finding
+                            # classified, so the next sync retries it.
+                            poller.sync_outcomes(limit=1)
+            assert mocked.call_count == 2
+            with sqlite3.connect(paths.DB) as db:
+                row = db.execute(
+                    "select disputed, reply_classified from finding_outcomes"
+                ).fetchone()
+            assert row == (0, 0)
+    finally:
+        paths.DB = original_db
+
+
+def test_outcome_sync_caps_reply_classifications_per_run() -> None:
+    original_db = paths.DB
+    original_cap = poller.MAX_REPLY_CLASSIFICATIONS_PER_SYNC
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            with sqlite3.connect(paths.DB) as db:
+                for i in range(3):
+                    db.execute(
+                        """
+                        insert into review_findings(project,iid,sha,fingerprint,file,line,status,discussion_id,body,updated_at)
+                        values(?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        ("group/repo", 1, "sha", f"fp{i}", "src/A.py", 1, "posted",
+                         f"disc{i}", "body", poller.now()),
+                    )
+            poller.MAX_REPLY_CLASSIFICATIONS_PER_SYNC = 2
+            fake = _SilentTelemetry()
+            cfg = ReviewConfig(gitlab_url="https://gitlab.com", telemetry_config=fake.config)
+            provider = _FakeProvider(outcome=_replied_unresolved_outcome())
+            accepted = {"verdict": "accepted", "false_positive": False}
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=provider):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
+                        with patch(
+                            "bubo.poller.classify_developer_reply", return_value=accepted
+                        ) as mocked:
+                            # Three eligible findings, cap of two -> only two
+                            # LLM calls this run; the third drains next time.
+                            poller.sync_outcomes(limit=10)
+            assert mocked.call_count == 2
+    finally:
+        poller.MAX_REPLY_CLASSIFICATIONS_PER_SYNC = original_cap
         paths.DB = original_db
 
 

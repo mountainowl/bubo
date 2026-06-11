@@ -166,10 +166,13 @@ def init_db() -> None:
               duplicate integer not null default 0,
               resolved_at text,
               merged_unresolved integer not null default 0,
+              reply_classified integer not null default 0,
               last_checked_at text not null
             )
             """
         )
+        # Additive migration for DBs created before reply_classified existed.
+        ensure_column(db, "finding_outcomes", "reply_classified", "integer not null default 0")
 
 
 def ensure_column(db: sqlite3.Connection, table: str, name: str, definition: str) -> None:
@@ -512,9 +515,9 @@ def record_finding_outcome(
             insert into finding_outcomes(
               finding_id,project,iid,sha,fingerprint,discussion_id,
               resolved,deleted,developer_replied,disputed,false_positive,duplicate,
-              resolved_at,merged_unresolved,last_checked_at
+              resolved_at,merged_unresolved,reply_classified,last_checked_at
             )
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(finding_id) do update set
               discussion_id=excluded.discussion_id,
               resolved=excluded.resolved,
@@ -525,6 +528,7 @@ def record_finding_outcome(
               duplicate=excluded.duplicate,
               resolved_at=excluded.resolved_at,
               merged_unresolved=excluded.merged_unresolved,
+              reply_classified=excluded.reply_classified,
               last_checked_at=excluded.last_checked_at
             """,
             (
@@ -542,6 +546,7 @@ def record_finding_outcome(
                 int(bool(outcome["duplicate"])),
                 outcome.get("resolved_at"),
                 int(bool(outcome["merged_unresolved"])),
+                int(bool(outcome.get("reply_classified", False))),
                 now(),
             ),
         )
@@ -587,7 +592,8 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     with connect_db() as db:
         rows = db.execute(
             """
-            select rf.project,rf.iid,rf.sha,rf.fingerprint,rf.discussion_id
+            select rf.project,rf.iid,rf.sha,rf.fingerprint,rf.discussion_id,
+                   fo.reply_classified
             from review_findings rf
             left join finding_outcomes fo
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
@@ -608,6 +614,7 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
             "sha": row[2],
             "fingerprint": row[3],
             "discussion_id": row[4],
+            "reply_classified": bool(row[5]),
         }
         for row in rows
     ]
@@ -775,7 +782,7 @@ def outcomes_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
             """
             select fingerprint,discussion_id,resolved,deleted,
                    developer_replied,disputed,false_positive,duplicate,
-                   resolved_at,merged_unresolved,last_checked_at
+                   resolved_at,merged_unresolved,reply_classified,last_checked_at
             from finding_outcomes
             where project=? and iid=? and sha=?
             order by last_checked_at desc
@@ -797,7 +804,8 @@ def outcomes_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
             "duplicate": bool(row[7]),
             "resolved_at": row[8],
             "merged_unresolved": bool(row[9]),
-            "last_checked_at": row[10],
+            "reply_classified": bool(row[10]),
+            "last_checked_at": row[11],
         }
         for row in rows
     ]

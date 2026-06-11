@@ -419,6 +419,7 @@ def classify_graphql_thread_outcome(
     duplicate = "[llm-review:duplicate]" in reply_text
     disputed = "[llm-review:disputed]" in reply_text or false_positive
     resolved = bool(thread.get("is_resolved"))
+    bot_comment = first_bot_comment(thread, bot_username)
     return {
         "resolved": resolved,
         "deleted": False,
@@ -428,6 +429,10 @@ def classify_graphql_thread_outcome(
         "duplicate": duplicate,
         "resolved_at": None,
         "merged_unresolved": pr_state == "merged" and not resolved,
+        # Original-case text for the LLM reply classifier (transient; ignored
+        # by record_finding_outcome). Bot's finding + the developer replies.
+        "_finding_text": str((bot_comment or {}).get("body") or ""),
+        "_reply_text": "\n\n".join(str(c.get("body") or "") for c in replies),
     }
 
 
@@ -471,9 +476,10 @@ def classify_review_thread_outcome(
     merged without the thread being resolved.
     """
     active_replies = [r for r in replies if not r.get("deleted")]
-    developer_replied = any(
-        ((r.get("user") or {}).get("login") or "") != bot_username for r in active_replies
-    )
+    developer_replies = [
+        r for r in active_replies if ((r.get("user") or {}).get("login") or "") != bot_username
+    ]
+    developer_replied = bool(developer_replies)
     reply_text = "\n".join(str(r.get("body") or "").lower() for r in active_replies)
     false_positive = "[llm-review:false-positive]" in reply_text
     duplicate = "[llm-review:duplicate]" in reply_text
@@ -489,6 +495,10 @@ def classify_review_thread_outcome(
         "duplicate": duplicate,
         "resolved_at": None,
         "merged_unresolved": pr_state == "merged",
+        # Original-case text for the LLM reply classifier (transient; ignored
+        # by record_finding_outcome). Bot's finding + the developer replies.
+        "_finding_text": str(comment.get("body") or ""),
+        "_reply_text": "\n\n".join(str(r.get("body") or "") for r in developer_replies),
     }
 
 

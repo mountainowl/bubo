@@ -147,6 +147,38 @@ deleted, replied to, marked disputed, marked false-positive, or marked
 duplicate — feeding the `llm_review.findings{status=…}` counter
 described in [telemetry.md](telemetry.md).
 
+### Reply classification
+
+A thread can be resolved because the developer **fixed** the finding or
+because they **rejected** it ("working as intended", "not a blocker") —
+the two are indistinguishable from the `resolved` flag alone, which would
+overcount the reviewer's precision. So when a finding's discussion has a
+developer reply and no explicit dispute marker, `--sync-outcomes` asks an
+LLM to read the bot's finding plus the reply and decide whether it was
+**accepted** or **rejected**; a rejection sets `disputed` (and
+`false_positive` when the reply says the finding is factually wrong).
+
+- **Model-agnostic.** Classification reuses the agent you configured in
+  `[agents].reviewer_command`. The bundled `bin/bubo-codex` is hardwired
+  for code review, so when it's in use the classifier transparently falls
+  back to the raw `codex exec --profile bubo` path; any custom command
+  (e.g. `claude -p`) is reused as-is.
+- **Classified once.** Each finding is classified a single time (tracked by
+  the `reply_classified` column) to bound LLM cost across the hourly sync.
+  A reply that arrives *after* the first classification is not re-graded.
+- **Cold-start safe.** At most a few dozen findings are classified per sync
+  run, so the first sync after upgrading — when the whole backlog of
+  resolved-with-reply findings is unclassified — does not fire hundreds of
+  agent calls at once. The backlog drains over subsequent runs.
+- **Fail-safe.** A *transient* classifier failure (timeout, non-zero exit)
+  leaves the finding unclassified and is retried on a later sync;
+  unparseable output degrades to "unclear". Either way the sync is never
+  blocked.
+
+Operators who prefer the explicit path can still tag a reply with
+`[llm-review:disputed]` / `[llm-review:false-positive]`; an explicit marker
+short-circuits the LLM call.
+
 ## Backfill — one-shot, not a cron job
 
 The backfill commands import bot comments that **already exist on the

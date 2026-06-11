@@ -76,6 +76,7 @@ from bubo.findings import (
 )
 from bubo.hash_utils import stable_hash
 from bubo.mcp import call_tool as mcp_call_tool
+from bubo.outcome_classifier import classify_developer_reply
 from bubo.paths import CONFIG, ROOT
 from bubo.prompt import render_meta_prompt as _render_meta_prompt
 from bubo.prompt import write_rendered_meta_prompt as write_rendered_prompt_file
@@ -950,6 +951,14 @@ def check_health() -> int:
     return 0 if verdict == "ok" else 1
 
 
+# Cap LLM reply classifications per sync run so the first sync after this
+# ships — when every historical replied-resolved finding is unclassified —
+# cannot fire hundreds of sequential agent subprocesses in one invocation.
+# Skipped findings still get their outcome recorded and ``last_checked_at``
+# advanced, so they rotate in and drain over subsequent runs.
+MAX_REPLY_CLASSIFICATIONS_PER_SYNC = 20
+
+
 def sync_outcomes(limit: int = 200) -> int:
     """Refresh provider-side outcomes for up to ``limit`` posted findings.
 
@@ -958,6 +967,9 @@ def sync_outcomes(limit: int = 200) -> int:
     disputed / deleted / etc.) and emits one telemetry event per
     non-default outcome. Touches ``last_checked_at`` even on failure so a
     persistently-broken finding cannot head-of-line block the queue.
+
+    At most :data:`MAX_REPLY_CLASSIFICATIONS_PER_SYNC` LLM reply
+    classifications run per invocation; the rest are deferred to later runs.
     """
     init_db()
     cfg = read_config()
@@ -966,6 +978,7 @@ def sync_outcomes(limit: int = 200) -> int:
     telemetry = ReviewTelemetry.from_config(cfg.telemetry_config)
     bot_username = provider.bot_username()
     synced = 0
+    classifications = 0
     for finding in posted_findings_for_outcome_sync(limit):
         project = finding["project"]
         iid = int(finding["iid"])
@@ -973,6 +986,42 @@ def sync_outcomes(limit: int = 200) -> int:
             outcome = provider.fetch_outcome(
                 cfg, token, project, iid, finding["discussion_id"], bot_username
             )
+            # When the developer replied but no explicit dispute marker was
+            # found, ask the configured agent whether the reply accepts or
+            # rejects the finding — so a thread resolved after a rebuttal is
+            # not miscounted as a success. Classify once per finding (the LLM
+            # verdict is cached via reply_classified) to bound cost.
+            already_classified = bool(finding.get("reply_classified"))
+            outcome["reply_classified"] = already_classified
+            reply_text = str(outcome.get("_reply_text") or "")
+            if (
+                outcome.get("developer_replied")
+                and not outcome.get("disputed")
+                and not already_classified
+                and reply_text.strip()
+                and classifications < MAX_REPLY_CLASSIFICATIONS_PER_SYNC
+            ):
+                classifications += 1
+                verdict = classify_developer_reply(
+                    cfg,
+                    str(outcome.get("_finding_text") or ""),
+                    reply_text,
+                )
+                # "error" is a transient classifier failure — leave the
+                # finding unclassified so a later sync retries it.
+                if verdict["verdict"] != "error":
+                    if verdict["verdict"] == "rejected" or verdict["false_positive"]:
+                        outcome["disputed"] = True
+                    if verdict["false_positive"]:
+                        outcome["false_positive"] = True
+                    outcome["reply_classified"] = True
+                log(
+                    "reply_classified",
+                    project=project,
+                    iid=iid,
+                    verdict=verdict["verdict"],
+                    false_positive=verdict["false_positive"],
+                )
             record_finding_outcome(
                 project=project,
                 iid=iid,
@@ -1014,7 +1063,7 @@ def sync_outcomes(limit: int = 200) -> int:
                 iid=iid,
                 error=redact_secrets(str(exc)),
             )
-    log("outcome_sync_done", synced=synced)
+    log("outcome_sync_done", synced=synced, classified=classifications)
     return synced
 
 

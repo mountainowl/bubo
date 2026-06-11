@@ -239,6 +239,33 @@ def test_classify_graphql_thread_outcome_marks_merged_unresolved() -> None:
     assert outcome["merged_unresolved"] is True
 
 
+def test_classify_graphql_thread_outcome_extracts_finding_and_reply_text() -> None:
+    # GitHub GraphQL path: the LLM reply classifier needs the bot's finding
+    # and the developer's reply in original case.
+    thread = {
+        "is_resolved": True,
+        "comments": [
+            {"login": "bubo", "body": "The Finding Body"},
+            {"login": "dev1", "body": "Working As Intended"},
+        ],
+    }
+    outcome = github.classify_graphql_thread_outcome(thread, bot_username="bubo", pr_state="open")
+    assert outcome["_finding_text"] == "The Finding Body"
+    assert "Working As Intended" in outcome["_reply_text"]
+
+
+def test_classify_review_thread_outcome_extracts_finding_and_reply_text() -> None:
+    # GitHub REST fallback (GraphQL outage) must also surface the text so
+    # classification still works on that path.
+    comment = {"body": "The Finding Body"}
+    replies = [{"user": {"login": "dev1"}, "body": "Working As Intended"}]
+    outcome = github.classify_review_thread_outcome(
+        comment, replies, bot_username="bubo", pr_state="open"
+    )
+    assert outcome["_finding_text"] == "The Finding Body"
+    assert "Working As Intended" in outcome["_reply_text"]
+
+
 def test_fetch_outcome_uses_graphql_resolution() -> None:
     provider = GitHubProvider()
     threads = [

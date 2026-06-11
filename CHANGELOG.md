@@ -10,6 +10,27 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 
 ## [Unreleased]
 
+### Added
+- **Outcome sync now classifies developer replies as accept/reject.** A
+  thread resolved *after a rebuttal* ("working as intended", "not a
+  blocker") used to look identical to one resolved *because the fix
+  landed*, so `resolved` overcounted the reviewer's precision. When a
+  finding's discussion has a developer reply and no explicit dispute
+  marker, `--sync-outcomes` now asks an LLM to read the finding plus the
+  reply and decide; a rejection sets `disputed` (and `false_positive` when
+  the reply says the finding is factually wrong). Model-agnostic — it
+  reuses `[agents].reviewer_command`, falling back to the raw
+  `codex exec --profile bubo` path when the bundled `bin/bubo-codex`
+  (hardwired for code review) is configured. Each finding is classified
+  once (new `finding_outcomes.reply_classified` column) to bound cost, and
+  classifications are capped per sync run so the first post-upgrade sync
+  cannot fire the whole backlog at once (it drains over later runs).
+  Transient classifier failures are retried on a later sync and never
+  block it.
+  Explicit `[llm-review:disputed]` / `[llm-review:false-positive]` markers
+  still short-circuit the LLM call. See
+  [docs/operate.md](docs/operate.md), "Reply classification".
+
 ### Changed
 - **Docs: the GitHub Pages site is now the canonical reference, and the
   README/MD files are teasers that link to it.** Added a copy-paste
