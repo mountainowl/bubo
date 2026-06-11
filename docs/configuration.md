@@ -17,7 +17,7 @@ credentials live in that one TOML file.
     <tr>
       <td><code>provider</code></td>
       <td><code>gitlab</code></td>
-      <td>Source-control backend: <code>gitlab</code> or <code>github</code>. Selects which provider the poller drives. <code>bubo-gh-poller</code> forces <code>github</code>.</td>
+      <td>Source-control backend: <code>gitlab</code> or <code>github</code>. Selects which provider the poller drives. <code>BUBO_PROVIDER=github</code> overrides it for a single run.</td>
     </tr>
     <tr><th colspan="3"><code>[gitlab]</code></th></tr>
     <tr>

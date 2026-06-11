@@ -50,6 +50,11 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   and removed the already-passed "removed in v0.7.0" deprecation deadline.
 
 ### Removed
+- **BREAKING: the `bubo-gh-poller` entry point is removed.** It was a thin
+  alias for `bubo-poller` with the provider forced to GitHub. Drive GitHub
+  reviews with `[scm].provider = "github"` (persistent) or
+  `BUBO_PROVIDER=github bubo-poller` (single run) instead — both already
+  supported and unchanged.
 - **BREAKING: the deprecated shell installers `scripts/install-package.sh`
   and `scripts/deploy-package.sh` have been deleted.** They were deprecated
   in v0.6.0 (#22) in favor of `uv tool install` + `bubo init`. Operators

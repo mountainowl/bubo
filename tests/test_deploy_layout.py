@@ -9,7 +9,6 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
     required = [
         "bin/bubo-poller",
         "bin/bubo-codex",
-        "bin/bubo-gh-poller",
         "bin/mcp-upstream-gitlab",
         "bin/mcp-upstream-github",
         "bin/bubo-mcp",

@@ -68,8 +68,8 @@ def test_new_config_names_normalize_to_internal_poller_keys() -> None:
 def test_env_override_wins_over_toml_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # bubo-gh-poller exports BUBO_PROVIDER=github; it must override
-    # whatever [scm].provider the on-disk env.toml declares.
+    # Setting BUBO_PROVIDER=github must override whatever [scm].provider the
+    # on-disk env.toml declares (the supported way to drive GitHub).
     cfg_file = tmp_path / "env.toml"
     cfg_file.write_text('[scm]\nprovider = "gitlab"\n')
     monkeypatch.setenv("BUBO_PROVIDER", "github")

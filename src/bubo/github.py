@@ -17,14 +17,14 @@ goes through the GitHub MCP server (see
 :mod:`bubo.scm.github`). :func:`create_pr_review_comment` is the
 REST fallback used only when MCP returns no comment ID.
 
-The ``main`` entry point (``bubo-gh-poller``) runs the shared poller with
-the provider forced to GitHub.
+The GitHub provider is selected by ``[scm].provider = "github"`` or the
+``BUBO_PROVIDER=github`` environment override; the shared ``bubo-poller``
+then drives it.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import time
 import urllib.error
 import urllib.parse
@@ -500,21 +500,3 @@ def classify_review_thread_outcome(
         "_finding_text": str(comment.get("body") or ""),
         "_reply_text": "\n\n".join(str(r.get("body") or "") for r in developer_replies),
     }
-
-
-def main() -> int:
-    """CLI entry point for ``bubo-gh-poller``.
-
-    Runs the shared poller with the provider forced to GitHub via the
-    ``BUBO_PROVIDER`` override, regardless of ``[scm].provider`` in
-    config. This lets a single host poll both GitLab (``bubo-poller``)
-    and GitHub (``bubo-gh-poller``) from one install.
-    """
-    os.environ["BUBO_PROVIDER"] = "github"
-    from bubo.poller import main as poller_main
-
-    return poller_main()
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

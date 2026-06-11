@@ -199,7 +199,7 @@ take over for go-forward grading.
 bubo-poller --backfill-gitlab-bot-comments-since 2026-05-25T00:00:00Z
 
 # GitHub
-bubo-gh-poller --backfill-github-bot-comments-since 2026-05-25T00:00:00Z
+BUBO_PROVIDER=github bubo-poller --backfill-github-bot-comments-since 2026-05-25T00:00:00Z
 
 # Then grade the imported rows once:
 bubo-poller --sync-outcomes

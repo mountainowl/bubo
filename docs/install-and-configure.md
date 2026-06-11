@@ -130,8 +130,8 @@ right before flipping `dry_run` to `false`.
    collaborator with pull-request read+write on every target repository.
 2. Generate a personal access token with pull-request read+write scope.
 3. Put the token in ignored `config/env.toml` under `[github].token`.
-4. Set `[scm].provider = "github"` (or run `bubo-gh-poller`, which
-   forces it) and list the projects under `[[projects]]`.
+4. Set `[scm].provider = "github"` (or `BUBO_PROVIDER=github` for a single
+   run) and list the projects under `[[projects]]`.
 
 ## Where files live after `bubo init`
 

@@ -160,10 +160,10 @@ def load_review_config(
     same JSON-line stream as the rest of the runtime events.
 
     The ``BUBO_PROVIDER`` environment variable overrides
-    ``[scm].provider`` from the file. This is how the ``bubo-gh-poller``
-    entry point forces ``provider = "github"`` without requiring the operator
-    to edit ``env.toml`` — the override is applied to the parsed mapping
-    before :func:`review_config_from_dict` validates it.
+    ``[scm].provider`` from the file — e.g. ``BUBO_PROVIDER=github bubo-poller``
+    drives GitHub without requiring the operator to edit ``env.toml``. The
+    override is applied to the parsed mapping before
+    :func:`review_config_from_dict` validates it.
 
     Raises :class:`ConfigError` if the file is missing or any value is out of
     range.

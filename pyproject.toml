@@ -16,7 +16,6 @@ dependencies = [
 bubo = "bubo.cli:main"
 bubo-poller = "bubo.poller:main"
 bubo-codex = "bubo.codex_runner:main"
-bubo-gh-poller = "bubo.github:main"
 bubo-mcp = "bubo.mcp_server:main"
 
 [dependency-groups]

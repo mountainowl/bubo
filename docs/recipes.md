@@ -101,8 +101,8 @@ path = "<owner>/<repo>"
 enabled = true
 ```
 
-Run with `bubo-gh-poller` (it forces the GitHub provider) or with
-`bubo-poller` once `[scm].provider = "github"` is set.
+Run `bubo-poller` once `[scm].provider = "github"` is set, or force the
+provider for a single run with `BUBO_PROVIDER=github bubo-poller`.
 
 ---
 

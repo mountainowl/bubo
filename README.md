@@ -96,7 +96,7 @@ plain Markdown in the repo:
 ## Status
 
 - **GitLab & GitHub posting via polling** — production path, at outcome-metric
-  parity. Set `[scm].provider = "github"` (or run `bubo-gh-poller`).
+  parity. Set `[scm].provider = "github"` (or `BUBO_PROVIDER=github`).
 - **MCP server (`bubo-mcp`)** — read-only metrics + triggered reviews; stdio or HTTP.
 - **Codex or Claude** — Bubo runs the review through a wrapper around your
   agent CLI. Codex ships pre-wired as the bundled default; Claude works the

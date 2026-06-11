@@ -105,7 +105,7 @@ Full walkthrough in **[Install and configure](install-and-configure.md)**.
 
 - **GitLab posting via polling** — production path. Stable.
 - **GitHub posting via polling** — supported, at outcome-metric parity
-  with GitLab. Set `[scm].provider = "github"` or run `bubo-gh-poller`.
+  with GitLab. Set `[scm].provider = "github"` (or `BUBO_PROVIDER=github`).
 - **MCP server (`bubo-mcp`)** — first-class. Two interfaces:
   read-only metrics + triggered reviews. stdio or HTTP transport.
 - **Webhook-driven triggering** — not implemented; polling is the only path.
