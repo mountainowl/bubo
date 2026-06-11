@@ -1,4 +1,9 @@
 #!/bin/sh
+# Shared environment loader exec'd by every other bin/ launcher. Puts the
+# common tool dirs on PATH, exports BUBO_ROOT, loads config/env.toml into the
+# environment (via `python -m bubo.env_config`), mirrors GITLAB_TOKEN into the
+# GITLAB_PERSONAL_ACCESS_TOKEN the upstream MCP server expects, then exec's its
+# arguments with that environment in place.
 set -eu
 PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 export PATH

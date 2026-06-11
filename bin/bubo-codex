@@ -1,4 +1,8 @@
 #!/bin/sh
+# Repo-root launcher for `bubo-codex`, the bundled default review agent: it
+# renders the code-reviewer meta prompt and drives `codex exec` to produce
+# findings. The BUBO_SKIP_AGENT_CONFIG_ENV=1 branch skips bin/bubo-env when the
+# caller (e.g. the poller) has already loaded the runtime environment.
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -8,4 +12,4 @@ if [ "${BUBO_SKIP_AGENT_CONFIG_ENV:-0}" = "1" ]; then
     export PATH BUBO_ROOT="$ROOT"
     exec uv run --project "$ROOT" bubo-codex "$@"
 fi
-exec "$ROOT/bin/env" uv run --project "$ROOT" bubo-codex "$@"
+exec "$ROOT/bin/bubo-env" uv run --project "$ROOT" bubo-codex "$@"

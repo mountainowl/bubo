@@ -13,7 +13,7 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
         "bin/mcp-upstream-gitlab",
         "bin/mcp-upstream-github",
         "bin/bubo-mcp",
-        "bin/env",
+        "bin/bubo-env",
         "config/env.example.toml",
         "deploy/templates/codex-config.toml",
         "deploy/templates/claude-settings.json",

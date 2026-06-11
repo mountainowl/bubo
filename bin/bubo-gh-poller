@@ -1,6 +1,9 @@
 #!/bin/sh
+# Repo-root launcher for `bubo-gh-poller` — the same poll cycle as bubo-poller
+# but with the SCM provider forced to GitHub. Loads runtime config via bin/bubo-env,
+# then runs the packaged console script through uv against $BUBO_ROOT.
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT="${BUBO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
-exec "$ROOT/bin/env" uv run --project "$ROOT" bubo-gh-poller "$@"
+exec "$ROOT/bin/bubo-env" uv run --project "$ROOT" bubo-gh-poller "$@"

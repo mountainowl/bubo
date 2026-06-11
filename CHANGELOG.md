@@ -32,6 +32,12 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   [docs/operate.md](docs/operate.md), "Reply classification".
 
 ### Changed
+- **`bin/env` renamed to `bin/bubo-env`.** The shared environment-loader
+  launcher now follows the `bubo-*` naming convention and no longer shadows
+  the system `env` command. All bundled launchers reference the new path;
+  this is breaking only for automation that invoked `$BUBO_ROOT/bin/env`
+  directly (the supported entry points are the `bubo-*` console scripts).
+  Every `bin/` launcher also gained a header comment documenting what it does.
 - **Docs: the GitHub Pages site is now the canonical reference, and the
   README/MD files are teasers that link to it.** Added a copy-paste
   [Recipes](docs/recipes.md) page — Codex (the bundled default) gets worked

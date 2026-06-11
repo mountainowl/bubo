@@ -9,7 +9,7 @@ Two concerns live here:
    so child processes (the agent CLI, the GitLab MCP server, the `glab`
    tool, etc.) can pick them up without re-parsing the TOML themselves.
 
-The shell wrapper :file:`bin/env` invokes this module's ``main`` to print
+The shell wrapper :file:`bin/bubo-env` invokes this module's ``main`` to print
 ``export`` lines a POSIX shell can `eval`. The Python runtime calls
 :func:`apply_runtime_env` directly — both code paths read the same TOML
 and produce the same env-var set.
