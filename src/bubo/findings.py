@@ -136,10 +136,12 @@ def filter_findings_by_policy(
     *,
     min_confidence: float,
     allowed_kinds: Iterable[str] = (),
+    suppressed_categories: Iterable[str] = (),
 ) -> tuple[list[JsonObject], list[tuple[JsonObject, str]]]:
-    """Apply confidence and kind-whitelist filters to a list of findings.
+    """Apply confidence, kind-whitelist, and dispute-suppression filters.
 
-    Two filters are applied in order:
+    Three filters are applied in order; the first one a finding fails wins
+    the drop reason:
 
     1. **Confidence:** drop any finding whose ``confidence`` is missing,
        not numeric, or strictly less than ``min_confidence``. Confidence
@@ -152,6 +154,13 @@ def filter_findings_by_policy(
        ``allowed_kinds`` skips this filter entirely — "no whitelist
        configured" means "allow all kinds that already passed
        confidence".
+    3. **Suppressed categories:** if ``suppressed_categories`` is non-empty,
+       drop any finding whose ``category`` (case-insensitive) is in the set.
+       This is the opt-in dispute-driven noise filter — the caller passes
+       the categories a team has repeatedly rejected on this repo (see
+       :func:`bubo.db.disputed_finding_classes`). Empty means "no
+       suppression", which is the default, so this module stays IO-free:
+       the dispute aggregation lives in the DB layer, not here.
 
     Parameters
     ----------
@@ -163,17 +172,24 @@ def filter_findings_by_policy(
     allowed_kinds:
         Lowercase set of allowed severity/category/type values. Empty
         means "no kind filter".
+    suppressed_categories:
+        Categories to drop wholesale. Matched against the finding's
+        ``category`` field only (not severity/type), normalized with
+        ``.strip().lower()`` on both sides to mirror the DB-side
+        ``lower(trim(...))``. Empty means "no suppression".
 
     Returns
     -------
     tuple
         ``(kept, dropped)``. ``kept`` is the filtered list in original
         order. ``dropped`` is a list of ``(finding, reason)`` tuples where
-        ``reason`` is one of ``"confidence_below_threshold"`` or
-        ``"kind_not_allowed"`` — useful for logging and metrics so an
-        operator can see *why* a real finding got swallowed.
+        ``reason`` is one of ``"confidence_below_threshold"``,
+        ``"kind_not_allowed"``, or ``"disputed_class_suppressed"`` — useful
+        for logging and metrics so an operator can see *why* a real finding
+        got swallowed.
     """
     allowed = {kind.strip().lower() for kind in allowed_kinds if kind}
+    suppressed = {kind.strip().lower() for kind in suppressed_categories if kind}
     kept: list[JsonObject] = []
     dropped: list[tuple[JsonObject, str]] = []
     for finding in findings:
@@ -183,6 +199,9 @@ def filter_findings_by_policy(
             continue
         if allowed and not _finding_matches_kinds(finding, allowed):
             dropped.append((finding, "kind_not_allowed"))
+            continue
+        if suppressed and _finding_category_in(finding, suppressed):
+            dropped.append((finding, "disputed_class_suppressed"))
             continue
         kept.append(finding)
     return kept, dropped
@@ -220,6 +239,20 @@ def _finding_matches_kinds(finding: JsonObject, allowed: set[str]) -> bool:
         if value.strip().lower() in allowed:
             return True
     return False
+
+
+def _finding_category_in(finding: JsonObject, suppressed: set[str]) -> bool:
+    """Return ``True`` if the finding's ``category`` is in ``suppressed``.
+
+    Matches the ``category`` field only — unlike the kind whitelist, which
+    looks at severity/category/type — because the dispute signal is
+    aggregated per category in :func:`bubo.db.disputed_finding_classes`.
+    Normalized with ``.strip().lower()`` to mirror the DB-side
+    ``lower(trim(...))``. A finding with no string ``category`` is never
+    suppressed.
+    """
+    value = finding.get("category")
+    return isinstance(value, str) and value.strip().lower() in suppressed
 
 
 def changed_lines_from_files(

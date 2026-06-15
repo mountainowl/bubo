@@ -92,6 +92,21 @@ credentials live in that one TOML file.
       <td><code>[]</code></td>
       <td>Whitelist of finding kinds to post. A finding is kept if its <code>severity</code>, <code>category</code>, or <code>type</code> appears here (case-insensitive). Empty list = no kind filter — post everything that clears <code>min_confidence</code>. Common values: <code>"blocking"</code>, <code>"non-blocking"</code>, <code>"security"</code>, <code>"correctness"</code>, <code>"performance"</code>, <code>"issue"</code>, <code>"suggestion"</code>.</td>
     </tr>
+    <tr>
+      <td><code>suppress_disputed_classes</code></td>
+      <td><code>false</code></td>
+      <td>Opt-in. When <code>true</code>, drop finding <code>category</code> classes this repo has repeatedly rejected, using the accept/dispute outcome history. Off by default. See <a href="#dispute-driven-suppression">Dispute-driven suppression</a> below.</td>
+    </tr>
+    <tr>
+      <td><code>dispute_suppress_threshold</code></td>
+      <td><code>0.5</code></td>
+      <td>Dispute rate (0.0–1.0) at or above which a category is suppressed. Only consulted when <code>suppress_disputed_classes = true</code>.</td>
+    </tr>
+    <tr>
+      <td><code>dispute_suppress_min_samples</code></td>
+      <td><code>5</code></td>
+      <td>Minimum recorded outcomes in a category before its dispute rate is acted on. Only consulted when <code>suppress_disputed_classes = true</code>.</td>
+    </tr>
     <tr><th colspan="3"><code>[poller]</code></th></tr>
     <tr>
       <td><code>state_dir</code></td>
@@ -228,3 +243,59 @@ credentials live in that one TOML file.
     </tr>
   </tbody>
 </table>
+
+## Dispute-driven suppression
+
+Bubo records, per finding, whether the developer accepted or disputed it —
+the accept/dispute signal kept in the `finding_outcomes` table and surfaced
+by `bubo --sync-outcomes`. **Dispute-driven suppression** turns that history
+into a precision lever: when enabled, the poller stops posting finding
+`category` classes that a team has *repeatedly rejected on a given repo*,
+instead of re-litigating the same noise on every merge request.
+
+It is **off by default** (`[review].suppress_disputed_classes = false`).
+Reach for it only after you have built up outcome history and have observed
+a specific category — say `documentation` or `maintainability` — generating
+persistent, dismissed noise. The per-finding `min_confidence` and
+`allowed_kinds` filters are the first-line controls; this is a sharper,
+repo-learned complement.
+
+The feature is **conservative by design**: it is a precision lever for teams
+with accumulated accept/dispute history, and it does nothing on a fresh
+install. Even with the flag turned on, no category is suppressed until enough
+outcomes accrue to clear both `dispute_suppress_min_samples` and
+`dispute_suppress_threshold` — so enabling it early cannot silence findings
+off a thin signal. It simply stays inert until the data earns a suppression,
+which is the correct, cautious behavior for a noise filter.
+
+### How a category gets suppressed
+
+For each repo, bubo joins `finding_outcomes` to `review_findings` and groups
+by normalized `category`. A category is suppressed when **both** hold:
+
+- at least `dispute_suppress_min_samples` (default `5`) of its findings have
+  a recorded outcome, **and**
+- the dispute rate — `disputed-or-false-positive ÷ total outcomes` — is at
+  or above `dispute_suppress_threshold` (default `0.5`).
+
+The denominator is *all* outcome rows for the category, including rows
+written when an outcome-sync check failed (which count as not-disputed).
+That deliberately dilutes the rate: the bias is toward **under**-suppressing,
+so a genuinely useful class is never silenced off a thin or noisy signal.
+Suppressed findings are dropped before posting and logged with reason
+`disputed_class_suppressed` (visible in the JSON log stream and the
+`finding_filtered` event), so an operator can always see what got swallowed.
+
+### Known limitation: suppression is self-reinforcing
+
+Once a category is suppressed, bubo stops posting it, so no new
+`review_findings` / `finding_outcomes` rows accrue for that category. Its
+dispute rate is therefore **frozen** at the snapshot that crossed the
+threshold — there is no organic recovery path if the team later starts
+caring about that class again. This is within the feature's intent (a class
+the team keeps rejecting should stay gone), but it is a conscious trade-off,
+not an accident. The escape hatches are all operator-side:
+
+- raise `dispute_suppress_threshold` or `dispute_suppress_min_samples`, or
+- set `suppress_disputed_classes = false` to re-post everything and rebuild
+  fresh outcome history.

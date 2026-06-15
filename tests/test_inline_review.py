@@ -91,6 +91,76 @@ class InlineReviewTests(unittest.TestCase):
         self.assertEqual(0.85, cfg.min_confidence)
         self.assertEqual([], cfg.allowed_kinds)
 
+    def test_filter_findings_by_policy_suppresses_disputed_categories(self):
+        from bubo.findings import filter_findings_by_policy
+
+        findings = [
+            {"category": "documentation", "confidence": 0.99, "title": "doc nit"},
+            {"category": "Documentation ", "confidence": 0.99, "title": "doc nit spaced"},
+            {"category": "security", "confidence": 0.99, "title": "real bug"},
+            {"severity": "blocking", "confidence": 0.99, "title": "no category"},
+        ]
+
+        kept, dropped = filter_findings_by_policy(
+            findings,
+            min_confidence=0.85,
+            suppressed_categories=["documentation"],
+        )
+
+        # The disputed class is dropped (case- and whitespace-insensitive);
+        # a finding with no `category` is never suppressed.
+        self.assertEqual(["real bug", "no category"], [f["title"] for f in kept])
+        dropped_reasons = {f["title"]: reason for f, reason in dropped}
+        self.assertEqual(
+            {
+                "doc nit": "disputed_class_suppressed",
+                "doc nit spaced": "disputed_class_suppressed",
+            },
+            dropped_reasons,
+        )
+
+    def test_filter_findings_by_policy_empty_suppressed_categories_is_no_filter(self):
+        from bubo.findings import filter_findings_by_policy
+
+        findings = [
+            {"category": "documentation", "confidence": 0.99, "title": "a"},
+            {"category": "security", "confidence": 0.99, "title": "b"},
+        ]
+
+        kept, dropped = filter_findings_by_policy(
+            findings, min_confidence=0.85, suppressed_categories=[]
+        )
+
+        self.assertEqual(["a", "b"], [f["title"] for f in kept])
+        self.assertEqual([], dropped)
+
+    def test_review_config_parses_dispute_suppression_settings(self):
+        from bubo.review_config import review_config_from_dict
+
+        cfg = review_config_from_dict(
+            {
+                "review": {
+                    "suppress_disputed_classes": True,
+                    "dispute_suppress_threshold": 0.6,
+                    "dispute_suppress_min_samples": 8,
+                }
+            }
+        )
+
+        self.assertTrue(cfg.suppress_disputed_classes)
+        self.assertEqual(0.6, cfg.dispute_suppress_threshold)
+        self.assertEqual(8, cfg.dispute_suppress_min_samples)
+
+    def test_review_config_dispute_suppression_defaults_off(self):
+        from bubo.review_config import review_config_from_dict
+
+        cfg = review_config_from_dict({})
+
+        # Disabled by default — the load-bearing constraint for this feature.
+        self.assertFalse(cfg.suppress_disputed_classes)
+        self.assertEqual(0.5, cfg.dispute_suppress_threshold)
+        self.assertEqual(5, cfg.dispute_suppress_min_samples)
+
     def test_extract_json_findings_from_plain_array(self):
         raw = json.dumps(
             [

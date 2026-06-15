@@ -620,6 +620,65 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     ]
 
 
+def disputed_finding_classes(
+    project: str,
+    *,
+    min_samples: int,
+    threshold: float,
+) -> set[str]:
+    """Return the set of finding categories this repo repeatedly rejects.
+
+    Powers the opt-in dispute-driven suppression filter
+    (``[review].suppress_disputed_classes``). For ``project``, it joins
+    ``finding_outcomes`` to ``review_findings`` on the composite finding id,
+    groups by normalized ``category``, and returns every category whose
+    dispute rate clears ``threshold`` once at least ``min_samples`` outcomes
+    have accrued.
+
+    Dispute rate is ``count(disputed OR false_positive) / count(outcomes)``
+    for the category. The denominator is *all* outcome rows for the
+    category, including ones written by
+    :func:`record_finding_outcome_sync_attempt` on a sync failure (which
+    carry ``disputed=0, false_positive=0``). That deliberately dilutes the
+    rate — the bias is toward **under**-suppressing, so a real finding class
+    is never silenced off a thin or noisy signal.
+
+    Categories are normalized with ``lower(trim(...))`` here and must be
+    matched the same way at the call site
+    (:func:`bubo.findings.filter_findings_by_policy`).
+
+    Note: suppression is self-reinforcing — a suppressed category stops
+    producing new ``review_findings`` / ``finding_outcomes`` rows, so its
+    rate is frozen at the pre-suppression snapshot. The escape hatches are
+    operator-side: raise ``threshold`` / ``min_samples`` or disable the
+    flag. This is documented as a known limitation in
+    ``docs/configuration.md``.
+    """
+    with connect_db() as db:
+        rows = db.execute(
+            """
+            select lower(trim(rf.category)) as category,
+                   count(*) as total,
+                   sum(case when fo.disputed = 1 or fo.false_positive = 1
+                            then 1 else 0 end) as rejected
+            from finding_outcomes fo
+            join review_findings rf
+              on rf.project || ':' || rf.iid || ':' || rf.sha || ':' || rf.fingerprint
+                 = fo.finding_id
+            where rf.project = ?
+              and rf.category is not null
+              and trim(rf.category) != ''
+            group by category
+            """,
+            (project,),
+        ).fetchall()
+    return {
+        str(category)
+        for category, total, rejected in rows
+        if total >= min_samples and (rejected / total) >= threshold
+    }
+
+
 def list_recent_reviews(
     limit: int = 20,
     status: str | None = None,
@@ -868,6 +927,7 @@ __all__ = [
     "already_seen",
     "connect_db",
     "count_inflight_workers",
+    "disputed_finding_classes",
     "ensure_column",
     "finding_seen",
     "findings_for",

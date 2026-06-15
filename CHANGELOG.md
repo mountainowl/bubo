@@ -11,6 +11,21 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 ## [Unreleased]
 
 ### Added
+- **Opt-in dispute-driven noise suppression.** Bubo already records, per
+  finding, whether the developer accepted or disputed it. The new
+  `[review].suppress_disputed_classes` flag (default `false`) turns that
+  history into a per-repo precision lever: when enabled, the poller stops
+  posting finding `category` classes a team has repeatedly rejected, instead
+  of re-litigating the same noise every MR. A category is suppressed only
+  when at least `[review].dispute_suppress_min_samples` (default `5`) of its
+  findings have a recorded outcome **and** the dispute rate is at or above
+  `[review].dispute_suppress_threshold` (default `0.5`); the denominator
+  counts all outcomes (including sync-failure rows), biasing toward
+  under-suppression so a useful class is never silenced off a thin signal.
+  Suppressed findings are logged with reason `disputed_class_suppressed`.
+  Off by default and self-reinforcing once on — see
+  [docs/configuration.md](docs/configuration.md), "Dispute-driven
+  suppression", for the caveat and escape hatches.
 - **Outcome sync now classifies developer replies as accept/reject.** A
   thread resolved *after a rebuttal* ("working as intended", "not a
   blocker") used to look identical to one resolved *because the fix

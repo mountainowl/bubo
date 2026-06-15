@@ -130,6 +130,24 @@ class ReviewConfig:
         finding is kept if **any** of its ``severity``, ``category``, or
         ``type`` fields appear in this list. An empty list means
         "post everything that meets ``min_confidence``" — the common default.
+    suppress_disputed_classes:
+        When ``True``, the poller drops findings whose ``category`` a team
+        has repeatedly rejected on this repo, using the accept/dispute
+        signal already captured in ``finding_outcomes``. **Off by default**
+        — this is an opt-in noise-reduction lever, not a silent filter. See
+        :func:`bubo.db.disputed_finding_classes` for the per-repo
+        aggregation and ``docs/configuration.md`` for the (deliberate)
+        self-freezing caveat.
+    dispute_suppress_threshold:
+        Dispute rate (0.0-1.0) at or above which a category is suppressed,
+        once ``dispute_suppress_min_samples`` is met. ``0.5`` means "the
+        team disputed at least half of this category's findings". Only
+        consulted when ``suppress_disputed_classes`` is ``True``.
+    dispute_suppress_min_samples:
+        Minimum number of resolved findings in a category before its
+        dispute rate is trusted enough to suppress. Guards against
+        suppressing a whole class off one or two rejections. Only consulted
+        when ``suppress_disputed_classes`` is ``True``.
     post_no_findings_comment:
         When ``True`` (the default), the poller posts a single change-level
         comment after a review completes with zero actionable findings, so
@@ -163,6 +181,9 @@ class ReviewConfig:
     projects: list[str] = field(default_factory=list)
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
     allowed_kinds: list[str] = field(default_factory=list)
+    suppress_disputed_classes: bool = False
+    dispute_suppress_threshold: float = 0.5
+    dispute_suppress_min_samples: int = 5
     post_no_findings_comment: bool = True
     no_findings_comment_body: str = DEFAULT_NO_FINDINGS_COMMENT
 
@@ -257,6 +278,19 @@ def review_config_from_dict(
             "min_confidence",
         ),
         allowed_kinds=lower_string_list(review.get("allowed_kinds", []), "allowed_kinds"),
+        suppress_disputed_classes=bool_value(
+            review.get("suppress_disputed_classes"),
+            "suppress_disputed_classes",
+            default=False,
+        ),
+        dispute_suppress_threshold=confidence_threshold(
+            review.get("dispute_suppress_threshold", 0.5),
+            "dispute_suppress_threshold",
+        ),
+        dispute_suppress_min_samples=positive_int(
+            review.get("dispute_suppress_min_samples", 5),
+            "dispute_suppress_min_samples",
+        ),
         post_no_findings_comment=bool_value(
             agent.get("post_no_findings_comment"),
             "post_no_findings_comment",

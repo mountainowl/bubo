@@ -53,6 +53,7 @@ from bubo.db import (
     already_seen,
     connect_db,
     count_inflight_workers,
+    disputed_finding_classes,
     finding_seen,
     init_db,
     latest_reviewed_row,
@@ -578,10 +579,23 @@ def post_or_plan_findings(
     findings = extract_findings(raw_review, max_findings=cfg.max_findings_per_merge_request)
     if not findings:
         return (0, 0, 0)
+    # Opt-in, off by default: drop categories this repo has repeatedly
+    # rejected, using the accept/dispute signal in finding_outcomes. The set
+    # is empty (and the DB never queried) unless the operator enabled it.
+    suppressed_categories: tuple[str, ...] = ()
+    if cfg.suppress_disputed_classes:
+        suppressed_categories = tuple(
+            disputed_finding_classes(
+                project,
+                min_samples=cfg.dispute_suppress_min_samples,
+                threshold=cfg.dispute_suppress_threshold,
+            )
+        )
     findings, dropped = filter_findings_by_policy(
         findings,
         min_confidence=cfg.min_confidence,
         allowed_kinds=cfg.allowed_kinds,
+        suppressed_categories=suppressed_categories,
     )
     for finding, reason in dropped:
         log(
