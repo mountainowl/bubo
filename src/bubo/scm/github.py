@@ -9,7 +9,7 @@ Key differences from GitLab, all encapsulated here:
 * **Checkout** uses ``gh repo clone`` and the ``refs/pull/<n>/head`` ref.
 * **Position** is GitHub's ``{commit_id, path, line, side}`` anchor, not
   GitLab's base/start/head ``position`` dict.
-* **Posting** goes through the GitHub MCP server (``bin/mcp-upstream-github``). The
+* **Posting** goes through the GitHub MCP server (``bin/bubo mcp-upstream github``). The
   exact tool name varies between GitHub MCP server implementations, so it
   is overrideable via ``BUBO_GITHUB_MCP_TOOL``; if the MCP call
   fails for any reason, posting falls back to the well-defined REST
@@ -34,7 +34,7 @@ from bubo.secrets import redact_secrets
 from bubo.subproc import run_bounded
 from bubo.types import JsonObject
 
-# GitHub MCP server wrapper (mirrors bin/mcp-upstream-gitlab).
+# GitHub MCP server wrapper (mirrors bin/bubo mcp-upstream gitlab).
 _GITHUB_MCP_SERVER = ROOT / "bin" / "mcp-upstream-github"
 # Tool name for posting an inline PR review comment. Overrideable because
 # different GitHub MCP servers name this tool differently.

@@ -6,7 +6,7 @@ work directories, and logs live.
 
 Two override hooks:
 
-* ``BUBO_ROOT`` — install root. Set by ``bin/bubo-env``; defaults to
+* ``BUBO_ROOT`` — install root. Set by ``bin/bubo``; defaults to
   ``~/.local/share/bubo``. Holds the wrapper scripts, prompts,
   skill assets, and (by default) the runtime state directory below.
 * ``BUBO_BASE_DIR`` — runtime state directory. Holds the SQLite

@@ -25,7 +25,7 @@ from ``[mcp_server]`` in ``config/env.toml``):
   or mismatched returns ``401``. No TLS — put behind a reverse proxy.
 
 Launch: ``bubo-mcp`` console script (also wrapped by
-``bin/bubo-mcp``).
+``bin/bubo mcp``).
 """
 
 from __future__ import annotations

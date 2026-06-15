@@ -24,13 +24,13 @@ BUBO_LOCK_DIR=/var/run/bubo
 PATH=/usr/local/bin:/usr/bin:/bin
 
 # Poll every 15 minutes.
-*/15 * * * *  bubo  flock -n $BUBO_LOCK_DIR/poller.lock $BUBO_ROOT/bin/bubo-poller >> $BUBO_ROOT/var/log/poller.log 2>&1
+*/15 * * * *  bubo  flock -n $BUBO_LOCK_DIR/poller.lock $BUBO_ROOT/bin/bubo poll >> $BUBO_ROOT/var/log/poller.log 2>&1
 
 # Outcome sync hourly — checks GitLab discussion state for posted findings.
-17   * * * *  bubo  flock -n $BUBO_LOCK_DIR/outcome-sync.lock $BUBO_ROOT/bin/bubo-poller --sync-outcomes >> $BUBO_ROOT/var/log/outcome-sync.log 2>&1
+17   * * * *  bubo  flock -n $BUBO_LOCK_DIR/outcome-sync.lock $BUBO_ROOT/bin/bubo poll --sync-outcomes >> $BUBO_ROOT/var/log/outcome-sync.log 2>&1
 
 # Health probe every 5 minutes — non-zero exit triggers your alerting MTA.
-*/5  * * * *  bubo  flock -n $BUBO_LOCK_DIR/health.lock $BUBO_ROOT/bin/bubo-poller --health >> $BUBO_ROOT/var/log/health.log 2>&1
+*/5  * * * *  bubo  flock -n $BUBO_LOCK_DIR/health.lock $BUBO_ROOT/bin/bubo poll --health >> $BUBO_ROOT/var/log/health.log 2>&1
 
 # Before installing, create the lock dir owned by the runtime user:
 #   sudo install -d -o bubo -g bubo -m 0755 /var/run/bubo

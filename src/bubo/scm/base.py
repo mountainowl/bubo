@@ -48,7 +48,7 @@ class ScmProvider(Protocol):
 
     Implementations are stateless — they read everything from the
     arguments and the environment. ``token`` and ``bot_username`` read the
-    process environment (populated by ``bin/bubo-env`` from ``config/env.toml``).
+    process environment (populated by ``bin/bubo`` from ``config/env.toml``).
     """
 
     name: str

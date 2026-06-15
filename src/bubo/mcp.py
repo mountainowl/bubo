@@ -2,7 +2,7 @@
 
 The poster path uses MCP to create inline review threads on GitLab. The
 MCP server is a separate process (typically ``mcp-gitlab`` or
-``gitlab-mcp`` on ``PATH``, wrapped by ``bin/mcp-upstream-gitlab``); this
+``gitlab-mcp`` on ``PATH``, wrapped by ``bin/bubo mcp-upstream gitlab``); this
 module speaks the minimal subset of the protocol we need:
 
 * ``initialize`` handshake.
@@ -50,7 +50,7 @@ def call_tool(name: str, arguments: JsonObject, *, server: str | None = None) ->
     """Invoke a tool on an MCP server wrapper and return its result.
 
     ``server`` is the path to the server wrapper script (e.g.
-    ``bin/mcp-upstream-gitlab`` or ``bin/mcp-upstream-github``); defaults to
+    ``bin/bubo mcp-upstream gitlab`` or ``bin/bubo mcp-upstream github``); defaults to
     :data:`DEFAULT_MCP_SERVER` (GitLab) so existing call sites are
     unchanged.
 

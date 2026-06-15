@@ -1,0 +1,84 @@
+#!/bin/sh
+# Single repo-root / deploy-bundle dispatcher for bubo's shell launchers.
+# Replaces the former per-command bin/ scripts (bubo-poller, bubo-mcp,
+# mcp-upstream-gitlab, mcp-upstream-github, bubo-env). The environment
+# loading that bin/bubo-env did is now the internal `load_env` function every
+# subcommand calls.
+#
+# Usage:
+#   bin/bubo poll [args...]                      # one poll cycle (bubo-poller)
+#   bin/bubo mcp  [args...]                       # bubo's own MCP server (bubo-mcp)
+#   bin/bubo mcp-upstream <github|gitlab> [args]  # run the third-party MCP server
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT="${BUBO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
+
+# Put common tool dirs on PATH, export BUBO_ROOT, load config/env.toml into the
+# environment (via `python -m bubo.env_config`), and mirror GITLAB_TOKEN into
+# the GITLAB_PERSONAL_ACCESS_TOKEN the upstream MCP server expects. (Formerly
+# bin/bubo-env.)
+load_env() {
+    PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+    export PATH BUBO_ROOT="$ROOT"
+    if [ -r "$ROOT/config/env.toml" ]; then
+        eval "$(PYTHONPATH="$ROOT/src" python3 -m bubo.env_config "$ROOT")"
+    fi
+    if [ -n "${GITLAB_TOKEN:-}" ] && [ -z "${GITLAB_PERSONAL_ACCESS_TOKEN:-}" ]; then
+        export GITLAB_PERSONAL_ACCESS_TOKEN="$GITLAB_TOKEN"
+    fi
+}
+
+cmd="${1:-}"
+[ "$#" -gt 0 ] && shift
+
+case "$cmd" in
+    poll)
+        load_env
+        exec uv run --project "$ROOT" bubo-poller "$@"
+        ;;
+    mcp)
+        load_env
+        exec uv run --project "$ROOT" bubo-mcp "$@"
+        ;;
+    mcp-upstream)
+        provider="${1:-}"
+        [ "$#" -gt 0 ] && shift
+        load_env
+        # The candidate names are upstream's (different third-party projects),
+        # not ours — do not rename them.
+        case "$provider" in
+            gitlab)
+                if command -v mcp-gitlab >/dev/null 2>&1; then
+                    MCP_BIN="$(command -v mcp-gitlab)"
+                elif command -v gitlab-mcp >/dev/null 2>&1; then
+                    MCP_BIN="$(command -v gitlab-mcp)"
+                else
+                    echo "mcp-gitlab or gitlab-mcp is required" >&2
+                    exit 127
+                fi
+                ;;
+            github)
+                if command -v github-mcp-server >/dev/null 2>&1; then
+                    MCP_BIN="$(command -v github-mcp-server)"
+                elif command -v mcp-github >/dev/null 2>&1; then
+                    MCP_BIN="$(command -v mcp-github)"
+                elif command -v gh-mcp-server >/dev/null 2>&1; then
+                    MCP_BIN="$(command -v gh-mcp-server)"
+                else
+                    echo "github-mcp-server, mcp-github, or gh-mcp-server is required" >&2
+                    exit 127
+                fi
+                ;;
+            *)
+                echo "usage: bubo mcp-upstream <github|gitlab>" >&2
+                exit 2
+                ;;
+        esac
+        exec "$MCP_BIN" "$@"
+        ;;
+    *)
+        echo "usage: bubo <poll|mcp|mcp-upstream <github|gitlab>> [args...]" >&2
+        exit 2
+        ;;
+esac

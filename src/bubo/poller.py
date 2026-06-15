@@ -145,7 +145,7 @@ def reviewer_env(source: Mapping[str, str]) -> dict[str, str]:
     Filters ``source`` through :data:`REVIEWER_ENV_ALLOWLIST` — dropping
     every credential the wrapper exported into our own environment (the
     primary anti-exfiltration defense) — and injects ``BUBO_ROOT`` so any
-    MCP server the agent spawns via ``bin/bubo-env`` resolves the install
+    MCP server the agent spawns via ``bin/bubo`` resolves the install
     root. The review prompt (with its contract + findings cap) is passed to
     the agent as a command argument, not via the environment.
     """

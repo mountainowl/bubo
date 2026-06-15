@@ -47,8 +47,8 @@ default_tools_approval_mode = "approve"
 enabled_tools = ["git_status", "git_diff_unstaged", "git_diff_staged", "git_diff", "git_log", "git_show", "git_branch"]
 
 [mcp_servers.bubo]
-command = "{{ROOT}}/bin/bubo-mcp"
-args = []
+command = "{{ROOT}}/bin/bubo"
+args = ["mcp"]
 startup_timeout_sec = 20
 # Must be >= [review].timeout_seconds because `review_change` blocks on
 # the underlying reviewer_command subprocess. The read-only metrics
@@ -56,8 +56,8 @@ startup_timeout_sec = 20
 tool_timeout_sec = 1800
 
 [mcp_servers.gitlab]
-command = "{{ROOT}}/bin/mcp-upstream-gitlab"
-args = []
+command = "{{ROOT}}/bin/bubo"
+args = ["mcp-upstream", "gitlab"]
 startup_timeout_sec = 30
 tool_timeout_sec = 120
 

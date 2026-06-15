@@ -7,11 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_deployable_tree_contains_all_runtime_assets() -> None:
     required = [
-        "bin/bubo-poller",
-        "bin/mcp-upstream-gitlab",
-        "bin/mcp-upstream-github",
-        "bin/bubo-mcp",
-        "bin/bubo-env",
+        "bin/bubo",
         "config/env.example.toml",
         "deploy/templates/codex-config.toml",
         "deploy/templates/claude-settings.json",
@@ -24,20 +20,16 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
 
     missing = [path for path in required if not (ROOT / path).exists()]
     assert missing == []
-    # The two upstream-MCP wrappers locate the actual MCP server binary on
-    # PATH (those names are upstream's, not ours — do not rename them).
-    gitlab_wrapper = (ROOT / "bin" / "mcp-upstream-gitlab").read_text()
-    assert "command -v mcp-gitlab" in gitlab_wrapper
-    assert "command -v gitlab-mcp" in gitlab_wrapper
-
-    github_wrapper = (ROOT / "bin" / "mcp-upstream-github").read_text()
-    assert "command -v github-mcp-server" in github_wrapper
-
-    # The reviewer's own MCP server uses the same uv-run launcher pattern as
-    # the other entry points.
-    own_wrapper = (ROOT / "bin" / "bubo-mcp").read_text()
-    assert "uv run --project" in own_wrapper
-    assert "bubo-mcp" in own_wrapper
+    # The bin/bubo dispatcher locates the upstream MCP server binaries on PATH
+    # (those names are upstream's, not ours — do not rename them) under its
+    # `mcp-upstream` subcommand, and runs bubo's own poller / MCP server via uv.
+    dispatcher = (ROOT / "bin" / "bubo").read_text()
+    assert "command -v mcp-gitlab" in dispatcher
+    assert "command -v gitlab-mcp" in dispatcher
+    assert "command -v github-mcp-server" in dispatcher
+    assert "uv run --project" in dispatcher
+    assert "bubo-poller" in dispatcher
+    assert "bubo-mcp" in dispatcher
 
 
 def test_cron_template_uses_separate_locks_per_role() -> None:

@@ -30,7 +30,7 @@ LoadCredential=LLM_API_KEY:/etc/bubo/credentials/llm-api-key
 Environment=GITLAB_TOKEN=%d/GITLAB_TOKEN
 Environment=LLM_API_KEY=%d/LLM_API_KEY
 
-ExecStart={{ROOT}}/bin/bubo-poller
+ExecStart={{ROOT}}/bin/bubo poll
 TimeoutStopSec=120s
 
 # Hardening — the poller does not need root or write access outside its

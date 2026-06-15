@@ -32,6 +32,16 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   [docs/operate.md](docs/operate.md), "Reply classification".
 
 ### Changed
+- **BREAKING: the `bin/` launchers are consolidated into a single `bin/bubo`
+  dispatcher.** `bin/bubo-poller`, `bin/bubo-mcp`, `bin/mcp-upstream-gitlab`,
+  `bin/mcp-upstream-github`, and `bin/bubo-env` are replaced by subcommands —
+  `bin/bubo poll`, `bin/bubo mcp`, and `bin/bubo mcp-upstream <github|gitlab>`
+  (the env-loading the former `bin/bubo-env` did is now an internal function
+  each subcommand calls). The cron/systemd templates and the Codex MCP config
+  (`codex-config.toml`) now point at `bin/bubo …`. **Migration:** re-run
+  `bubo init` so `~/.codex/config.toml` is re-stamped with the new command
+  paths, and update any hand-written cron/systemd units or MCP client config
+  that referenced the old `bin/` paths.
 - **BREAKING: agent execution is unified — `[agents].reviewer_command` is
   run directly, with no bundled wrapper.** The `bubo-codex` console script,
   `bin/bubo-codex`, and `src/bubo/codex_runner.py` are removed. Codex is now

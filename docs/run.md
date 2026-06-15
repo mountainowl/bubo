@@ -63,8 +63,8 @@ reviewer actually live.
 ```toml
 # ~/.codex/config.toml
 [mcp_servers.bubo]
-command = "/absolute/path/to/bubo/bin/bubo-mcp"
-args    = []
+command = "/absolute/path/to/bubo/bin/bubo"
+args    = ["mcp"]
 startup_timeout_sec = 20
 tool_timeout_sec    = 1800   # ≥ [review].timeout_seconds for review_change
 ```
@@ -83,7 +83,7 @@ args = [
     "-T",                                      # no pty; keeps stdout clean for MCP framing
     "-o", "ServerAliveInterval=30",            # keeps long review_change calls alive across NAT
     "bubo.example.com",                # ssh_config Host alias, or user@host
-    "/opt/bubo/bin/bubo-mcp",  # absolute path on the server
+    "/opt/bubo/bin/bubo mcp",  # absolute path on the server
 ]
 startup_timeout_sec = 30
 tool_timeout_sec    = 1800
@@ -107,7 +107,7 @@ port         = 8765
 bearer_token = "${BUBO_MCP_TOKEN}"   # generate: openssl rand -hex 32
 ```
 
-Then run `bin/bubo-mcp` (e.g. under a systemd unit). On the client:
+Then run `bin/bubo mcp` (e.g. under a systemd unit). On the client:
 
 ```toml
 # ~/.codex/config.toml — exact key for HTTP MCP servers varies across
@@ -126,12 +126,12 @@ accept that the token traverses the network in clear text.
 
 ### Upstream wrappers
 
-There are also two **upstream** MCP-server wrappers — `bin/mcp-upstream-gitlab`
-and `bin/mcp-upstream-github` — that locate the third-party GitLab / GitHub
-MCP server on `PATH` and exec it with `config/env.toml` tokens injected. The
-poster path uses these to create inline review threads; you can also point
-Codex at them directly if you want a chat-driven session with the same
-MCP surface the reviewer uses.
+The dispatcher also fronts the **upstream** MCP servers — `bin/bubo
+mcp-upstream gitlab` and `bin/bubo mcp-upstream github` — which locate the
+third-party GitLab / GitHub MCP server on `PATH` and exec it with
+`config/env.toml` tokens injected. The poster path uses these to create
+inline review threads; you can also point Codex at them directly if you want
+a chat-driven session with the same MCP surface the reviewer uses.
 
 ## How the GitHub provider talks to GitHub
 
