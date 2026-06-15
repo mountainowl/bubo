@@ -8,13 +8,10 @@ reviewer's precision — a thread resolved *after a rebuttal* looks identical
 to one resolved *because the fix landed*.
 
 This module asks an LLM to read the bot's finding plus the developer's
-reply and return a verdict. It is model-agnostic: it drives the same agent
-CLI the operator already configured for reviews. One wrinkle — the bundled
-``bin/bubo-codex`` reviewer hardwires the code-reviewer meta-prompt (it
-fetches an MR and emits findings JSON), so it cannot double as a free-form
-classifier; when that bundled default is in use we invoke the raw
-``codex exec`` profile path instead. A custom ``reviewer_command`` (e.g.
-``claude -p``) already does free-form Q&A and is reused verbatim.
+reply and return a verdict. It is model-agnostic: it runs the same
+``[agents].reviewer_command`` the operator configured for reviews, directly
+with the classification prompt. The review *contract* lives in the review
+prompt (not the command), so the same command does free-form Q&A here.
 
 A transient failure (spawn error, timeout, non-zero exit) returns the
 ``error`` sentinel so the caller leaves the finding unclassified and retries
@@ -29,7 +26,6 @@ import json
 import os
 from collections.abc import Mapping
 
-from bubo.codex_runner import codex_command
 from bubo.events import log
 from bubo.paths import ROOT
 from bubo.review_config import ReviewConfig
@@ -79,8 +75,8 @@ _ENV_ALLOWLIST = frozenset(
     }
 )
 
-# Same PATH augmentation ``bin/bubo-codex`` applies so a directly-invoked
-# ``codex`` resolves on hosts where it lives in a Homebrew / ~/.local bin.
+# PATH augmentation so a directly-invoked agent CLI (``codex``, ``claude``)
+# resolves on hosts where it lives in a Homebrew / ~/.local bin.
 _EXTRA_PATH = "/usr/local/bin:/opt/homebrew/bin"
 
 
@@ -92,24 +88,6 @@ def _error() -> JsonObject:
     return dict(_ERROR)
 
 
-def _is_bundled_codex(command: list[str]) -> bool:
-    """True when ``command`` is the bundled ``bin/bubo-codex`` reviewer."""
-    return bool(command) and os.path.basename(command[0]) == "bubo-codex"
-
-
-def classifier_command(cfg: ReviewConfig) -> list[str]:
-    """Return the agent command used for reply classification.
-
-    Smart default: the bundled ``bin/bubo-codex`` reviewer hardwires the
-    code-reviewer meta-prompt, so it cannot classify; substitute the raw
-    ``codex exec`` profile path. Any other configured ``reviewer_command``
-    already does free-form Q&A and is reused verbatim.
-    """
-    if _is_bundled_codex(cfg.reviewer_command):
-        return codex_command()
-    return list(cfg.reviewer_command)
-
-
 def classifier_env(source: Mapping[str, str]) -> dict[str, str]:
     """Build the (secret-stripped) env for the classifier subprocess."""
     env = {key: value for key, value in source.items() if key in _ENV_ALLOWLIST}
@@ -119,9 +97,6 @@ def classifier_env(source: Mapping[str, str]) -> dict[str, str]:
         path = path + ":" + os.path.join(home, ".local", "bin")
     env["PATH"] = path
     env["BUBO_ROOT"] = str(ROOT)
-    # The bundled wrapper checks this to skip its agent-config env bootstrap;
-    # harmless for non-bundled commands that ignore it.
-    env["BUBO_SKIP_AGENT_CONFIG_ENV"] = "1"
     return env
 
 
@@ -185,7 +160,7 @@ def classify_developer_reply(cfg: ReviewConfig, finding_text: str, reply_text: s
     """
     if not reply_text.strip():
         return _unclear()
-    command = classifier_command(cfg)
+    command = list(cfg.reviewer_command)
     if not command:
         return _unclear()
     prompt = build_prompt(finding_text, reply_text)

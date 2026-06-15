@@ -8,7 +8,6 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_deployable_tree_contains_all_runtime_assets() -> None:
     required = [
         "bin/bubo-poller",
-        "bin/bubo-codex",
         "bin/mcp-upstream-gitlab",
         "bin/mcp-upstream-github",
         "bin/bubo-mcp",
@@ -53,8 +52,8 @@ def test_cron_template_uses_separate_locks_per_role() -> None:
 
 def test_codex_config_carries_bubo_profile() -> None:
     config = (ROOT / "deploy" / "templates" / "codex-config.toml").read_text()
-    # codex_runner.py invokes `codex --profile bubo`; without a
-    # [profiles.bubo] block in the main config, Codex aborts with
+    # The default reviewer_command invokes `codex --profile bubo`; without
+    # a [profiles.bubo] block in the main config, Codex aborts with
     # "config profile bubo not found" and every review fails.
     assert "[profiles.bubo]" in config
     # Sanity-check the keys the wrapper depends on actually exist under

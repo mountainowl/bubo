@@ -15,7 +15,6 @@ dependencies = [
 [project.scripts]
 bubo = "bubo.cli:main"
 bubo-poller = "bubo.poller:main"
-bubo-codex = "bubo.codex_runner:main"
 bubo-mcp = "bubo.mcp_server:main"
 
 [dependency-groups]

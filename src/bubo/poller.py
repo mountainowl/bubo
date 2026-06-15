@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from bubo import github, gitlab, paths
-from bubo.config_values import ConfigError, positive_int
+from bubo.config_values import ConfigError
 from bubo.db import (
     already_seen,
     connect_db,
@@ -139,20 +139,18 @@ REVIEWER_ENV_ALLOWLIST = {
 # ---------------------------------------------------------------------------
 
 
-def reviewer_env(source: Mapping[str, str], prompt: Path, max_findings: int) -> dict[str, str]:
+def reviewer_env(source: Mapping[str, str]) -> dict[str, str]:
     """Build the env dict for the agent subprocess.
 
-    Filters ``source`` through :data:`REVIEWER_ENV_ALLOWLIST` and injects
-    the variables the agent's CLI wrapper actually needs (root path,
-    rendered prompt path, max-findings cap).
+    Filters ``source`` through :data:`REVIEWER_ENV_ALLOWLIST` — dropping
+    every credential the wrapper exported into our own environment (the
+    primary anti-exfiltration defense) — and injects ``BUBO_ROOT`` so any
+    MCP server the agent spawns via ``bin/bubo-env`` resolves the install
+    root. The review prompt (with its contract + findings cap) is passed to
+    the agent as a command argument, not via the environment.
     """
     env = {key: value for key, value in source.items() if key in REVIEWER_ENV_ALLOWLIST}
     env["BUBO_ROOT"] = str(ROOT)
-    env["BUBO_PROMPT"] = str(prompt)
-    env["LLM_REVIEW_MAX_FINDINGS"] = str(
-        positive_int(max_findings, "max_findings_per_merge_request")
-    )
-    env["BUBO_SKIP_AGENT_CONFIG_ENV"] = "1"
     return env
 
 
@@ -776,7 +774,7 @@ def worker(job: Path) -> int:
         with telemetry.span("llm_review.run", repo=project, mr_iid=iid, sha=sha, run_id=run_id):
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
             provider.checkout(cfg, project, mr, repo)
-            env = reviewer_env(os.environ, rendered_prompt, cfg.max_findings_per_merge_request)
+            env = reviewer_env(os.environ)
             result = run(
                 [*cfg.reviewer_command, provider.review_prompt(project, mr, cfg)],
                 cwd=repo,

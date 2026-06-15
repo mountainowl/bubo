@@ -13,10 +13,8 @@ def test_project_uses_uv_src_layout() -> None:
     assert (ROOT / "LICENSE").is_file()
     assert data["project"]["license"] == "MIT"
     assert (ROOT / "src" / "bubo" / "poller.py").is_file()
-    assert (ROOT / "src" / "bubo" / "codex_runner.py").is_file()
     assert data["tool"]["uv"]["package"] is True
     assert data["project"]["scripts"]["bubo-poller"] == "bubo.poller:main"
-    assert data["project"]["scripts"]["bubo-codex"] == "bubo.codex_runner:main"
 
 
 def test_project_tree_keeps_config_but_not_runtime_checkouts() -> None:

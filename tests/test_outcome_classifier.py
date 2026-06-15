@@ -11,20 +11,6 @@ def _completed(stdout: str, returncode: int = 0) -> subprocess.CompletedProcess[
     return subprocess.CompletedProcess(["agent"], returncode, stdout, None)
 
 
-def test_classifier_command_substitutes_raw_codex_for_bundled_reviewer() -> None:
-    # The default reviewer_command is the bundled bin/bubo-codex, which
-    # hardwires the code-reviewer meta-prompt and cannot classify — so the
-    # smart default falls back to the raw `codex exec` profile path.
-    command = oc.classifier_command(ReviewConfig())
-    assert command[0] == "codex"
-    assert "exec" in command
-
-
-def test_classifier_command_reuses_custom_reviewer_command() -> None:
-    cfg = ReviewConfig(reviewer_command=["claude", "-p", "--allowedTools", "Read"])
-    assert oc.classifier_command(cfg) == ["claude", "-p", "--allowedTools", "Read"]
-
-
 def test_build_prompt_includes_finding_and_reply() -> None:
     prompt = oc.build_prompt("the finding text", "the developer reply")
     assert "the finding text" in prompt

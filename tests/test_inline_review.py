@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from bubo import codex_runner, paths, poller
+from bubo import paths, poller
 from bubo.review_config import ReviewConfig
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -127,23 +127,6 @@ class InlineReviewTests(unittest.TestCase):
         self.assertIs(mocked.call_args.kwargs["stdin"], subprocess.DEVNULL)
         self.assertTrue(mocked.call_args.kwargs["start_new_session"])
 
-    def test_codex_runner_does_not_forward_stdin_to_codex(self):
-        # codex_runner now delegates to `subproc.run_bounded`, which sets
-        # stdin=DEVNULL internally. Patching the bounded helper lets us
-        # assert the codex_runner stays decoupled from real subprocess
-        # execution without depending on the underlying Popen call shape.
-        completed = subprocess.CompletedProcess(["codex"], 0, "[]", None)
-        with patch("bubo.codex_runner.run_bounded", return_value=completed) as mocked:
-            with patch.object(codex_runner, "PROMPT_FILE", ROOT / "prompts" / "00-meta.md"):
-                with tempfile.TemporaryDirectory() as tmp:
-                    with patch.object(codex_runner, "LOG_DIR", Path(tmp)):
-                        result = codex_runner.main()
-
-        self.assertEqual(0, result)
-        # run_bounded itself is the contract that sets stdin=DEVNULL —
-        # tested by the dedicated subproc test below.
-        self.assertEqual(1, mocked.call_count)
-
     def test_extract_json_findings_can_be_capped(self):
         raw = json.dumps(
             [{"file": f"src/{idx}.java", "line": idx, "body": "Fix it"} for idx in range(10)]
@@ -197,25 +180,17 @@ class InlineReviewTests(unittest.TestCase):
         self.assertIn("\n\n**Fix:** Restore", body)
         self.assertIn("\n\n**Confidence:** 0.98", body)
 
-    def test_codex_wrapper_builds_superpower_skill_task(self):
-        task = codex_runner.review_task_prompt("Review MR 269")
+    def test_default_reviewer_command_is_noninteractive_codex(self):
+        from bubo.review_config import DEFAULT_REVIEWER_COMMAND
 
-        self.assertIn("/using-superpowers", task)
-        self.assertIn("$code-reviewer", task)
-        self.assertIn("GitLab MCP", task)
-        self.assertIn("Review MR 269", task)
-
-    def test_codex_wrapper_uses_configured_noninteractive_defaults(self):
-        cmd = codex_runner.codex_command()
-
+        cmd = DEFAULT_REVIEWER_COMMAND
         self.assertEqual("codex", cmd[0])
         self.assertIn("--ask-for-approval", cmd)
         self.assertIn("never", cmd)
+        self.assertIn("exec", cmd)
         self.assertIn("--profile", cmd)
         self.assertIn("bubo", cmd)
-        self.assertNotIn("--output-schema", cmd)
         self.assertIn("--skip-git-repo-check", cmd)
-        self.assertNotIn("--output-last-message", cmd)
 
     def test_extract_json_findings_from_codex_transcript_with_duplicate_arrays(self):
         raw = """OpenAI Codex v0.132.0
@@ -300,11 +275,12 @@ No findings for optional categories: []
             "ANTHROPIC_API_KEY": "anthropic-secret",
         }
 
-        env = poller.reviewer_env(source, Path("/tmp/prompt.md"), 8)
+        env = poller.reviewer_env(source)
 
         self.assertEqual("/usr/bin", env["PATH"])
-        self.assertEqual("/tmp/prompt.md", env["BUBO_PROMPT"])
-        self.assertEqual("8", env["LLM_REVIEW_MAX_FINDINGS"])
+        self.assertIn("BUBO_ROOT", env)
+        self.assertNotIn("BUBO_PROMPT", env)
+        self.assertNotIn("LLM_REVIEW_MAX_FINDINGS", env)
         self.assertNotIn("GITLAB_TOKEN", env)
         self.assertNotIn("OPENAI_API_KEY", env)
         self.assertNotIn("ANTHROPIC_API_KEY", env)
@@ -442,23 +418,6 @@ enabled = true
 
         self.assertIn("Maximum 8 findings total", rendered)
         self.assertNotIn("{{MAX_FINDINGS_PER_REVIEW}}", rendered)
-
-    def test_codex_runner_reads_new_max_findings_config_name(self):
-        original_config = codex_runner.ENV_CONFIG
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                codex_runner.ENV_CONFIG = Path(tmp) / "env.toml"
-                codex_runner.ENV_CONFIG.write_text(
-                    """
-[review]
-max_findings_per_merge_request = 9
-""",
-                    encoding="utf-8",
-                )
-
-                self.assertEqual(9, codex_runner.configured_max_findings())
-            finally:
-                codex_runner.ENV_CONFIG = original_config
 
     def test_extract_json_findings_from_fenced_block(self):
         raw = '```json\n[{"file":"src/A.java","line":12,"body":"Fix it"}]\n```'

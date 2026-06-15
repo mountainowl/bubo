@@ -5,9 +5,9 @@ Two interfaces on either stdio or HTTP transport:
 * **Metrics** — ``health``, ``list_recent_reviews``, ``get_review``,
   ``get_findings``, ``get_finding_outcomes``, ``get_metrics``. Read-only
   against the SQLite state :mod:`bubo.db` owns.
-* **Review** — ``review_change`` shells out to ``bubo-codex`` for
-  one MR/PR (by URL or ``(provider, project, number)``) and returns the
-  parsed findings JSON.
+* **Review** — ``review_change`` runs the configured
+  ``[agents].reviewer_command`` against one MR/PR (by URL or
+  ``(provider, project, number)``) and returns the parsed findings JSON.
 
 MCP-triggered reviews intentionally do not write to ``reviewed_mrs``, so
 the metrics tools reflect only poller-driven reviews. This keeps ad-hoc
@@ -35,21 +35,21 @@ import os
 import re
 import secrets
 import time
+from dataclasses import replace
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from bubo import db
-from bubo.codex_runner import configured_timeout_seconds
 from bubo.config_values import ConfigError
 from bubo.events import log
 from bubo.paths import CONFIG as ENV_CONFIG
-from bubo.paths import ROOT
 from bubo.review_config import (
     DEFAULT_PROVIDER,
     SUPPORTED_PROVIDERS,
     load_review_config,
 )
+from bubo.scm import get_provider
 from bubo.secrets import redact_secrets
 from bubo.subproc import run_bounded
 
@@ -115,18 +115,6 @@ def _resolve_provider(provider: str) -> str:
             f"provider must be one of {SUPPORTED_PROVIDERS} or 'auto', got {provider!r}"
         )
     return provider
-
-
-def _build_review_task(provider: str, project: str, number: int) -> str:
-    """Render the free-form task string the meta-prompt agent expects.
-
-    The string is intentionally close to how a human would type the
-    request — the Superpowers ``$code-reviewer`` skill parses it and
-    drives the right MCP server (GitLab vs GitHub) under the hood.
-    """
-    if provider == "gitlab":
-        return f"Review GitLab merge request !{number} in project {project}."
-    return f"Review GitHub pull request #{number} in repository {project}."
 
 
 def _extract_findings(raw_output: str) -> list[dict[str, Any]] | None:
@@ -311,7 +299,7 @@ def review_change(
         project: Project path-with-namespace (GitLab) or
             ``owner/repo`` (GitHub).
         timeout_seconds: Wall-clock budget for the underlying
-            ``bubo-codex`` subprocess. Defaults to
+            ``reviewer_command`` subprocess. Defaults to
             ``[review].timeout_seconds`` from ``config/env.toml``
             (typically 1800).
 
@@ -334,12 +322,16 @@ def review_change(
             "must provide either `url` or (`project` and `number`); "
             f"got provider={provider!r}, project={project!r}, number={number!r}"
         )
-    timeout = int(timeout_seconds) if timeout_seconds is not None else configured_timeout_seconds()
-
-    task = _build_review_task(provider, project, number)
-    launcher = ROOT / "bin" / "bubo-codex"
+    # Build the same contract-carrying prompt the poller uses, then run the
+    # operator's configured reviewer_command directly (no bundled wrapper).
+    cfg = replace(load_review_config(ENV_CONFIG), provider=provider)
+    scm = get_provider(cfg)
+    token = scm.token()
+    change = scm.get_change(cfg, token, project, number)
+    prompt = scm.review_prompt(project, change, cfg)
+    timeout = int(timeout_seconds) if timeout_seconds is not None else cfg.timeout_seconds
     started = time.monotonic()
-    result = run_bounded([str(launcher), task], timeout=timeout)
+    result = run_bounded([*cfg.reviewer_command, prompt], timeout=timeout)
     duration = time.monotonic() - started
     raw = redact_secrets(result.stdout or "")
 

@@ -1,7 +1,7 @@
 """Single source of truth for filesystem paths used at runtime.
 
 Every Python entry point computes these the same way, so the poller, the
-worker fork, the codex_runner, and the test suite all agree on where state,
+worker fork, the MCP server, and the test suite all agree on where state,
 work directories, and logs live.
 
 Two override hooks:
@@ -67,13 +67,9 @@ JOBS = _STATE / "jobs"
 LOGS = _STATE / "log"
 RENDERED_PROMPTS = _STATE / "rendered-prompts"
 
-# Install-root-relative (never moves).
-DEFAULT_REVIEWER = ROOT / "bin" / "bubo-codex"
-
 __all__ = [
     "CONFIG",
     "DB",
-    "DEFAULT_REVIEWER",
     "JOBS",
     "LOGS",
     "RENDERED_PROMPTS",

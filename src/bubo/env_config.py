@@ -153,10 +153,9 @@ def runtime_env(root: Path, cfg: dict[str, Any]) -> dict[str, str]:
 
     gitlab_url = str(gitlab.get("url", "https://gitlab.com")).rstrip("/")
     base_dir = _path_value(root, poller.get("state_dir", "var"))
-    prompt = _path_value(root, agent.get("prompt_file", "prompts/00-meta.md"))
-    # Manual-wrapper dry-run flag for `bubo-codex`. Independent
-    # from `[review].dry_run`, which controls the poller's posting
-    # behavior.
+    # Dry-run hint exported as REVIEW_DRY_RUN for the review agent CLI.
+    # Independent from `[review].dry_run`, which controls the poller's own
+    # posting behavior.
     manual_dry_run = agent.get("dry_run", True)
     exports = {
         "BUBO_ROOT": str(root),
@@ -164,7 +163,6 @@ def runtime_env(root: Path, cfg: dict[str, Any]) -> dict[str, str]:
         # state_dir; paths.py reads it at import time. Always exported so
         # forked workers inherit the same view.
         "BUBO_BASE_DIR": str(base_dir),
-        "BUBO_PROMPT": str(prompt),
         "REVIEW_MODEL": str(agent.get("llm_model", "gpt-5.5")),
         "REVIEW_REASONING_EFFORT": str(agent.get("reasoning_effort", "medium")),
         "REVIEW_DRY_RUN": _bool_text(manual_dry_run),

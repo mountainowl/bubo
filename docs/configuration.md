@@ -137,7 +137,7 @@ credentials live in that one TOML file.
     <tr>
       <td><code>dry_run</code></td>
       <td><code>true</code></td>
-      <td>Dry-run default for the manual <code>bubo-codex</code> wrapper, separate from <code>[review].dry_run</code> which controls poller posting.</td>
+      <td>Dry-run hint exported to the review agent as <code>REVIEW_DRY_RUN</code>, separate from <code>[review].dry_run</code> which controls poller posting.</td>
     </tr>
     <tr>
       <td><code>codex_profile</code></td>

@@ -158,11 +158,11 @@ LLM to read the bot's finding plus the reply and decide whether it was
 **accepted** or **rejected**; a rejection sets `disputed` (and
 `false_positive` when the reply says the finding is factually wrong).
 
-- **Model-agnostic.** Classification reuses the agent you configured in
-  `[agents].reviewer_command`. The bundled `bin/bubo-codex` is hardwired
-  for code review, so when it's in use the classifier transparently falls
-  back to the raw `codex exec --profile bubo` path; any custom command
-  (e.g. `claude -p`) is reused as-is.
+- **Model-agnostic.** Classification runs the same agent you configured in
+  `[agents].reviewer_command` (the default is `codex exec --profile bubo`;
+  a custom command such as `claude -p` is reused as-is). The review contract
+  lives in the review prompt, not the command, so the same command does the
+  free-form accept/reject judgement here.
 - **Classified once.** Each finding is classified a single time (tracked by
   the `reply_classified` column) to bound LLM cost across the hourly sync.
   A reply that arrives *after* the first classification is not re-graded.

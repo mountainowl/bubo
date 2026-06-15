@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import pytest
 
-from bubo import codex_runner
 from bubo.config_values import ConfigError
 from bubo.env_config import expand_env_placeholders, read_config_file, runtime_env
 
@@ -121,7 +120,6 @@ def test_runtime_env_exports_from_env_toml() -> None:
     # BUBO_ROOT covers the same intent.
     assert "BUBO_HOME" not in env
     assert env["BUBO_BASE_DIR"] == "/opt/bubo/var"
-    assert env["BUBO_PROMPT"] == "/opt/bubo/prompts/00-meta.md"
     assert env["REVIEW_MODEL"] == "gpt-test"
     assert env["REVIEW_REASONING_EFFORT"] == "high"
     assert env["REVIEW_DRY_RUN"] == "false"
@@ -226,28 +224,3 @@ enabled = true
     cfg = read_config_file(env_file)
 
     assert cfg["projects"] == [{"path": "example/enabled-repo", "enabled": True}]
-
-
-def test_codex_runner_skip_agent_config_env_does_not_export_secrets(tmp_path: Path) -> None:
-    env_file = tmp_path / "env.toml"
-    env_file.write_text(
-        """
-[gitlab]
-token = "gitlab-secret"
-
-[agents]
-llm_api_key = "llm-secret"
-""",
-        encoding="utf-8",
-    )
-    original_config = codex_runner.ENV_CONFIG
-    try:
-        codex_runner.ENV_CONFIG = env_file
-        with patch.dict(os.environ, {"BUBO_SKIP_AGENT_CONFIG_ENV": "1"}, clear=True):
-            codex_runner.load_runtime_config()
-
-            assert "GITLAB_TOKEN" not in os.environ
-            assert "OPENAI_API_KEY" not in os.environ
-            assert "LLM_API_KEY" not in os.environ
-    finally:
-        codex_runner.ENV_CONFIG = original_config

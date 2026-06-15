@@ -1,10 +1,12 @@
 # Run
 
-One-off review of the current checkout (manual; no GitLab interaction beyond
-the agent's own MCP calls):
+One-off review of the current checkout — run your configured review agent
+directly with a task (the bundled default is Codex; no GitLab interaction
+beyond the agent's own MCP calls):
 
 ```sh
-uv run bubo-codex "Review the current changes."
+codex --ask-for-approval never exec --profile bubo --skip-git-repo-check \
+  "Review the current changes."
 ```
 
 The GitLab poller (one cycle):
@@ -43,7 +45,7 @@ fresh review by URL or `(provider, project, number)`.
 
 `provider="auto"` (the default) infers the provider from the URL when one is
 given, otherwise falls back to `[scm].provider` in `config/env.toml`.
-`review_change` blocks until the underlying `bubo-codex` subprocess
+`review_change` blocks until the underlying `reviewer_command` subprocess
 completes — set the client-side `tool_timeout_sec` accordingly. **MCP-triggered
 reviews return findings inline; they do not write to `reviewed_mrs`**, so
 they will not show up in the metrics tools. Use the poller for state-tracked

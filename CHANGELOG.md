@@ -19,9 +19,9 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   marker, `--sync-outcomes` now asks an LLM to read the finding plus the
   reply and decide; a rejection sets `disputed` (and `false_positive` when
   the reply says the finding is factually wrong). Model-agnostic — it
-  reuses `[agents].reviewer_command`, falling back to the raw
-  `codex exec --profile bubo` path when the bundled `bin/bubo-codex`
-  (hardwired for code review) is configured. Each finding is classified
+  reuses `[agents].reviewer_command` (the default is
+  `codex exec --profile bubo`; any prompt-taking CLI such as `claude -p`
+  works too). Each finding is classified
   once (new `finding_outcomes.reply_classified` column) to bound cost, and
   classifications are capped per sync run so the first post-upgrade sync
   cannot fire the whole backlog at once (it drains over later runs).
@@ -32,6 +32,23 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   [docs/operate.md](docs/operate.md), "Reply classification".
 
 ### Changed
+- **BREAKING: agent execution is unified — `[agents].reviewer_command` is
+  run directly, with no bundled wrapper.** The `bubo-codex` console script,
+  `bin/bubo-codex`, and `src/bubo/codex_runner.py` are removed. Codex is now
+  just another configured command: the default `reviewer_command` is
+  `codex --ask-for-approval never exec --profile bubo --skip-git-repo-check`
+  (the same invocation the wrapper used), and any agent CLI that takes a
+  prompt argument (e.g. `claude -p`) is configured the same way. The review
+  contract + skill instruction travel in the review prompt (`REVIEW_CONTRACT`
+  via `provider.review_prompt`), so Codex loads the `code-reviewer` skill
+  without the wrapper — verified against live public-repo reviews. The MCP
+  `review_change` tool now builds that same contract-carrying prompt instead
+  of a bespoke task string. The poller's `reviewer_env` no longer exports the
+  now-dead `BUBO_PROMPT` / `LLM_REVIEW_MAX_FINDINGS` / `BUBO_SKIP_AGENT_CONFIG_ENV`.
+  **Migration:** anyone who invoked `bubo-codex` / `bin/bubo-codex` directly
+  should run the configured agent instead (e.g.
+  `codex exec --profile bubo "Review the current changes."`); default poller
+  and reply-classifier behavior is unchanged.
 - **`bin/env` renamed to `bin/bubo-env`.** The shared environment-loader
   launcher now follows the `bubo-*` naming convention and no longer shadows
   the system `env` command. All bundled launchers reference the new path;

@@ -22,6 +22,7 @@ from unittest.mock import patch
 import pytest
 
 from bubo import db, mcp_server, paths
+from bubo.review_config import ReviewConfig
 from bubo.statuses import FindingStatus, ReviewStatus
 
 
@@ -364,16 +365,25 @@ def test_resolve_provider_rejects_unknown_explicit_provider() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_review_task_uses_provider_specific_phrasing() -> None:
-    gitlab_task = mcp_server._build_review_task("gitlab", "g/p", 9)
-    assert "GitLab merge request" in gitlab_task
-    assert "!9" in gitlab_task
-    assert "g/p" in gitlab_task
+class _FakeReviewProvider:
+    """Stand-in SCM provider for review_change tests.
 
-    github_task = mcp_server._build_review_task("github", "o/r", 12)
-    assert "GitHub pull request" in github_task
-    assert "#12" in github_task
-    assert "o/r" in github_task
+    review_change now builds the contract-carrying prompt via
+    ``provider.review_prompt`` (like the poller) and runs the configured
+    ``reviewer_command``; these tests mock the provider + the subprocess.
+    """
+
+    def __init__(self, prompt: str = "REVIEW PROMPT") -> None:
+        self._prompt = prompt
+
+    def token(self) -> str:
+        return "tok"
+
+    def get_change(self, cfg, token, project, number):
+        return {"web_url": f"https://example/{project}/{number}"}
+
+    def review_prompt(self, project, change, cfg) -> str:
+        return self._prompt
 
 
 # ---------------------------------------------------------------------------
@@ -404,13 +414,19 @@ def test_extract_findings_rejects_non_array_json() -> None:
 
 
 def test_review_change_dispatches_with_parsed_url() -> None:
-    captured: dict[str, list[str]] = {}
+    captured: dict[str, object] = {}
 
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         captured["args"] = args
+        captured["timeout"] = kwargs.get("timeout")
         return subprocess.CompletedProcess(args, 0, '[{"title": "ok"}]', None)
 
-    with patch("bubo.mcp_server.run_bounded", side_effect=fake_run):
+    cfg = ReviewConfig(reviewer_command=["codex", "exec"], timeout_seconds=1800)
+    with (
+        patch("bubo.mcp_server.load_review_config", return_value=cfg),
+        patch("bubo.mcp_server.get_provider", return_value=_FakeReviewProvider()),
+        patch("bubo.mcp_server.run_bounded", side_effect=fake_run),
+    ):
         result = mcp_server.review_change(
             url="https://github.com/owner/repo/pull/5", timeout_seconds=10
         )
@@ -421,11 +437,12 @@ def test_review_change_dispatches_with_parsed_url() -> None:
     assert result["exit_code"] == 0
     assert result["findings"] == [{"title": "ok"}]
     assert "raw_output" in result
-    # The task string handed to bubo-codex must include the PR
-    # number and project so the agent knows what to fetch.
-    assert captured["args"][0].endswith("/bin/bubo-codex")
-    assert "#5" in captured["args"][1]
-    assert "owner/repo" in captured["args"][1]
+    # review_change runs the configured reviewer_command with the
+    # contract-carrying review prompt (provider.review_prompt), not a
+    # bundled review wrapper.
+    assert captured["args"][:2] == ["codex", "exec"]
+    assert captured["args"][-1] == "REVIEW PROMPT"
+    assert captured["timeout"] == 10
 
 
 def test_review_change_requires_url_or_project_plus_number() -> None:
@@ -437,7 +454,12 @@ def test_review_change_returns_raw_output_when_findings_unparseable() -> None:
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args, 1, "Codex crashed mid-stream", None)
 
-    with patch("bubo.mcp_server.run_bounded", side_effect=fake_run):
+    cfg = ReviewConfig(reviewer_command=["codex", "exec"], timeout_seconds=1800)
+    with (
+        patch("bubo.mcp_server.load_review_config", return_value=cfg),
+        patch("bubo.mcp_server.get_provider", return_value=_FakeReviewProvider()),
+        patch("bubo.mcp_server.run_bounded", side_effect=fake_run),
+    ):
         result = mcp_server.review_change(
             provider="gitlab", project="g/p", number=1, timeout_seconds=10
         )
@@ -779,7 +801,12 @@ def test_review_change_redacts_bearer_from_raw_output() -> None:
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args, 0, leaked, None)
 
-    with patch("bubo.mcp_server.run_bounded", side_effect=fake_run):
+    cfg = ReviewConfig(reviewer_command=["codex", "exec"], timeout_seconds=1800)
+    with (
+        patch("bubo.mcp_server.load_review_config", return_value=cfg),
+        patch("bubo.mcp_server.get_provider", return_value=_FakeReviewProvider()),
+        patch("bubo.mcp_server.run_bounded", side_effect=fake_run),
+    ):
         result = mcp_server.review_change(
             provider="github", project="o/r", number=1, timeout_seconds=10
         )

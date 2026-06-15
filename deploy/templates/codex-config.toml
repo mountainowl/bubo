@@ -11,9 +11,9 @@ memories = false
 [shell_environment_policy]
 inherit = "all"
 
-# Codex profile invoked by the review wrapper as
-#   codex --profile bubo exec ...
-# (see src/bubo/codex_runner.py and [agents].codex_profile in
+# Codex profile used by the default reviewer_command as
+#   codex --ask-for-approval never exec --profile bubo ...
+# (see [agents].reviewer_command / [agents].codex_profile in
 # config/env.toml). MUST live in the main config under [profiles.NAME] —
 # Codex does NOT auto-load `~/.codex/<NAME>.config.toml` for `--profile`,
 # despite what the filename suggests. Edits here change every review run
@@ -51,7 +51,7 @@ command = "{{ROOT}}/bin/bubo-mcp"
 args = []
 startup_timeout_sec = 20
 # Must be >= [review].timeout_seconds because `review_change` blocks on
-# the underlying bubo-codex subprocess. The read-only metrics
+# the underlying reviewer_command subprocess. The read-only metrics
 # tools complete in milliseconds so the long ceiling costs nothing.
 tool_timeout_sec = 1800
 

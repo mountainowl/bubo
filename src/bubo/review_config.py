@@ -33,7 +33,7 @@ from bubo.config_values import (
     text_value,
 )
 from bubo.env_config import apply_runtime_env, read_config_file
-from bubo.paths import DEFAULT_REVIEWER, ROOT
+from bubo.paths import ROOT
 from bubo.telemetry import TelemetryConfig, telemetry_config_from_dict
 
 # Default minimum confidence for posting a finding. Findings with a numeric
@@ -44,6 +44,23 @@ DEFAULT_MIN_CONFIDENCE = 0.85
 # Supported source-control providers. Selected via ``[scm].provider``.
 SUPPORTED_PROVIDERS = ("gitlab", "github")
 DEFAULT_PROVIDER = "gitlab"
+
+# Default review agent. The configured CLI is run directly with the review
+# prompt (which carries the review contract + skill instruction via
+# ``REVIEW_CONTRACT``); there is no bundled wrapper. The default is Codex in
+# non-interactive ``exec`` mode against the ``bubo`` profile, but any CLI that
+# takes a prompt argument (e.g. ``claude -p ...``) can be set via
+# ``[agents].reviewer_command``. ``CODEX_REVIEW_PROFILE`` overrides the profile.
+DEFAULT_CODEX_PROFILE = os.environ.get("CODEX_REVIEW_PROFILE", "bubo")
+DEFAULT_REVIEWER_COMMAND = [
+    "codex",
+    "--ask-for-approval",
+    "never",
+    "exec",
+    "--profile",
+    DEFAULT_CODEX_PROFILE,
+    "--skip-git-repo-check",
+]
 
 # Default body of the change-level comment posted when a review finds nothing.
 # Operators override via ``[agents].no_findings_comment_body``. Kept
@@ -92,8 +109,9 @@ class ReviewConfig:
         If set, the poller only reviews this single MR IID. Intended for
         manual debugging. (Field name matches the TOML key exactly.)
     reviewer_command:
-        Argv prefix for the review subprocess (typically
-        ``["bin/bubo-codex"]``).
+        Argv prefix for the review subprocess — the operator's agent CLI,
+        run directly with the review prompt as the final argument (defaults
+        to :data:`DEFAULT_REVIEWER_COMMAND`, a ``codex exec`` invocation).
     model:
         Model identifier used for cost-attribution metric labels.
     post_summary:
@@ -138,7 +156,7 @@ class ReviewConfig:
     max_findings_per_merge_request: int = 5
     timeout_seconds: int = 1800
     target_merge_request_iid: int | None = None
-    reviewer_command: list[str] = field(default_factory=lambda: [str(DEFAULT_REVIEWER)])
+    reviewer_command: list[str] = field(default_factory=lambda: list(DEFAULT_REVIEWER_COMMAND))
     model: str | None = None
     post_summary: bool = False
     telemetry_config: TelemetryConfig = field(default_factory=TelemetryConfig)
@@ -225,7 +243,7 @@ def review_config_from_dict(
         timeout_seconds=positive_int(review.get("timeout_seconds", 1800), "timeout_seconds"),
         target_merge_request_iid=int(target_iid) if target_iid is not None else None,
         reviewer_command=[
-            str(item) for item in agent.get("reviewer_command", [str(DEFAULT_REVIEWER)])
+            str(item) for item in agent.get("reviewer_command", DEFAULT_REVIEWER_COMMAND)
         ],
         model=str(agent["llm_model"]) if agent.get("llm_model") else None,
         telemetry_config=telemetry_config,
