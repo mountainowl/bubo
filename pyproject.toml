@@ -25,7 +25,7 @@ dev = [
   "mypy>=1.18.2",
   "pre-commit>=4.5.0",
   "pytest>=9.0.1",
-  "ruff>=0.15.16",
+  "ruff>=0.15.17",
 ]
 # Documentation site published to GitHub Pages from docs/ via
 # .github/workflows/deploy-docs.yml. Pinned loosely — the docs are
