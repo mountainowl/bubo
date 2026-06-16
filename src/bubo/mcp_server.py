@@ -273,6 +273,56 @@ def get_metrics(since_hours: int = 24, project: str | None = None) -> dict[str, 
 
 
 @mcp.tool()
+def get_governance_report(
+    since_hours: int = 24,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+) -> dict[str, Any]:
+    """Build the nested governance report for the requested window.
+
+    Unlike the other read tools, this does **not** call ``db.init_db()`` —
+    reporting is strictly read-only and must never create or migrate the
+    state DB. If the DB is absent the underlying readers raise (e.g.
+    ``sqlite3.OperationalError`` / ``FileNotFoundError``) and that error
+    surfaces to the caller rather than being masked.
+
+    Args:
+        since_hours: Look-back window in hours (default 24). Ignored when
+            ``since`` is supplied.
+        since: Optional ISO-8601 start of the reporting window; overrides
+            ``since_hours``.
+        until: Optional ISO-8601 end of the reporting window (default: now).
+        project: Optional exact-match project filter (GitLab
+            path-with-namespace or GitHub ``owner/repo``).
+
+    Returns a dict with one key per report section:
+
+    * ``meta`` — the resolved query parameters (window bounds, project
+      filter) and report-generation metadata.
+    * ``reviews`` — per-review rollup over ``reviewed_mrs`` in the window
+      (counts, status breakdown).
+    * ``provenance`` — where reviewed changes came from (provider /
+      project attribution).
+    * ``outcomes`` — per-finding resolution state (resolved / disputed /
+      false-positive / duplicate / merged-unresolved).
+    * ``noise_trend`` — how finding volume and noise are trending across
+      the window.
+    * ``roi`` — return-on-investment view: findings acted on versus LLM
+      tokens and cost spent.
+    * ``policy_decisions`` — governance/policy gate decisions recorded for
+      the window.
+    * ``audit`` — the flat, row-level audit trail (the section ``to_csv``
+      defaults to exporting).
+    """
+    from bubo import report
+
+    return report.build_report(
+        since_hours=since_hours, since=since, until=until, project=project
+    )
+
+
+@mcp.tool()
 def review_change(
     url: str | None = None,
     number: int | None = None,
@@ -472,6 +522,7 @@ def main() -> None:
 __all__ = [
     "get_finding_outcomes",
     "get_findings",
+    "get_governance_report",
     "get_metrics",
     "get_review",
     "health",

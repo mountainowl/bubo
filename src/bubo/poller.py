@@ -61,6 +61,7 @@ from bubo.db import (
     prompt_version,
     record_finding_outcome,
     record_finding_outcome_sync_attempt,
+    record_governance_decision,
     record_provenance,
     record_review_run_finish,
     record_review_run_start,
@@ -76,13 +77,19 @@ from bubo.findings import (
     finding_body,
     finding_fingerprint,
 )
+from bubo.governance_policy import (
+    POLICY_OFF,
+    evaluate_policy,
+    heightened_scrutiny_directive,
+    is_escalated,
+)
 from bubo.hash_utils import stable_hash
 from bubo.mcp import call_tool as mcp_call_tool
 from bubo.outcome_classifier import classify_developer_reply
 from bubo.paths import CONFIG, ROOT
 from bubo.prompt import render_meta_prompt as _render_meta_prompt
 from bubo.prompt import write_rendered_meta_prompt as write_rendered_prompt_file
-from bubo.provenance import compile_patterns, compute_provenance
+from bubo.provenance import ProvenanceSignal, compile_patterns, compute_provenance
 from bubo.review_config import ReviewConfig, load_review_config, review_config_from_dict
 from bubo.scm import ScmProvider, get_provider
 from bubo.secrets import redact_secrets
@@ -552,24 +559,29 @@ def capture_provenance(
     token: str,
     project: str,
     number: int,
+    sha: str,
     run_id: str,
     provider: ScmProvider,
     telemetry: ReviewTelemetry | None = None,
-) -> None:
-    """Record per-change provenance for governance/audit (opt-in, off by default).
+) -> tuple[ProvenanceSignal, str] | None:
+    """Capture provenance + evaluate governance policy (opt-in, off by default).
 
-    Phase 1 of the governance feature: deterministic, declaration-first
-    provenance. Reads the change's commit trailers + changed paths, computes a
-    *banded* signal (never a verdict), and persists it write-once onto the
-    ``review_runs`` row. **Changes no review behavior.**
+    Computes the change's provenance signal once and, per the enabled
+    capabilities, (1) persists it write-once for audit (``capture_provenance``),
+    (2) returns a heightened-scrutiny directive to inject into the review prompt
+    when the change escalates (``rigor_modulation``), and (3) records an
+    advisory, write-once governance decision (``policy_mode != off``). All are
+    **advisory** — bubo never blocks a merge.
 
-    The commit/diff fetches happen only when ``capture_provenance`` is enabled
-    (so a disabled install makes zero extra API calls), and any failure is
-    soft — a provenance hiccup must never fail a review.
+    Returns ``(signal, directive)`` where ``directive`` is the prompt suffix
+    (``""`` when rigor is off or the change did not escalate), or ``None`` when
+    governance is disabled or any step soft-fails — a governance hiccup must
+    never fail a review. The commit/diff fetch happens only when governance is
+    enabled, so a disabled install makes zero extra API calls.
     """
     governance = cfg.governance_config
-    if not governance.capture_provenance:
-        return
+    if not governance.enabled:
+        return None
     try:
         commits = provider.list_commits(cfg, token, project, number)
         messages = [str(commit.get("message") or "") for commit in commits]
@@ -580,21 +592,58 @@ def capture_provenance(
             trailer_patterns=compile_patterns(governance.ai_trailer_patterns),
             sensitive_globs=governance.sensitive_path_globs,
         )
-        record_provenance(run_id, signal)
-        log(
-            "provenance_captured",
-            project=project,
-            iid=number,
-            run_id=run_id,
-            band=signal.band,
-            source=signal.source,
-            confidence=signal.confidence,
-            ai_signals=len(signal.ai_signals),
-            sensitive_paths=signal.sensitive_paths,
-        )
-        if telemetry is not None:
-            telemetry.record_provenance(repo=project, band=signal.band, source=signal.source)
-    except Exception as exc:  # provenance is additive — never fail the review
+        if governance.capture_provenance:
+            record_provenance(run_id, signal)
+            log(
+                "provenance_captured",
+                project=project,
+                iid=number,
+                run_id=run_id,
+                band=signal.band,
+                source=signal.source,
+                confidence=signal.confidence,
+                ai_signals=len(signal.ai_signals),
+                sensitive_paths=signal.sensitive_paths,
+            )
+            if telemetry is not None:
+                telemetry.record_provenance(repo=project, band=signal.band, source=signal.source)
+        directive = ""
+        if governance.rigor_modulation and is_escalated(
+            signal,
+            escalate_bands=governance.escalate_bands,
+            require_sensitive=governance.rigor_require_sensitive,
+        ):
+            directive = heightened_scrutiny_directive()
+        if governance.policy_mode != POLICY_OFF:
+            decision = evaluate_policy(
+                signal,
+                mode=governance.policy_mode,
+                escalate_bands=governance.escalate_bands,
+                require_sensitive=governance.rigor_require_sensitive,
+                rigor_injected=bool(directive),
+            )
+            record_governance_decision(
+                run_id, project=project, iid=number, sha=sha, decision=decision
+            )
+            log(
+                "governance_decision",
+                project=project,
+                iid=number,
+                run_id=run_id,
+                mode=decision.mode,
+                action=decision.action,
+                triggered=decision.triggered,
+                matched_rule=decision.matched_rule,
+                rigor_injected=decision.rigor_injected,
+                band=decision.band,
+                sensitive_paths=decision.sensitive_paths,
+            )
+            if telemetry is not None:
+                telemetry.record_governance(
+                    repo=project, mode=decision.mode, action=decision.action
+                )
+        return (signal, directive)
+    except Exception as exc:  # governance is advisory — never fail the review
         log(
             "provenance_capture_failed",
             project=project,
@@ -602,6 +651,7 @@ def capture_provenance(
             run_id=run_id,
             error=redact_secrets(str(exc)),
         )
+        return None
 
 
 def post_or_plan_findings(
@@ -848,21 +898,27 @@ def worker(job: Path) -> int:
         with telemetry.span("llm_review.run", repo=project, mr_iid=iid, sha=sha, run_id=run_id):
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
             provider.checkout(cfg, project, mr, repo)
-            # Opt-in governance provenance capture (off by default). Records a
-            # banded provenance signal for the change; no-op + no API calls
-            # unless enabled. Runs regardless of whether findings exist.
-            capture_provenance(
+            # Opt-in governance (off by default). Captures provenance and
+            # evaluates the policy gate; returns a heightened-scrutiny directive
+            # to inject into the prompt when the change escalates. No-op + no API
+            # calls unless enabled; soft-fails so it never breaks a review.
+            governance = capture_provenance(
                 cfg,
                 token=token,
                 project=project,
                 number=iid,
+                sha=sha,
                 run_id=run_id,
                 provider=provider,
                 telemetry=telemetry,
             )
+            extra_directive = governance[1] if governance else ""
             env = reviewer_env(os.environ)
             result = run(
-                [*cfg.reviewer_command, provider.review_prompt(project, mr, cfg)],
+                [
+                    *cfg.reviewer_command,
+                    provider.review_prompt(project, mr, cfg, extra_directive=extra_directive),
+                ],
                 cwd=repo,
                 timeout=cfg.timeout_seconds,
                 env=env,

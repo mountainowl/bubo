@@ -39,6 +39,8 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         "reviewer",
         "provenance_band",
         "provenance_source",
+        "governance_mode",
+        "governance_action",
     }
 )
 
@@ -47,6 +49,8 @@ _SAFE_LABEL = re.compile(r"^[A-Za-z0-9_.:/-]{1,64}$")
 _ENUM_VALUES = {
     "finding_type": {"issue", "suggestion", "question", "unknown"},
     "severity": {"blocking", "non-blocking", "unknown"},
+    "governance_mode": {"off", "report-only", "soft", "unknown"},
+    "governance_action": {"clear", "flag", "unknown"},
 }
 SpanAttribute = (
     str | bool | int | float | Sequence[str] | Sequence[bool] | Sequence[int] | Sequence[float]
@@ -88,6 +92,7 @@ class ReviewTelemetry:
         self._cost = _safe_instrument(self.meter.create_counter, "llm_review.cost.usd")
         self._failures = _safe_instrument(self.meter.create_counter, "llm_review.failures")
         self._provenance = _safe_instrument(self.meter.create_counter, "llm_review.provenance")
+        self._governance = _safe_instrument(self.meter.create_counter, "llm_review.governance")
         self._review_duration = _safe_instrument(
             self.meter.create_histogram,
             "llm_review.latency.review_seconds",
@@ -180,6 +185,13 @@ class ReviewTelemetry:
             self._provenance,
             1,
             metric_attrs(repo=repo, provenance_band=band, provenance_source=source),
+        )
+
+    def record_governance(self, *, repo: str, mode: str, action: str) -> None:
+        self._add(
+            self._governance,
+            1,
+            metric_attrs(repo=repo, governance_mode=mode, governance_action=action),
         )
 
     def record_failure(self, *, repo: str, error_type: str, operation: str) -> None:

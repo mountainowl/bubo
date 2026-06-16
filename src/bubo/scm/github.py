@@ -226,10 +226,13 @@ class GitHubProvider:
             comment, replies, bot_username=bot_username, pr_state=pr_state
         )
 
-    def review_prompt(self, project: str, change: JsonObject, cfg: ReviewConfig) -> str:
+    def review_prompt(
+        self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
+    ) -> str:
         contract = REVIEW_CONTRACT.format(max_findings=cfg.max_findings_per_merge_request)
         head = change.get("head") or {}
         base = change.get("base") or {}
+        suffix = f"\n\n{extra_directive}" if extra_directive else ""
         return f"""Review GitHub PR {change.get("html_url")}
 Project: {project}
 PR number: {change.get("number")}
@@ -238,4 +241,4 @@ source branch: {head.get("ref")}
 target branch: {base.get("ref")}
 head SHA: {self.head_sha(change)}
 
-{contract}"""
+{contract}{suffix}"""

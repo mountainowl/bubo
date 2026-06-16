@@ -179,6 +179,69 @@ Operators who prefer the explicit path can still tag a reply with
 `[llm-review:disputed]` / `[llm-review:false-positive]`; an explicit marker
 short-circuits the LLM call.
 
+## Governance report
+
+`bubo report` assembles an auditable governance report from the metrics
+already in SQLite — review counts, a **provenance breakdown** (counts by
+band/source), the **accept-vs-dispute rate**, a **noise trend** (daily
+false-positive trend), a **bug-catch ROI proxy**, token/cost rollups,
+**policy-decision stats** (from the Phase 2 `governance_decisions`), and a
+per-change **audit trail**. It is the compliance-facing companion to the
+provenance + governance-decision capture described in
+[configuration.md](configuration.md), "Governance & provenance".
+
+It is strictly **READ-ONLY** — it only queries existing state and never
+mutates review state, so it is safe to run from a monitoring cron next to
+`bubo doctor`. It is also **self-hosted**: the data is read from your own
+SQLite and never leaves your infrastructure, which is the whole compliance
+pitch for regulated/enterprise governance teams.
+
+```sh
+# Full nested report as JSON (the default).
+bubo report
+
+# A week of the per-change audit trail as CSV.
+bubo report --since-hours 168 --format csv > audit.csv
+```
+
+### Flags
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--format {json,csv}` | `json` | Output format. JSON is the full nested report; CSV is a single tabular section. |
+| `--section` | `audit` | CSV only — which section to emit. `audit` (the per-change audit trail) or `noise_trend`. Ignored for JSON. |
+| `--since-hours` | `24` | Rolling window, in hours, for the report. |
+| `--since` / `--until` | unset | ISO dates bounding a fixed audit window. Override `--since-hours` for a reproducible window. |
+| `--project` | all | Restrict the report to a single project path. |
+| `--limit` | unset | Cap the number of audit-trail rows. |
+| `--root` | `$BUBO_ROOT` | Workspace root to read state from (same meaning as elsewhere). |
+
+### JSON vs CSV
+
+- **JSON** (default) is the full nested report. Sections: `meta`,
+  `reviews`, `provenance`, `outcomes`, `noise_trend`, `roi`,
+  `policy_decisions`, and `audit`. Scalar rollups (review counts,
+  accept/dispute rate, ROI proxy, token/cost) are **JSON-only** — they
+  have no tabular form.
+- **CSV** is a single tabular section, chosen with `--section`. The
+  default is the per-change `audit` trail; `--section noise_trend` emits
+  the daily false-positive trend instead. CSV is intended for
+  spreadsheet/BI import of the row-shaped sections.
+
+### MCP tool
+
+The same report is available to MCP-capable chat clients (Codex, Claude
+Desktop, Cline) as `get_governance_report(since_hours, since, until,
+project)`. It returns the same nested JSON structure as `bubo report
+--format json`, so a governance analyst can pull the report into a chat
+session without shell access.
+
+Policy-decision stats are populated only when Phase 2 governance is
+enabled (`[governance].policy_mode` not `off`). When it is off, the
+`policy_decisions` section reports `available: false` rather than empty
+counts, so an auditor can tell "no decisions recorded" apart from
+"governance decisions were never turned on".
+
 ## Backfill — one-shot, not a cron job
 
 The backfill commands import bot comments that **already exist on the

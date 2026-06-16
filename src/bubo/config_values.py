@@ -75,6 +75,22 @@ def confidence_threshold(value: object, name: str) -> float:
     return parsed
 
 
+def one_of(value: object, name: str, choices: tuple[str, ...], *, default: str) -> str:
+    """Parse ``value`` as a string restricted to ``choices`` (case-insensitive).
+
+    Returns ``default`` when ``value`` is ``None`` (key absent). Otherwise the
+    value is stripped and lowercased and must be one of ``choices`` (which are
+    compared lowercase); anything else raises :class:`ConfigError` naming the
+    field and the allowed set — mirrors the inline ``[scm].provider`` check.
+    """
+    if value is None:
+        return default
+    parsed = str(value).strip().lower()
+    if parsed not in choices:
+        raise ConfigError(f"{name} must be one of {choices}, got {parsed!r}")
+    return parsed
+
+
 def bool_value(value: object, name: str, *, default: bool) -> bool:
     """Parse ``value`` as a strict boolean.
 

@@ -121,7 +121,27 @@ credentials live in that one TOML file.
     <tr>
       <td><code>sensitive_path_globs</code></td>
       <td><code>[]</code></td>
-      <td><code>fnmatch</code> globs (case-preserving) flagged when a change touches sensitive paths, e.g. <code>payments/**</code>, <code>*.pem</code>. Recorded for audit; no behavior change. Only consulted when <code>capture_provenance = true</code>.</td>
+      <td><code>fnmatch</code> globs (case-preserving) flagged when a change touches sensitive paths, e.g. <code>payments/**</code>, <code>*.pem</code>. Recorded for audit and used as the sensitive-path half of the escalation predicate.</td>
+    </tr>
+    <tr>
+      <td><code>rigor_modulation</code></td>
+      <td><code>false</code></td>
+      <td>Opt-in (Phase 2). When <code>true</code>, an escalated change injects a heightened-scrutiny directive into its review prompt. Advisory — adds prompt context, never a verdict or merge block. Auto-implies the provenance fetch.</td>
+    </tr>
+    <tr>
+      <td><code>escalate_bands</code></td>
+      <td><code>["likely_ai","collaborative"]</code></td>
+      <td>Provenance bands that escalate (shared by rigor modulation and the policy gate). <code>unknown</code> never escalates.</td>
+    </tr>
+    <tr>
+      <td><code>rigor_require_sensitive</code></td>
+      <td><code>true</code></td>
+      <td>When <code>true</code>, a change escalates only if it also touches a <code>sensitive_path_globs</code> path; <code>false</code> escalates on band alone.</td>
+    </tr>
+    <tr>
+      <td><code>policy_mode</code></td>
+      <td><code>off</code></td>
+      <td><code>off</code> / <code>report-only</code> / <code>soft</code>. When not <code>off</code>, an auditable governance decision is recorded per change. All modes advisory — no <code>enforce</code> (bubo does not own CI/branch protection).</td>
     </tr>
     <tr><th colspan="3"><code>[poller]</code></th></tr>
     <tr>
@@ -328,6 +348,13 @@ its current phase, **captures only** — it does not change which findings post,
 raise severities, or block anything. Rigor modulation and policy gates are a
 later, separately opt-in phase.
 
+To consume the captured provenance and governance decisions as auditable
+metrics — a provenance breakdown, accept-vs-dispute rate, noise trend, ROI
+proxy, token/cost rollups, policy-decision stats, and a per-change audit
+trail — use the read-only `bubo report` command (and the matching
+`get_governance_report` MCP tool). See [operate.md](operate.md),
+"Governance report".
+
 ### How capture works
 
 bubo already checks out a change before reviewing it, so it reads the change's
@@ -367,3 +394,30 @@ bubo **cannot block a merge** — it does not own CI or branch protection. It
 produces auditable data and an advisory signal; acting on that signal (required
 approvals, merge gates) stays with your pipeline. Capture is the foundation that
 makes those downstream gates *possible*, not a gate itself.
+
+### Phase 2 — rigor modulation & policy gates (opt-in)
+
+Once provenance is captured, two opt-in capabilities *use* it. Both are
+**advisory** and off by default.
+
+A change **escalates** when its band is in `escalate_bands` (default
+`likely_ai` + `collaborative`; `unknown` never escalates) and — unless
+`rigor_require_sensitive = false` — it also touches a `sensitive_path_globs`
+path. This single predicate is shared by both capabilities, so they always
+agree.
+
+- **Rigor modulation** (`rigor_modulation = true`): an escalated change injects
+  a heightened-scrutiny directive (prioritize the security lens) into *that
+  change's* review prompt. It is prompt context, never a verdict. (Honest
+  limitation: whether the directive measurably improves the review is LLM
+  behavior — bubo guarantees the directive is *injected*, not that the model
+  acts on it.)
+- **Policy gate** (`policy_mode = report-only | soft`): records an auditable,
+  **write-once** governance *decision* per change — `action` is `flag` (escalated)
+  or `clear` — surfaced as a `governance_decision` log event and the
+  `llm_review.governance` metric, and queryable for reporting. There is no
+  `enforce` mode: every mode is advisory because bubo cannot block a merge.
+
+Turning on either capability auto-implies the provenance fetch even if
+`capture_provenance = false` — the per-change commit read is what all three
+share.

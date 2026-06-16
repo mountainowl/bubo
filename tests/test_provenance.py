@@ -60,6 +60,28 @@ def test_coauthored_by_human_is_not_flagged() -> None:
     assert sig.ai_signals == []
 
 
+def test_human_named_ai_is_not_flagged() -> None:
+    # The bare `ai` token was dropped — a human first-named "Ai" is not AI.
+    sig = _provenance(["feat: x\n\nCo-authored-by: Ai Tanaka <ai.tanaka@example.com>"])
+    assert sig.band == BAND_UNKNOWN
+    assert sig.ai_signals == []
+
+
+def test_agent_token_only_in_email_domain_is_not_flagged() -> None:
+    # An agent word that appears only in the email domain must not match —
+    # the pattern scans the display-name portion before `<`.
+    sig = _provenance(["feat: x\n\nCo-authored-by: Jane Smith <jane@cursor-shop.com>"])
+    assert sig.band == BAND_UNKNOWN
+    assert sig.ai_signals == []
+
+
+def test_recovered_false_negative_agents_are_flagged() -> None:
+    # Agents added to the default token list are now caught.
+    for agent in ("Cody <cody@sourcegraph.com>", "aider <aider@aider.chat>"):
+        sig = _provenance([f"feat: x\n\nCo-authored-by: {agent}"])
+        assert sig.band == BAND_COLLABORATIVE, agent
+
+
 def test_generation_plus_coauthor_is_likely_ai() -> None:
     # Any explicit generation trailer dominates the softer co-author band.
     sig = _provenance(
@@ -107,6 +129,15 @@ def test_sensitive_paths_match_nested_and_dedup_sorted() -> None:
 
 def test_sensitive_paths_no_globs_is_empty() -> None:
     assert match_sensitive_paths(["payments/charge.py"], []) == []
+
+
+def test_double_star_glob_matches_top_level_and_nested() -> None:
+    # `**/auth/**` must match both a nested and a TOP-LEVEL auth dir (fnmatch
+    # alone misses the top-level case).
+    matched = match_sensitive_paths(
+        ["auth/login.py", "src/auth/token.py", "src/util.py"], ["**/auth/**"]
+    )
+    assert matched == ["auth/login.py", "src/auth/token.py"]
 
 
 def test_sensitive_paths_recorded_even_when_band_unknown() -> None:

@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import sqlite3
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -486,6 +487,52 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    """Build and print the governance report — read-only, never inits the DB.
+
+    Mirrors :func:`cmd_doctor`'s ``--root`` handling (``_retarget_paths`` so
+    the readers point at the right SQLite DB) but does not set
+    ``BUBO_ROOT`` or call ``init_db``: reporting must stay non-mutating.
+    Builds the nested report via :mod:`bubo.report`, then emits JSON
+    (default) or a single CSV section to stdout. On a missing or
+    uninitialized DB the readers raise ``sqlite3.OperationalError`` /
+    ``FileNotFoundError``; we turn those into a clear stderr message and a
+    non-zero exit instead of a traceback.
+    """
+    # Deferred import: bubo.report is written in parallel and may be absent
+    # while init/doctor/the MCP tools must keep importing this module.
+    from bubo import report
+
+    root = Path(args.root) if args.root else paths.ROOT
+    _retarget_paths(root)
+    try:
+        rep = report.build_report(
+            since_hours=args.since_hours,
+            since=args.since,
+            until=args.until,
+            project=args.project,
+            limit=args.limit,
+        )
+        output = (
+            report.to_csv(rep, section=args.section)
+            if args.format == "csv"
+            else report.to_json(rep)
+        )
+    except (sqlite3.OperationalError, FileNotFoundError) as exc:
+        print(
+            f"bubo report: cannot read state DB at {paths.DB} ({exc}); "
+            "run `bubo init` first",
+            file=sys.stderr,
+        )
+        return 1
+    except ValueError as exc:
+        # Bad --since/--until (unparseable date) or --section (not CSV-renderable).
+        print(f"bubo report: {exc}", file=sys.stderr)
+        return 2
+    print(output)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -534,6 +581,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip Codex / Claude config checks (hosts that hand-roll agent config)",
     )
     doctor_p.set_defaults(func=cmd_doctor)
+
+    report_p = subparsers.add_parser(
+        "report",
+        help="Print the governance report — read-only, never mutates state.",
+    )
+    report_p.add_argument("--root", type=Path, default=None)
+    report_p.add_argument(
+        "--format",
+        choices=("json", "csv"),
+        default="json",
+        help="output format (default: json)",
+    )
+    report_p.add_argument(
+        "--section",
+        default="audit",
+        help="report section to emit as CSV (only used with --format csv; default: audit)",
+    )
+    report_p.add_argument(
+        "--since-hours",
+        type=int,
+        default=24,
+        help="look-back window in hours (default: 24); ignored when --since is given",
+    )
+    report_p.add_argument(
+        "--since",
+        default=None,
+        help="ISO-8601 start of the reporting window (overrides --since-hours)",
+    )
+    report_p.add_argument(
+        "--until",
+        default=None,
+        help="ISO-8601 end of the reporting window (default: now)",
+    )
+    report_p.add_argument(
+        "--project",
+        default=None,
+        help="exact-match project filter (GitLab path-with-namespace or owner/repo)",
+    )
+    report_p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="cap the audit trail to the N most recent runs (rollups still cover the full window)",
+    )
+    report_p.set_defaults(func=cmd_report)
 
     return parser
 

@@ -113,7 +113,13 @@ def match_sensitive_paths(paths: Iterable[str], globs: Iterable[str]) -> list[st
 
 
 def _glob_match(path: str, glob: str) -> bool:
-    return fnmatch(path, glob) or fnmatch(path.rsplit("/", 1)[-1], glob)
+    # fnmatch has no `**` semantics (``*`` already spans ``/``), so a leading
+    # ``**/`` would otherwise fail to match at depth 0 — ``**/auth/**`` would
+    # miss a top-level ``auth/x``. Strip a leading ``**/`` and retry so the
+    # idiomatic "anywhere" glob also matches the zero-prefix case.
+    if fnmatch(path, glob) or fnmatch(path.rsplit("/", 1)[-1], glob):
+        return True
+    return glob.startswith("**/") and fnmatch(path, glob[3:])
 
 
 def compute_provenance(

@@ -1,8 +1,10 @@
-"""Governance wiring tests (Rec ②a, Phase 1).
+"""Governance wiring tests (Recs ②a/②b).
 
-Covers config parsing, the write-once provenance DB layer, provider
-``list_commits`` mapping, and the off-by-default poller glue
-(:func:`bubo.poller.capture_provenance`).
+Covers config parsing, the write-once provenance + governance-decision DB
+layers, provider ``list_commits`` mapping, and the off-by-default poller glue
+(:func:`bubo.poller.capture_provenance`) for both provenance capture (②a) and
+rigor modulation + policy gates (②b). The pure policy logic lives in
+``test_governance_policy.py``.
 """
 
 from __future__ import annotations
@@ -175,6 +177,7 @@ def test_capture_provenance_disabled_consults_nothing() -> None:
             token="t",
             project="g/r",
             number=1,
+            sha="sha",
             run_id="rid",
             provider=_ExplodingProvider(),  # type: ignore[arg-type]
         )
@@ -209,6 +212,7 @@ def test_capture_provenance_enabled_records_and_logs() -> None:
                 token="t",
                 project="g/r",
                 number=1,
+                sha="sha",
                 run_id="rid",
                 provider=provider,  # type: ignore[arg-type]
             )
@@ -247,8 +251,213 @@ def test_capture_provenance_failure_is_soft() -> None:
                 token="t",
                 project="g/r",
                 number=1,
+                sha="sha",
                 run_id="rid",
                 provider=_Boom(),  # type: ignore[arg-type]
             )
         assert db.provenance_for("rid") is None
     assert any(name == "provenance_capture_failed" for name, _ in events)
+
+
+# --- ②b: config + enabled property -----------------------------------------
+
+
+def test_governance_config_phase2_defaults_off() -> None:
+    gov = review_config_from_dict({}).governance_config
+    assert gov.rigor_modulation is False
+    assert gov.policy_mode == "off"
+    assert gov.rigor_require_sensitive is True
+    assert gov.escalate_bands == ["likely_ai", "collaborative"]
+    assert gov.enabled is False  # nothing on → no fetch
+
+
+def test_governance_config_parses_phase2_and_validates_policy_mode() -> None:
+    import pytest
+
+    from bubo.config_values import ConfigError
+
+    gov = review_config_from_dict(
+        {
+            "governance": {
+                "rigor_modulation": True,
+                "policy_mode": "soft",
+                "rigor_require_sensitive": False,
+                "escalate_bands": ["LIKELY_AI"],
+            }
+        }
+    ).governance_config
+    assert gov.rigor_modulation is True
+    assert gov.policy_mode == "soft"
+    assert gov.rigor_require_sensitive is False
+    assert gov.escalate_bands == ["likely_ai"]  # lowercased
+    assert gov.enabled is True  # rigor on → fetch auto-implied even with capture off
+
+    with pytest.raises(ConfigError):
+        review_config_from_dict({"governance": {"policy_mode": "enforce"}})
+
+
+def test_governance_config_rejects_unknown_escalate_band() -> None:
+    import pytest
+
+    from bubo.config_values import ConfigError
+
+    # A typo'd band must fail loudly, not silently never match.
+    with pytest.raises(ConfigError, match="escalate_bands"):
+        review_config_from_dict({"governance": {"escalate_bands": ["likely-ai", "human"]}})
+
+
+# --- ②b: governance_decisions DB layer (write-once) ------------------------
+
+
+def _decision(action="flag", triggered=True, mode="soft"):
+    from bubo.governance_policy import GovernanceDecision
+
+    return GovernanceDecision(
+        mode=mode,
+        action=action,
+        triggered=triggered,
+        matched_rule="band+sensitive" if triggered else "",
+        band="likely_ai",
+        sensitive_paths=["payments/charge.py"],
+        reason="test",
+        rigor_injected=True,
+    )
+
+
+def test_record_and_read_governance_decision_round_trips() -> None:
+    with _temp_db():
+        _seed_run()
+        db.record_governance_decision(
+            "rid", project="g/r", iid=1, sha="sha", decision=_decision()
+        )
+        got = db.governance_decision_for("rid")
+
+    assert got is not None
+    assert got["action"] == "flag"
+    assert got["triggered"] is True
+    assert got["mode"] == "soft"
+    assert got["matched_rule"] == "band+sensitive"
+    assert got["rigor_injected"] is True
+    assert got["sensitive_paths"] == ["payments/charge.py"]
+    assert got["project"] == "g/r"
+    assert got["iid"] == 1
+    assert got["sha"] == "sha"
+
+
+def test_record_governance_decision_is_write_once() -> None:
+    with _temp_db():
+        _seed_run()
+        db.record_governance_decision(
+            "rid", project="g/r", iid=1, sha="sha", decision=_decision(action="flag")
+        )
+        # Second write for same run_id must be ignored (audit integrity).
+        db.record_governance_decision(
+            "rid",
+            project="g/r",
+            iid=1,
+            sha="sha",
+            decision=_decision(action="clear", triggered=False),
+        )
+        got = db.governance_decision_for("rid")
+
+    assert got is not None
+    assert got["action"] == "flag"  # original preserved
+
+
+def test_governance_decisions_for_returns_rows() -> None:
+    with _temp_db():
+        _seed_run()
+        db.record_governance_decision(
+            "rid", project="g/r", iid=1, sha="sha", decision=_decision()
+        )
+        rows = db.governance_decisions_for("g/r", 1, "sha")
+
+    assert len(rows) == 1
+    assert rows[0]["band"] == "likely_ai"
+    assert rows[0]["action"] == "flag"
+
+
+# --- ②b: poller rigor + policy glue ----------------------------------------
+
+
+def _gov_provider():
+    return _FakeProvider(
+        commits=[{"sha": "a", "message": "feat: x\n\nGenerated-by: GPT-4", "author": "Jane"}],
+        paths_=["payments/charge.py"],
+    )
+
+
+def test_rigor_only_config_fetches_and_returns_directive() -> None:
+    from bubo import poller
+    from bubo.governance_config import GovernanceConfig
+
+    # rigor on, capture OFF — enabled property must still trigger the fetch.
+    cfg = ReviewConfig(
+        governance_config=GovernanceConfig(
+            rigor_modulation=True, sensitive_path_globs=["payments/**"]
+        )
+    )
+    with _temp_db():
+        _seed_run()
+        with patch.object(poller, "log", lambda e, **f: None):
+            result = poller.capture_provenance(
+                cfg,
+                token="t",
+                project="g/r",
+                number=1,
+                sha="sha",
+                run_id="rid",
+                provider=_gov_provider(),  # type: ignore[arg-type]
+            )
+        # No provenance row (capture off), but a directive is returned.
+        assert db.provenance_for("rid") is None
+    assert result is not None
+    _signal, directive = result
+    assert "security lens" in directive
+
+
+def test_no_directive_when_not_escalated() -> None:
+    from bubo import poller
+    from bubo.governance_config import GovernanceConfig
+
+    cfg = ReviewConfig(
+        governance_config=GovernanceConfig(
+            rigor_modulation=True, sensitive_path_globs=["payments/**"]
+        )
+    )
+    # No AI trailer + no sensitive path → band unknown → not escalated.
+    provider = _FakeProvider(commits=[{"message": "plain commit"}], paths_=["src/util.py"])
+    with _temp_db():
+        _seed_run()
+        with patch.object(poller, "log", lambda e, **f: None):
+            result = poller.capture_provenance(
+                cfg, token="t", project="g/r", number=1, sha="sha", run_id="rid",
+                provider=provider,  # type: ignore[arg-type]
+            )
+    assert result is not None
+    assert result[1] == ""  # no directive
+
+
+def test_policy_mode_records_decision_and_logs() -> None:
+    from bubo import poller
+    from bubo.governance_config import GovernanceConfig
+
+    cfg = ReviewConfig(
+        governance_config=GovernanceConfig(
+            policy_mode="report-only", sensitive_path_globs=["payments/**"]
+        )
+    )
+    events: list[tuple[str, dict]] = []
+    with _temp_db():
+        _seed_run()
+        with patch.object(poller, "log", lambda e, **f: events.append((e, f))):
+            poller.capture_provenance(
+                cfg, token="t", project="g/r", number=1, sha="sha", run_id="rid",
+                provider=_gov_provider(),  # type: ignore[arg-type]
+            )
+        decision = db.governance_decision_for("rid")
+
+    assert decision is not None
+    assert decision["mode"] == "report-only"
+    assert decision["action"] == "flag"  # likely_ai + sensitive → escalated
+    assert any(name == "governance_decision" for name, _ in events)

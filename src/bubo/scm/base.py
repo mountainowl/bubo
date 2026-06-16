@@ -150,6 +150,14 @@ class ScmProvider(Protocol):
         """Fetch a posted comment's current state and classify its outcome."""
         ...
 
-    def review_prompt(self, project: str, change: JsonObject, cfg: ReviewConfig) -> str:
-        """Build the per-change review task prompt."""
+    def review_prompt(
+        self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
+    ) -> str:
+        """Build the per-change review task prompt.
+
+        ``extra_directive`` is optional governance context (e.g. the
+        heightened-scrutiny notice for an escalated change) appended after the
+        review contract. Empty (the default) leaves the prompt unchanged, so
+        existing callers and the provenance-off path are byte-identical.
+        """
         ...

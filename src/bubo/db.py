@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from typing import Any
 
 from bubo import paths
 from bubo.events import now
+from bubo.governance_policy import GovernanceDecision
 from bubo.hash_utils import stable_digest, stable_hash
 from bubo.provenance import ProvenanceSignal
 from bubo.statuses import FindingStatus, ReviewMode, ReviewStatus
@@ -56,14 +58,24 @@ def init_dirs() -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def connect_db() -> sqlite3.Connection:
+def connect_db(*, readonly: bool = False) -> sqlite3.Connection:
     """Open a connection to the state database with sensible defaults.
 
-    Sets WAL journaling (so readers don't block the single writer) and a
-    5-second busy timeout (so a concurrent worker waits rather than
-    raising ``OperationalError``). Caller is responsible for closing —
-    use as a context manager.
+    The default (writer) connection sets WAL journaling (so readers don't
+    block the single writer) and a 5-second busy timeout. Caller is
+    responsible for closing — use as a context manager.
+
+    ``readonly=True`` opens the DB via the ``file:...?mode=ro`` URI: it does
+    **not** create the file, does **not** run the WAL pragma (which would
+    write the DB header), and rejects any write. This is what the governance
+    *report* readers use so reporting is genuinely non-mutating and safe to run
+    against a read-only mount; a missing DB raises ``OperationalError`` rather
+    than being silently created.
     """
+    if readonly:
+        ro = sqlite3.connect(f"file:{paths.DB}?mode=ro", uri=True, timeout=30)
+        ro.execute("pragma busy_timeout=5000")
+        return ro
     db = sqlite3.connect(paths.DB, timeout=30)
     db.execute("pragma journal_mode=WAL")
     db.execute("pragma busy_timeout=5000")
@@ -186,6 +198,29 @@ def init_db() -> None:
         )
         # Additive migration for DBs created before reply_classified existed.
         ensure_column(db, "finding_outcomes", "reply_classified", "integer not null default 0")
+        # Governance policy decisions (opt-in, off by default) — one advisory,
+        # write-once decision per change. Separate table from review_runs: a
+        # decision is a policy *artifact about* the run's provenance, with its
+        # own lifecycle. See record_governance_decision / bubo.governance_policy.
+        db.execute(
+            """
+            create table if not exists governance_decisions (
+              run_id text primary key,
+              project text not null,
+              iid integer not null,
+              sha text not null,
+              mode text not null,
+              action text not null,
+              triggered integer not null,
+              matched_rule text,
+              rigor_injected integer not null default 0,
+              band text,
+              sensitive_paths text,
+              reason text,
+              created_at text not null
+            )
+            """
+        )
 
 
 def ensure_column(db: sqlite3.Connection, table: str, name: str, definition: str) -> None:
@@ -368,6 +403,114 @@ def provenance_for(run_id: str) -> JsonObject | None:
         "ai_signals": json.loads(row[3]) if row[3] else [],
         "sensitive_paths": json.loads(row[4]) if row[4] else [],
     }
+
+
+def _governance_decision_row(
+    project: str, iid: int, sha: str, row: tuple[Any, ...]
+) -> JsonObject:
+    """Shape a ``governance_decisions`` row tuple into the public JSON dict."""
+    return {
+        "run_id": row[0],
+        "project": project,
+        "iid": iid,
+        "sha": sha,
+        "mode": row[1],
+        "action": row[2],
+        "triggered": bool(row[3]),
+        "matched_rule": row[4],
+        "rigor_injected": bool(row[5]),
+        "band": row[6],
+        "sensitive_paths": json.loads(row[7]) if row[7] else [],
+        "reason": row[8],
+        "created_at": row[9],
+    }
+
+
+def record_governance_decision(
+    run_id: str,
+    *,
+    project: str,
+    iid: int,
+    sha: str,
+    decision: GovernanceDecision,
+) -> None:
+    """Persist an advisory governance decision — write-once (audit integrity).
+
+    ``insert ... on conflict(run_id) do nothing`` so a retried worker never
+    rewrites an existing decision; the first decision for a run is the record
+    of truth. ``sensitive_paths`` is stored as JSON text.
+    """
+    with connect_db() as db:
+        db.execute(
+            """
+            insert into governance_decisions(
+              run_id,project,iid,sha,mode,action,triggered,matched_rule,
+              rigor_injected,band,sensitive_paths,reason,created_at
+            )
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            on conflict(run_id) do nothing
+            """,
+            (
+                run_id,
+                project,
+                iid,
+                sha,
+                decision.mode,
+                decision.action,
+                int(decision.triggered),
+                decision.matched_rule,
+                int(decision.rigor_injected),
+                decision.band,
+                json.dumps(decision.sensitive_paths),
+                decision.reason,
+                now(),
+            ),
+        )
+
+
+def governance_decision_for(run_id: str) -> JsonObject | None:
+    """Return the governance decision for ``run_id``, or ``None`` if absent."""
+    with connect_db() as db:
+        row = db.execute(
+            """
+            select run_id,mode,action,triggered,matched_rule,rigor_injected,
+                   band,sensitive_paths,reason,created_at
+            from governance_decisions where run_id=?
+            """,
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        meta = db.execute(
+            "select project,iid,sha from governance_decisions where run_id=?",
+            (run_id,),
+        ).fetchone()
+    return _governance_decision_row(str(meta[0]), int(meta[1]), str(meta[2]), row)
+
+
+def governance_decisions_for(
+    project: str, iid: int, sha: str | None = None
+) -> list[JsonObject]:
+    """Return governance decisions for an MR/PR (keyed like findings_for/outcomes_for).
+
+    When ``sha`` is ``None`` the most-recent reviewed SHA is resolved via
+    :func:`_resolve_sha` so this reader agrees with the others on "current".
+    """
+    with connect_db() as db:
+        target_sha = sha if sha is not None else _resolve_sha(db, project, iid)
+        if target_sha is None:
+            return []
+        rows = db.execute(
+            """
+            select run_id,mode,action,triggered,matched_rule,rigor_injected,
+                   band,sensitive_paths,reason,created_at
+            from governance_decisions
+            where project=? and iid=? and sha=?
+            order by created_at asc
+            """,
+            (project, iid, target_sha),
+        ).fetchall()
+    return [_governance_decision_row(project, iid, target_sha, row) for row in rows]
 
 
 def record(
@@ -940,46 +1083,60 @@ def outcomes_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
     ]
 
 
-def metrics_summary(since_hours: int = 24, project: str | None = None) -> JsonObject:
-    """Aggregate counts and totals over ``since_hours`` of history.
+def metrics_summary(
+    since_hours: int = 24,
+    project: str | None = None,
+    *,
+    since: str | None = None,
+    until: str | None = None,
+    readonly: bool = False,
+) -> JsonObject:
+    """Aggregate counts and totals over a window of history.
 
-    Powers :func:`bubo.mcp_server.get_metrics`. Three queries
-    (reviews/by-status, findings count, token+cost sum) run against the
-    same connection — sqlite-cheap, no need to optimize.
+    Powers :func:`bubo.mcp_server.get_metrics` and the ``reviews`` section of
+    the governance report. Three queries (reviews/by-status, findings count,
+    token+cost sum) run against the same connection — sqlite-cheap.
 
-    The ``(? is null or column = ?)`` predicate folds the optional
-    project filter into one SQL per metric instead of doubling them;
-    each parameter pair is the same ``project`` value twice.
+    The ``(? is null or column = ?)`` predicate folds the optional project
+    filter into one SQL per metric.
 
-    ``since_hours`` is clamped to ``[1, 720]`` so a misconfigured client
-    cannot accidentally scan the entire table; one month is a generous
-    operational window.
+    Window: when ``since``/``until`` are given (the report path), the shared
+    :func:`_report_window` resolves them (so this section covers the SAME window
+    as the rest of the report); otherwise the legacy ``since_hours`` path
+    applies, clamped to ``[1, 720]`` so a misconfigured client cannot scan the
+    whole table. ``readonly=True`` uses a non-mutating connection (report path).
+    ``by_status`` is ordered for deterministic output.
     """
-    since_hours = max(1, min(720, int(since_hours)))
-    cutoff = (datetime.now(UTC) - timedelta(hours=since_hours)).isoformat(timespec="seconds")
-    with connect_db() as db:
+    if since is not None or until is not None:
+        start, end = _report_window(since_hours, since, until)
+    else:
+        since_hours = max(1, min(720, int(since_hours)))
+        start = (datetime.now(UTC) - timedelta(hours=since_hours)).isoformat(timespec="seconds")
+        end = _OPEN_END
+    args = (start, end, project, project)
+    with connect_db(readonly=readonly) as db:
         status_rows = db.execute(
             """
             select status, count(*) from reviewed_mrs
-            where updated_at >= ? and (? is null or project = ?)
-            group by status
+            where updated_at >= ? and updated_at <= ? and (? is null or project = ?)
+            group by status order by status
             """,
-            (cutoff, project, project),
+            args,
         ).fetchall()
         findings_row = db.execute(
             """
             select count(*) from review_findings
-            where updated_at >= ? and (? is null or project = ?)
+            where updated_at >= ? and updated_at <= ? and (? is null or project = ?)
             """,
-            (cutoff, project, project),
+            args,
         ).fetchone()
         token_row = db.execute(
             """
             select coalesce(sum(tokens_total),0), coalesce(sum(cost_usd),0.0)
             from review_runs
-            where started_at >= ? and (? is null or project = ?)
+            where started_at >= ? and started_at <= ? and (? is null or project = ?)
             """,
-            (cutoff, project, project),
+            args,
         ).fetchone()
     by_status = {str(row[0]): int(row[1]) for row in status_rows}
     return {
@@ -993,8 +1150,370 @@ def metrics_summary(since_hours: int = 24, project: str | None = None) -> JsonOb
     }
 
 
+# ---------------------------------------------------------------------------
+# Governance reporting readers (Phase 3 / Rec ③).
+#
+# All read-only and deterministic (explicit ORDER BY with tie-breaker). They do
+# NOT call init_db — reporting must never mutate state, so callers run them
+# against an already-initialized DB. Raw counts are returned here; rates/ratios
+# are derived once in bubo.report (single rounding boundary).
+# ---------------------------------------------------------------------------
+
+# ~366 days — a generous audit window (vs metrics_summary's 30-day operational
+# clamp); regulated reports run quarterly/annually.
+_REPORT_MAX_HOURS = 8784
+_OPEN_END = "9999-12-31T23:59:59+00:00"
+
+
+def _parse_bound(value: str, *, end: bool) -> str:
+    """Normalize a user ISO date/datetime to the stored timestamp format.
+
+    Stored timestamps are ``datetime.now(UTC).isoformat(timespec="seconds")``
+    (a ``+00:00`` offset). The window is compared as STRINGS, so a raw user
+    bound like ``2026-06-16`` or an offset-less ``...T23:59:59`` would
+    mis-compare against the stored ``+00:00`` strings. Parse to a UTC datetime
+    and re-serialize in the stored format so the comparison is exact:
+
+    * a date-only bound is widened to the start (``end=False``) or **end**
+      (``end=True``) of that day, so ``--until 2026-06-16`` includes all of the
+      16th;
+    * a naive datetime is assumed UTC; an offset-aware one is converted to UTC.
+
+    Raises :class:`ValueError` on an unparseable value (caller surfaces it).
+    """
+    text = value.strip()
+    # A date-only bound (no time component) widens to the start/end of that day.
+    # Check this FIRST: datetime.fromisoformat("2026-06-16") would otherwise
+    # succeed at midnight and silently drop the end-of-day widening.
+    if "T" not in text and " " not in text:
+        day = date.fromisoformat(text)  # raises ValueError if not a bare date
+        parsed = datetime.combine(day, time(23, 59, 59) if end else time(0, 0, 0))
+    else:
+        parsed = datetime.fromisoformat(text)
+    parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+    return parsed.isoformat(timespec="seconds")
+
+
+def _report_window(since_hours: int, since: str | None, until: str | None) -> tuple[str, str]:
+    """Resolve a report window into ``(start_iso, end_iso)``, both UTC strings.
+
+    An explicit ``since``/``until`` bound wins (fixed audit periods) and is
+    normalized via :func:`_parse_bound` so string comparison against the stored
+    ``+00:00`` timestamps is exact; otherwise the window is the last
+    ``since_hours`` (clamped) up to an open end so clock skew never drops a
+    just-written row.
+    """
+    end = _parse_bound(until, end=True) if until else _OPEN_END
+    if since:
+        return _parse_bound(since, end=False), end
+    hours = max(1, min(_REPORT_MAX_HOURS, int(since_hours)))
+    start = (datetime.now(UTC) - timedelta(hours=hours)).isoformat(timespec="seconds")
+    return start, end
+
+
+def _table_exists(db: sqlite3.Connection, name: str) -> bool:
+    row = db.execute(
+        "select 1 from sqlite_master where type='table' and name=?", (name,)
+    ).fetchone()
+    return row is not None
+
+
+def provenance_summary(
+    *,
+    since_hours: int = 24,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+) -> JsonObject:
+    """Counts of review runs by provenance band and source within the window."""
+    start, end = _report_window(since_hours, since, until)
+    where = "started_at >= ? and started_at <= ? and (? is null or project = ?)"
+    args = (start, end, project, project)
+    with connect_db(readonly=True) as db:
+        runs_total = db.execute(
+            f"select count(*) from review_runs where {where}", args
+        ).fetchone()[0]
+        band_rows = db.execute(
+            f"select provenance_band, count(*) from review_runs "
+            f"where {where} and provenance_band is not null group by provenance_band "
+            f"order by provenance_band",
+            args,
+        ).fetchall()
+        source_rows = db.execute(
+            f"select provenance_source, count(*) from review_runs "
+            f"where {where} and provenance_source is not null group by provenance_source "
+            f"order by provenance_source",
+            args,
+        ).fetchall()
+        sensitive_runs = db.execute(
+            f"select count(*) from review_runs "
+            f"where {where} and sensitive_paths is not null "
+            f"and sensitive_paths not in ('', '[]')",
+            args,
+        ).fetchone()[0]
+    return {
+        "runs_total": int(runs_total),
+        "by_band": {str(r[0]): int(r[1]) for r in band_rows},
+        "by_source": {str(r[0]): int(r[1]) for r in source_rows},
+        "sensitive_path_runs": int(sensitive_runs),
+    }
+
+
+def outcomes_summary(
+    *,
+    since_hours: int = 24,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+) -> JsonObject:
+    """Raw finding-outcome counts within the window (rates derived in report)."""
+    start, end = _report_window(since_hours, since, until)
+    where = "last_checked_at >= ? and last_checked_at <= ? and (? is null or project = ?)"
+    args = (start, end, project, project)
+    with connect_db(readonly=True) as db:
+        row = db.execute(
+            f"""
+            select count(*),
+                   coalesce(sum(resolved),0), coalesce(sum(disputed),0),
+                   coalesce(sum(false_positive),0), coalesce(sum(duplicate),0),
+                   coalesce(sum(developer_replied),0), coalesce(sum(merged_unresolved),0),
+                   coalesce(sum(deleted),0)
+            from finding_outcomes where {where}
+            """,
+            args,
+        ).fetchone()
+    return {
+        "total": int(row[0]),
+        "resolved": int(row[1]),
+        "disputed": int(row[2]),
+        "false_positive": int(row[3]),
+        "duplicate": int(row[4]),
+        "developer_replied": int(row[5]),
+        "merged_unresolved": int(row[6]),
+        "deleted": int(row[7]),
+    }
+
+
+def noise_trend(
+    *,
+    since_hours: int = 24,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+) -> list[JsonObject]:
+    """Per-day finding/false-positive/dispute counts (ascending by day)."""
+    start, end = _report_window(since_hours, since, until)
+    where = "last_checked_at >= ? and last_checked_at <= ? and (? is null or project = ?)"
+    with connect_db(readonly=True) as db:
+        rows = db.execute(
+            f"""
+            select date(last_checked_at) as day, count(*),
+                   coalesce(sum(false_positive),0), coalesce(sum(disputed),0)
+            from finding_outcomes where {where}
+            group by day order by day asc
+            """,
+            (start, end, project, project),
+        ).fetchall()
+    return [
+        {
+            "day": str(r[0]),
+            "findings": int(r[1]),
+            "false_positive": int(r[2]),
+            "disputed": int(r[3]),
+        }
+        for r in rows
+    ]
+
+
+def roi_proxy(
+    *,
+    since_hours: int = 24,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+) -> JsonObject:
+    """Bug-catch ROI proxy: accepted findings + cost over the window.
+
+    ``accepted`` = findings whose outcome is resolved and neither disputed nor
+    false-positive. Joins findings to outcomes on the composite finding id
+    (same join used elsewhere). ``cost_usd_sum`` comes from ``review_runs``.
+    """
+    start, end = _report_window(since_hours, since, until)
+    fwhere = "rf.updated_at >= ? and rf.updated_at <= ? and (? is null or rf.project = ?)"
+    args = (start, end, project, project)
+    with connect_db(readonly=True) as db:
+        findings_total = db.execute(
+            f"select count(*) from review_findings rf where {fwhere}", args
+        ).fetchone()[0]
+        accepted_row = db.execute(
+            f"""
+            select count(*),
+                   coalesce(sum(case when rf.severity = 'blocking' then 1 else 0 end), 0)
+            from review_findings rf
+            join finding_outcomes fo
+              on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha
+                 || ':' || rf.fingerprint
+            where {fwhere} and fo.resolved = 1 and fo.disputed = 0 and fo.false_positive = 0
+            """,
+            args,
+        ).fetchone()
+        cost_row = db.execute(
+            "select coalesce(sum(cost_usd),0.0) from review_runs "
+            "where started_at >= ? and started_at <= ? and (? is null or project = ?)",
+            args,
+        ).fetchone()
+    return {
+        "findings_total": int(findings_total),
+        "accepted": int(accepted_row[0]),
+        "blocking_accepted": int(accepted_row[1]),
+        "cost_usd_sum": float(cost_row[0]),
+    }
+
+
+def policy_decisions_summary(
+    *,
+    since_hours: int = 24,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+) -> JsonObject:
+    """Governance-decision counts by action/mode/band within the window.
+
+    Degrades gracefully (``available: False``) if the ``governance_decisions``
+    table is absent — e.g. a DB created before Phase 2 — so reporting never
+    hard-fails on a partially-migrated install.
+    """
+    start, end = _report_window(since_hours, since, until)
+    where = "created_at >= ? and created_at <= ? and (? is null or project = ?)"
+    args = (start, end, project, project)
+    empty = {"available": False, "total": 0, "by_action": {}, "by_mode": {}, "by_band": {}}
+    with connect_db(readonly=True) as db:
+        if not _table_exists(db, "governance_decisions"):
+            return empty
+        total = db.execute(
+            f"select count(*) from governance_decisions where {where}", args
+        ).fetchone()[0]
+        action_rows = db.execute(
+            f"select action, count(*) from governance_decisions where {where} "
+            f"group by action order by action",
+            args,
+        ).fetchall()
+        mode_rows = db.execute(
+            f"select mode, count(*) from governance_decisions where {where} "
+            f"group by mode order by mode",
+            args,
+        ).fetchall()
+        band_rows = db.execute(
+            f"select band, count(*) from governance_decisions where {where} "
+            f"and band is not null group by band order by band",
+            args,
+        ).fetchall()
+    return {
+        "available": True,
+        "total": int(total),
+        "by_action": {str(r[0]): int(r[1]) for r in action_rows},
+        "by_mode": {str(r[0]): int(r[1]) for r in mode_rows},
+        "by_band": {str(r[0]): int(r[1]) for r in band_rows},
+    }
+
+
+def audit_rows(
+    *,
+    since_hours: int = 24,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+    limit: int | None = None,
+) -> list[JsonObject]:
+    """One enriched audit row per review run (the write-once trail).
+
+    Finding/outcome counts are computed in correlated subqueries keyed on
+    ``(project, iid, sha)`` so the 1-row-per-run grain is preserved — a naive
+    join to ``review_findings`` would multiply rows and double-count tokens/cost.
+    Governance decision fields come from a LEFT JOIN (NULL when absent).
+    Ordered **newest-first** by ``(started_at, run_id)`` so a ``limit`` keeps
+    the most recent activity (the relevant part of an audit) rather than the
+    oldest; ordering is fully deterministic for a diff-clean report.
+    """
+    start, end = _report_window(since_hours, since, until)
+    limit_sql = " limit ?" if limit is not None else ""
+    # Only the main WHERE has placeholders; the correlated subqueries and the
+    # LEFT JOIN reference columns, not binds.
+    args: tuple[Any, ...] = (start, end, project, project)
+    if limit is not None:
+        args = (*args, int(limit))
+    with connect_db(readonly=True) as db:
+        has_gov = _table_exists(db, "governance_decisions")
+        gov_select = (
+            "g.action, g.mode" if has_gov else "null as action, null as mode"
+        )
+        gov_join = (
+            "left join governance_decisions g on g.run_id = r.run_id" if has_gov else ""
+        )
+        rows = db.execute(
+            f"""
+            select r.run_id, r.project, r.iid, r.sha, r.started_at, r.finished_at,
+                   r.status, r.model, r.review_mode, r.dry_run,
+                   r.provenance_band, r.provenance_source, r.provenance_confidence,
+                   r.sensitive_paths, r.tokens_total, r.cost_usd,
+                   (select count(*) from review_findings f
+                      where f.project=r.project and f.iid=r.iid and f.sha=r.sha),
+                   (select count(*) from review_findings f
+                      where f.project=r.project and f.iid=r.iid and f.sha=r.sha
+                      and f.status='posted'),
+                   (select count(*) from finding_outcomes o
+                      where o.project=r.project and o.iid=r.iid and o.sha=r.sha
+                      and o.resolved=1),
+                   (select count(*) from finding_outcomes o
+                      where o.project=r.project and o.iid=r.iid and o.sha=r.sha
+                      and o.disputed=1),
+                   (select count(*) from finding_outcomes o
+                      where o.project=r.project and o.iid=r.iid and o.sha=r.sha
+                      and o.false_positive=1),
+                   {gov_select}
+            from review_runs r
+            {gov_join}
+            where r.started_at >= ? and r.started_at <= ? and (? is null or r.project = ?)
+            order by r.started_at desc, r.run_id desc{limit_sql}
+            """,
+            args,
+        ).fetchall()
+    out: list[JsonObject] = []
+    for r in rows:
+        sensitive = json.loads(r[13]) if r[13] else []
+        out.append(
+            {
+                "run_id": r[0],
+                "project": r[1],
+                "iid": int(r[2]),
+                "sha": r[3],
+                "started_at": r[4],
+                "finished_at": r[5],
+                "status": r[6],
+                "model": r[7],
+                "review_mode": r[8],
+                "dry_run": bool(r[9]),
+                "provenance_band": r[10],
+                "provenance_source": r[11],
+                "provenance_confidence": r[12],
+                "sensitive_paths_count": len(sensitive),
+                "tokens_total": int(r[14]) if r[14] is not None else 0,
+                "cost_usd": float(r[15]) if r[15] is not None else 0.0,
+                "findings_total": int(r[16]),
+                "findings_posted": int(r[17]),
+                "outcomes_resolved": int(r[18]),
+                "outcomes_disputed": int(r[19]),
+                "outcomes_false_positive": int(r[20]),
+                "policy_action": r[21],
+                "policy_mode": r[22],
+            }
+        )
+    return out
+
+
 __all__ = [
     "already_seen",
+    "audit_rows",
     "connect_db",
     "count_inflight_workers",
     "disputed_finding_classes",
@@ -1002,12 +1521,17 @@ __all__ = [
     "finding_seen",
     "findings_for",
     "get_review_row",
+    "governance_decision_for",
+    "governance_decisions_for",
     "init_db",
     "init_dirs",
     "latest_reviewed_row",
     "list_recent_reviews",
     "metrics_summary",
+    "noise_trend",
     "outcomes_for",
+    "outcomes_summary",
+    "policy_decisions_summary",
     "posted_findings_for_outcome_sync",
     "prompt_version",
     "provenance_for",
@@ -1015,6 +1539,7 @@ __all__ = [
     "record_finding",
     "record_finding_outcome",
     "record_finding_outcome_sync_attempt",
+    "record_governance_decision",
     "record_provenance",
     "record_review_run_finish",
     "record_review_run_start",
