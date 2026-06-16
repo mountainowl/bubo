@@ -1,0 +1,191 @@
+name: "Bubo AI Code Review"
+description: "Review the current pull request with the LLM of your choice and post inline findings. Self-hosted-runner friendly."
+author: "mountainowl"
+branding:
+  icon: "eye"
+  color: "purple"
+
+# Run this on `pull_request` (or `pull_request_target`) events — Bubo reviews the
+# PR that triggered the workflow and posts inline findings via the GitHub REST
+# API (no MCP server needed in CI). BYO: the review still runs through an agent
+# CLI (Codex/Claude) + the Superpowers `code-reviewer` skill, so the runner must
+# have them (set `install-agent: true` for a best-effort install on GitHub-hosted
+# runners, or pre-provision them on a self-hosted runner). Your LLM key never
+# leaves the runner.
+
+inputs:
+  llm-api-key:
+    description: "API key for your review LLM (e.g. an OpenAI key for Codex). Pass a secret."
+    required: true
+  llm-api-key-env:
+    description: "Env var name your agent CLI reads the key from."
+    required: false
+    default: "OPENAI_API_KEY"
+  llm-model:
+    description: "Model label for cost/telemetry attribution (the real model is set by your agent profile)."
+    required: false
+    default: "gpt-5.5"
+  github-token:
+    description: "Token used to read the PR diff and post review comments. Needs pull-requests: write."
+    required: false
+    default: "${{ github.token }}"
+  reviewer-command:
+    description: "Override the agent CLI argv (space-separated). Empty = Bubo's bundled Codex default."
+    required: false
+    default: ""
+  dry-run:
+    description: "When true, Bubo plans findings but posts nothing (great for a first trial). Default false (posts)."
+    required: false
+    default: "false"
+  tone:
+    description: "Review-comment voice: terse | collaborative | socratic | formal | casual."
+    required: false
+    default: "terse"
+  min-confidence:
+    description: "Drop findings below this confidence (0.0-1.0). Empty = Bubo default."
+    required: false
+    default: ""
+  max-findings:
+    description: "Cap findings posted per PR. Empty = Bubo default."
+    required: false
+    default: ""
+  bubo-version:
+    description: "Bubo version to install from PyPI (e.g. 0.19.1). Empty = latest."
+    required: false
+    default: ""
+  install-agent:
+    description: "Best-effort install of the Codex CLI + Superpowers on a GitHub-hosted runner. Leave false on self-hosted runners that pre-provision the agent."
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Guard — pull_request context required
+      shell: bash
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        if [ -z "${PR_NUMBER}" ]; then
+          echo "::error::bubo-action runs on pull_request / pull_request_target events only (no PR number in context)."
+          exit 1
+        fi
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+    - name: Install Bubo from PyPI
+      shell: bash
+      env:
+        BUBO_VERSION: ${{ inputs.bubo-version }}
+      run: |
+        if [ -n "${BUBO_VERSION}" ]; then
+          uv tool install "bubo==${BUBO_VERSION}"
+        else
+          uv tool install bubo
+        fi
+
+    - name: Provision review agent (optional, best-effort)
+      if: ${{ inputs.install-agent == 'true' }}
+      shell: bash
+      run: |
+        # Best-effort Codex + Superpowers install for GitHub-hosted runners.
+        # Self-hosted runners should pre-provision these and leave install-agent
+        # false. This step is intentionally non-fatal — bubo doctor (below)
+        # reports what's actually missing.
+        npm install -g @openai/codex || echo "::warning::codex install failed; ensure the agent CLI is on PATH"
+        npx -y @obra/superpowers install 2>/dev/null || echo "::warning::Superpowers install skipped; ensure the code-reviewer skill is configured"
+
+    - name: Initialize Bubo workspace + agent profile
+      shell: bash
+      env:
+        BUBO_ROOT: ${{ runner.temp }}/bubo
+      run: |
+        bubo init --root "${BUBO_ROOT}"
+
+    - name: Write config from inputs
+      shell: bash
+      env:
+        BUBO_ROOT: ${{ runner.temp }}/bubo
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+        LLM_API_KEY_ENV: ${{ inputs.llm-api-key-env }}
+        LLM_MODEL: ${{ inputs.llm-model }}
+        REVIEWER_COMMAND: ${{ inputs.reviewer-command }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        TONE: ${{ inputs.tone }}
+        MIN_CONFIDENCE: ${{ inputs.min-confidence }}
+        MAX_FINDINGS: ${{ inputs.max-findings }}
+      run: |
+        set -euo pipefail
+        cfg="${BUBO_ROOT}/config/env.toml"
+        # Secrets reach the file via env vars (not argv), and the file lives on
+        # the ephemeral runner only.
+        {
+          echo '[scm]'
+          echo 'provider = "github"'
+          echo
+          echo '[github]'
+          printf 'token = "%s"\n' "${GH_TOKEN}"
+          echo
+          echo '[agents]'
+          printf 'llm_model = "%s"\n' "${LLM_MODEL}"
+          printf 'llm_api_key = "%s"\n' "${LLM_API_KEY}"
+          printf 'llm_api_key_env = "%s"\n' "${LLM_API_KEY_ENV}"
+          if [ -n "${REVIEWER_COMMAND}" ]; then
+            printf 'reviewer_command = ['
+            first=1
+            for tok in ${REVIEWER_COMMAND}; do
+              [ $first -eq 1 ] || printf ', '
+              printf '"%s"' "${tok}"; first=0
+            done
+            printf ']\n'
+          fi
+          echo
+          echo '[review]'
+          printf 'dry_run = %s\n' "${DRY_RUN}"
+          printf 'tone = "%s"\n' "${TONE}"
+          [ -n "${MIN_CONFIDENCE}" ] && printf 'min_confidence = %s\n' "${MIN_CONFIDENCE}"
+          [ -n "${MAX_FINDINGS}" ] && printf 'max_findings_per_merge_request = %s\n' "${MAX_FINDINGS}"
+          echo
+          echo '[poller]'
+          echo 'max_merge_requests_per_poll = 1'
+          printf 'target_merge_request_iid = %s\n' "${PR_NUMBER}"
+          echo
+          echo '[[projects]]'
+          printf 'path = "%s"\n' "${REPO}"
+          echo 'enabled = true'
+        } > "${cfg}"
+        echo "Wrote ${cfg} (provider=github, PR #${PR_NUMBER}, dry_run=${DRY_RUN})"
+
+    - name: Authenticate the default Codex agent (best-effort)
+      if: ${{ inputs.reviewer-command == '' }}
+      shell: bash
+      env:
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+      run: |
+        # Bubo strips the LLM key from the agent subprocess env (anti-exfiltration
+        # allowlist), so the bundled Codex agent authenticates via its own
+        # auth.json. A self-hosted runner that already authenticates Codex (or a
+        # custom reviewer-command with its own auth) doesn't need this — hence
+        # best-effort/non-fatal.
+        if command -v codex >/dev/null 2>&1; then
+          printf '%s' "${LLM_API_KEY}" | codex login --with-api-key 2>/dev/null \
+            && echo "codex authenticated" \
+            || echo "::warning::codex login failed — ok if your runner pre-authenticates Codex; otherwise the review will fail"
+        else
+          echo "::warning::codex not on PATH — set install-agent: true, or pre-provision + authenticate the agent on a self-hosted runner"
+        fi
+
+    - name: Review the pull request
+      shell: bash
+      env:
+        BUBO_ROOT: ${{ runner.temp }}/bubo
+        BUBO_PROVIDER: github
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        bubo doctor --root "${BUBO_ROOT}" --no-agent-config || true
+        bubo-poller

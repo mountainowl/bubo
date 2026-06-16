@@ -11,6 +11,15 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 ## [Unreleased]
 
 ### Added
+- **GitHub Action — review pull requests in CI (experimental).** A composite
+  `action.yml` at the repo root reviews the PR that triggered the workflow and
+  posts findings inline via REST (no MCP/poller needed), on GitHub-hosted **or
+  self-hosted** runners — your LLM key stays on the runner. Reuses the engine's
+  single-PR path (`[poller].target_merge_request_iid`). v1 caveat: the BYO agent
+  chain (Codex/Claude + the Superpowers `code-reviewer` skill, authenticated on
+  the runner) is environment-specific and needs validation on a real PR before
+  relying on it or publishing to the Marketplace — start with `dry-run: true`.
+  See [docs/github-action.md](docs/github-action.md).
 - **Published to PyPI — `pip install bubo` / `uv tool install bubo`.** A new
   `publish-pypi.yml` workflow builds the sdist + wheel and uploads them to PyPI
   on every `vX.Y.Z` release tag, using **PyPI Trusted Publishing** (OIDC — no
