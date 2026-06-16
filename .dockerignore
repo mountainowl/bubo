@@ -1,0 +1,23 @@
+# Keep the build context small and never bake secrets / local state / private
+# notes into the image. Mirrors the sdist excludes in pyproject.toml plus the
+# operator config (which carries credentials) and the untracked research notes.
+.git
+.github
+.venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+__pycache__
+**/__pycache__
+*.pyc
+dist
+site
+research
+.claude
+# Operator runtime state + the credential-bearing config (never ship these).
+var/state
+var/work
+var/log
+var/reports
+var/jobs
+config/env.toml

@@ -11,6 +11,20 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 ## [Unreleased]
 
 ### Added
+- **Published to PyPI — `pip install bubo` / `uv tool install bubo`.** A new
+  `publish-pypi.yml` workflow builds the sdist + wheel and uploads them to PyPI
+  on every `vX.Y.Z` release tag, using **PyPI Trusted Publishing** (OIDC — no
+  stored API token). The wheel already force-includes the deploy assets
+  (`bubo init` resolves them via `importlib.resources`), so a plain
+  `pip install bubo && bubo init` is now a first-class install path alongside
+  `uv tool install git+…`. One-time PyPI trusted-publisher setup is documented
+  in the workflow header.
+- **Published as a container image — `docker pull ghcr.io/mountainowl/bubo`.** A
+  new `Dockerfile` (multi-stage; ships bubo + git on a slim non-root base, the
+  BYO review-agent CLI excluded by design) and `publish-docker.yml` workflow
+  build and push a **multi-arch (amd64 + arm64)** image to GHCR on every
+  `vX.Y.Z` tag, with SLSA provenance + SBOM attestations and no extra secrets
+  (GHCR auth via `GITHUB_TOKEN`). Tags: `X.Y.Z`, `X.Y`, `latest`.
 - **Opt-in review-comment tone ("moods").** `[review].tone` chooses the *voice*
   of a posted finding: `terse` (default — unchanged structured render),
   `collaborative`, `socratic`, `formal`, or `casual`. For any non-default tone

@@ -1,0 +1,74 @@
+name: Publish to PyPI
+
+# Publish the sdist + wheel to PyPI on every release tag, using PyPI
+# Trusted Publishing (OIDC) — no long-lived API token is stored anywhere.
+#
+# Fires on the same `vX.Y.Z` tag that release-please creates (and that
+# release.yml builds the signed GitHub Release from). This job builds its
+# own clean `dist/` containing ONLY the two Python distributions and uploads
+# them; the GitHub-Release artifacts (deploy bundle, SBOM, cosign bundles)
+# stay in release.yml and never reach PyPI.
+#
+# ── One-time setup on PyPI (a maintainer does this once, before the first
+#    release after this workflow lands) ────────────────────────────────────
+# Add a Trusted Publisher / "pending publisher" for a NEW project named
+# `bubo` at https://pypi.org/manage/account/publishing/ with:
+#     PyPI Project Name:  bubo
+#     Owner:              mountainowl
+#     Repository name:    bubo
+#     Workflow name:      publish-pypi.yml
+#     Environment name:   pypi
+# Docs: https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/
+# After the pending publisher exists, the next `vX.Y.Z` tag creates the
+# project on PyPI and publishes it — no token, no manual upload.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  pypi-publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    # The `pypi` environment is the trust boundary: it must match the
+    # Environment name configured on the PyPI trusted publisher, and lets a
+    # maintainer add required reviewers / protection rules around releases.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/bubo
+    permissions:
+      id-token: write # mint the OIDC token PyPI Trusted Publishing verifies
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+
+      - name: Build sdist and wheel
+        # Reads the version from pyproject.toml, which release-please keeps in
+        # lockstep with the tag — so the published version always matches vX.Y.Z.
+        run: uv build
+
+      - name: Drop the uv-generated dist/.gitignore
+        # `uv build` writes a `dist/.gitignore` ("*"); the publish step uploads
+        # every file in dist/, so remove the non-distribution file first.
+        run: rm -f dist/.gitignore
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          # Idempotent re-runs: never fail if this version is already on PyPI
+          # (e.g. a re-triggered tag build) — PyPI versions are immutable.
+          skip-existing: true

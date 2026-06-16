@@ -106,7 +106,9 @@ Install prereqs (uv, Python 3.14+, Git, plus the CLI for your SCM and a Codex
 agent — see [prerequisites](docs/prerequisites.md)), then:
 
 ```sh
-uv tool install git+https://github.com/mountainowl/bubo@v0.8.0
+uv tool install bubo     # from PyPI (or: pip install bubo)
+# or track the main branch:
+#   uv tool install git+https://github.com/mountainowl/bubo
 bubo init                # idempotent; --dry-run to preview
 
 # Edit ~/.local/share/bubo/config/env.toml:
@@ -123,6 +125,16 @@ right. The full walkthrough is in the
 **[Recipes](https://mountainowl.github.io/bubo/recipes/)** and
 [install and configure](docs/install-and-configure.md); poller flags and the
 bundled MCP server are in [run](docs/run.md).
+
+Prefer a container? A multi-arch image is published to GHCR each release:
+
+```sh
+docker pull ghcr.io/mountainowl/bubo
+docker run --rm ghcr.io/mountainowl/bubo bubo report   # or bubo init / bubo-poller
+```
+
+The image ships bubo + git; the review agent CLI (Codex/Claude) is BYO — derive
+your own image (`FROM ghcr.io/mountainowl/bubo`) or mount it in.
 
 ## Further reading
 
