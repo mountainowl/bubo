@@ -379,6 +379,85 @@ not an accident. The escape hatches are all operator-side:
 - set `suppress_disputed_classes = false` to re-post everything and rebuild
   fresh outcome history.
 
+## Verification before posting
+
+**Off by default.** When `verify_findings = true`, every finding that is
+otherwise about to be posted is first re-checked by N independent "is this
+real?" lenses; a finding a *majority refute* is dropped (recorded `refuted`)
+instead of posted. Each lens re-asks a verifier to **try to refute** the
+finding from a different angle — `correctness` (is it a real defect?),
+`in_diff` (does the cited line do what the finding claims?), and `reproduce`
+(can the failure actually occur?) — and answer with a strict JSON verdict
+`{"real": ..., "confidence": ..., "reason": ...}`. A finding survives only if
+at least `verify_min_votes` lenses vote it real at or above
+`verify_confidence_floor`.
+
+The contract is deliberately **conservative**: an unparseable answer, a
+missing `real` flag, or a missing/garbled `confidence` resolves to *not real*
+/ zero confidence, so uncertainty never sneaks a finding past the floor.
+
+### Honesty: this is the weaker, correlated form by default
+
+This is important enough to state plainly. With the default `verify_command`
+(empty → it reuses `[agents].reviewer_command`), verification re-asks **the
+same model** with different lens prompts. That shares the original finding's
+blind spots — it is the **weaker, correlated** form of pre-post verification.
+The strong form that the literature credits with ~94–98% false-positive
+elimination is either a **hybrid static-analysis + LLM** check or a
+**genuinely different model**. The real diversity payoff lives in pointing
+`verify_command` at a different model:
+
+```toml
+[review]
+verify_findings = true
+# Reviewer is Codex (the default); verify with a different model for real
+# independence.
+verify_command = ["claude", "-p"]
+```
+
+bubo never labels self-refutation as hard-proven "verified" anywhere in the
+audit trail or telemetry — a survived finding is recorded as **not refuted**
+(the `verified` column is `1`), and the per-lens vote tally is persisted in
+`verify_votes` so you can see exactly what each lens said.
+
+### Cost and the guardrails
+
+Verification can fan out to up to `verify_max_findings ×
+len(verify_lenses)` extra **serial** LLM calls per change. That cost is why
+the feature is off by default and why it is fenced in:
+
+- It runs only on **in-diff, non-duplicate, post-filter survivors** — the
+  findings actually about to be posted. Out-of-diff and policy-dropped
+  findings are never verified, so no calls are wasted on findings that would
+  be skipped anyway.
+- `verify_max_findings` caps how many findings are verified per change.
+  Findings past the cap **post unverified** (and the count is logged) —
+  the cap never silently suppresses a real finding.
+- Each check gets its own `verify_timeout_seconds` wall-clock budget.
+- A check that times out, errors, or returns unparseable output is treated
+  as **failed to run**, not as a refutation — so a verifier outage can never
+  silently drop every finding. When no lens runs, the finding posts
+  unverified and the event is logged.
+- The per-change `verified` / `refuted` / `capped` counts are emitted as a
+  `verification_summary` log line — there are **no silent caps**.
+- Verification **re-runs each poll cycle** for findings not yet `posted`
+  (refuted findings, and everything in dry-run, are re-verified at the same
+  SHA until the SHA changes), so `verify_max_findings` is a per-cycle cap and
+  you re-pay the cost each interval until the change moves on. This mirrors
+  how dry-run already re-plans findings every cycle.
+
+### Config keys
+
+| Key | Default | Meaning |
+|---|---|---|
+| `verify_findings` | `false` | Master switch. Off → the post path is byte-identical to today and no verifier is ever spawned. |
+| `verify_lenses` | `["correctness", "in_diff", "reproduce"]` | Lenses to run per finding (each is one LLM call). |
+| `verify_min_votes` | `2` | Lenses that must vote real (≥ floor) for the finding to survive. |
+| `verify_confidence_floor` | `0.6` | Minimum verifier confidence (inclusive) for a real vote to count. |
+| `verify_max_findings` | `5` | Cap on findings verified per change; the rest post unverified. |
+| `verify_timeout_seconds` | `300` | Per-check wall-clock budget. |
+| `verify_command` | `[]` | Verifier argv. Empty reuses `reviewer_command` (weaker, correlated); set a different model for real diversity. |
+
 ## Governance & provenance
 
 For regulated and enterprise teams whose governance functions must **approve and

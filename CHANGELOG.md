@@ -41,6 +41,25 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   (`--section dispute_classes`); `latency`/`acknowledgements` are JSON-only. All
   strictly read-only (never call `init_db`). See
   [docs/operate.md](docs/operate.md), "Governance report".
+- **Opt-in verification before posting (`[review].verify_findings`, OFF by
+  default).** Before a finding that is otherwise about to be posted is
+  published, bubo can run N independent "is this real?" lenses
+  (`correctness`, `in_diff`, `reproduce`) that each try to *refute* the
+  finding; a finding a majority refute is dropped (recorded `refuted`)
+  instead of posted, and the per-lens verdict tally is persisted
+  (`review_findings.verified` / `verify_votes`) for audit. Tunable via
+  `verify_lenses`, `verify_min_votes`, `verify_confidence_floor`,
+  `verify_max_findings`, `verify_timeout_seconds`, and `verify_command`.
+  **Honesty caveat:** with the default `verify_command` (the same reviewer
+  model) this is the *weaker, correlated* form — point `verify_command` at a
+  **different model** for genuine diversity. Conservative by design
+  (uncertainty → not posted), capped, verifies only in-diff/non-duplicate
+  survivors, and treats a verifier outage as "failed to run" (posts
+  unverified) rather than dropping findings. A `llm_review.verifications`
+  metric counts verified/refuted outcomes when telemetry is on. With the
+  switch off the post path is byte-identical to before. See
+  [docs/configuration.md](docs/configuration.md), "Verification before
+  posting".
 - **Read-only governance report / export (`bubo report` + `get_governance_report`).**
   A new read-only CLI command and matching MCP tool assemble an auditable
   governance report from the metrics already in SQLite: review counts, a

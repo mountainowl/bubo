@@ -52,12 +52,16 @@ class FindingStatus(StrEnum):
     * ``PENDING_EXTERNAL_ID`` — the GitLab POST appeared to succeed but
       the response did not contain a discussion ID. Re-checked on the
       next outcome sync.
+    * ``REFUTED`` — the opt-in verification pass (off by default) ran
+      independent "is this real?" checks and a majority refuted the
+      finding, so it was dropped instead of posted. Recorded for audit.
     """
 
     PLANNED = "planned"
     POSTED = "posted"
     SKIPPED = "skipped"
     PENDING_EXTERNAL_ID = "pending_external_id"
+    REFUTED = "refuted"
 
 
 class ReviewMode(StrEnum):

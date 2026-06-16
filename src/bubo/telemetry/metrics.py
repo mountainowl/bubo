@@ -93,6 +93,9 @@ class ReviewTelemetry:
         self._failures = _safe_instrument(self.meter.create_counter, "llm_review.failures")
         self._provenance = _safe_instrument(self.meter.create_counter, "llm_review.provenance")
         self._governance = _safe_instrument(self.meter.create_counter, "llm_review.governance")
+        self._verifications = _safe_instrument(
+            self.meter.create_counter, "llm_review.verifications"
+        )
         self._review_duration = _safe_instrument(
             self.meter.create_histogram,
             "llm_review.latency.review_seconds",
@@ -193,6 +196,16 @@ class ReviewTelemetry:
             1,
             metric_attrs(repo=repo, governance_mode=mode, governance_action=action),
         )
+
+    def record_verification(self, *, repo: str, outcome: str) -> None:
+        """Count one verified/refuted finding from the opt-in verify pass.
+
+        ``outcome`` is ``"verified"`` (survived the lenses) or ``"refuted"``
+        (a majority dropped it). Low cardinality by design — the vote tally
+        and reason text are persisted to the DB/log, never as OTel attributes.
+        No-op when telemetry is disabled.
+        """
+        self._add(self._verifications, 1, metric_attrs(repo=repo, outcome=outcome))
 
     def record_failure(self, *, repo: str, error_type: str, operation: str) -> None:
         self._add(

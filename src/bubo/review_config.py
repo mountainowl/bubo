@@ -31,6 +31,7 @@ from bubo.config_values import (
     one_of,
     positive_int,
     section,
+    string_list,
     text_value,
 )
 from bubo.env_config import apply_runtime_env, read_config_file
@@ -63,6 +64,11 @@ DEFAULT_REVIEWER_COMMAND = [
     DEFAULT_CODEX_PROFILE,
     "--skip-git-repo-check",
 ]
+
+# Default diverse lens set for the opt-in verification pass. Each lens
+# re-asks the verifier to refute a surviving finding from a different angle.
+# See :mod:`bubo.verification` for the prompt each one renders.
+DEFAULT_VERIFY_LENSES = ["correctness", "in_diff", "reproduce"]
 
 # Default body of the change-level comment posted when a review finds nothing.
 # Operators override via ``[agents].no_findings_comment_body``. Kept
@@ -186,6 +192,46 @@ class ReviewConfig:
         directive into the review prompt and post the reviewer's in-voice
         ``comment`` field instead. Mood-neutral fields/fingerprint are
         unaffected.
+    verify_findings:
+        When ``True``, each finding that is otherwise about to be posted/
+        planned is first re-checked by independent verification lenses; a
+        finding a majority *refute* is dropped (recorded ``REFUTED``) instead
+        of posted. **Off by default** — an opt-in precision lever that costs
+        up to ``verify_max_findings x len(verify_lenses)`` extra serial LLM
+        calls per change. With the default ``verify_command`` (the same
+        reviewer model) it is the *weaker, correlated* form of verification;
+        point ``verify_command`` at a different model for real diversity. See
+        ``docs/configuration.md``.
+    verify_lenses:
+        Ordered list of verification lenses to run per finding. Each lens
+        prompts the verifier to refute the finding from a different angle
+        (``correctness``, ``in_diff``, ``reproduce``). Defaults to
+        :data:`DEFAULT_VERIFY_LENSES`. Only consulted when ``verify_findings``
+        is ``True``.
+    verify_min_votes:
+        Number of lenses that must vote a finding *real* (at or above
+        ``verify_confidence_floor``) for it to survive and post. ``2`` with
+        the 3 default lenses means "a majority must confirm". Only consulted
+        when ``verify_findings`` is ``True``.
+    verify_confidence_floor:
+        Minimum self-rated verifier confidence (0.0-1.0, inclusive) for a
+        *real* vote to count toward survival. Only consulted when
+        ``verify_findings`` is ``True``.
+    verify_max_findings:
+        Cap on how many findings are verified per change. Findings beyond the
+        cap are posted *unverified* (the count is logged — never silently
+        suppressed). Bounds the verification fan-out. Only consulted when
+        ``verify_findings`` is ``True``.
+    verify_timeout_seconds:
+        Wall-clock budget for each individual verification check. Each lens
+        gets its own budget; a check that times out is treated as *failed to
+        run* (the finding posts unverified), not as a refutation. Only
+        consulted when ``verify_findings`` is ``True``.
+    verify_command:
+        Argv prefix for the verifier subprocess. Empty (the default) reuses
+        ``reviewer_command`` — the weaker, correlated mode. Set this to a
+        *different* model's CLI for genuinely independent verification. Only
+        consulted when ``verify_findings`` is ``True``.
     """
 
     provider: str = DEFAULT_PROVIDER
@@ -210,6 +256,13 @@ class ReviewConfig:
     post_no_findings_comment: bool = True
     no_findings_comment_body: str = DEFAULT_NO_FINDINGS_COMMENT
     tone: str = DEFAULT_TONE
+    verify_findings: bool = False
+    verify_lenses: list[str] = field(default_factory=lambda: list(DEFAULT_VERIFY_LENSES))
+    verify_min_votes: int = 2
+    verify_confidence_floor: float = 0.6
+    verify_max_findings: int = 5
+    verify_timeout_seconds: int = 300
+    verify_command: list[str] = field(default_factory=list)
 
 
 def load_review_config(
@@ -327,6 +380,32 @@ def review_config_from_dict(
             default=DEFAULT_NO_FINDINGS_COMMENT,
         ),
         tone=one_of(review.get("tone"), "review.tone", VALID_TONES, default=DEFAULT_TONE),
+        verify_findings=bool_value(
+            review.get("verify_findings"),
+            "verify_findings",
+            default=False,
+        ),
+        verify_lenses=(
+            lower_string_list(review.get("verify_lenses"), "verify_lenses")
+            or list(DEFAULT_VERIFY_LENSES)
+        ),
+        verify_min_votes=positive_int(
+            review.get("verify_min_votes", 2),
+            "verify_min_votes",
+        ),
+        verify_confidence_floor=confidence_threshold(
+            review.get("verify_confidence_floor", 0.6),
+            "verify_confidence_floor",
+        ),
+        verify_max_findings=positive_int(
+            review.get("verify_max_findings", 5),
+            "verify_max_findings",
+        ),
+        verify_timeout_seconds=positive_int(
+            review.get("verify_timeout_seconds", 300),
+            "verify_timeout_seconds",
+        ),
+        verify_command=string_list(review.get("verify_command"), "verify_command"),
     )
 
 

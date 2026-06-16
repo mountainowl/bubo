@@ -110,6 +110,13 @@ from bubo.telemetry import (
     parse_codex_token_usage,
 )
 from bubo.types import JsonObject
+from bubo.verification import (
+    Verdict,
+    build_verification_prompt,
+    decide,
+    parse_verdict,
+    votes_summary,
+)
 
 # In-flight backpressure: a cycle backs off when running+queued already
 # exceeds ``max_merge_requests_per_poll * INFLIGHT_WORKER_MULTIPLIER``.
@@ -165,6 +172,53 @@ def reviewer_env(source: Mapping[str, str]) -> dict[str, str]:
     return env
 
 
+def run_verification(finding: JsonObject, repo: Path | None, cfg: ReviewConfig) -> list[Verdict]:
+    """Run the opt-in verification lenses for one finding (the IO seam).
+
+    For each lens in ``cfg.verify_lenses`` this spawns one verifier exec
+    (``cfg.verify_command`` falling back to ``cfg.reviewer_command``) with
+    ``cwd=repo`` and the secret-stripped :func:`reviewer_env`, so the
+    verifier can inspect the checked-out code. Each check gets its own
+    ``cfg.verify_timeout_seconds`` budget.
+
+    A check that fails to run — spawn error, timeout, non-zero exit, or
+    unparseable output — yields a verdict with ``ok=False`` rather than a
+    refutation, so a verifier outage cannot silently drop every finding (the
+    decision core ignores ``ok=False`` votes; the caller posts unverified
+    when no lens succeeded). This is the only function in the verification
+    path that touches the filesystem/subprocess, so tests monkeypatch it.
+    """
+    command = list(cfg.verify_command or cfg.reviewer_command)
+    verdicts: list[Verdict] = []
+    if not command:
+        return verdicts
+    env = reviewer_env(os.environ)
+    for lens in cfg.verify_lenses:
+        prompt = build_verification_prompt(finding, lens=lens)
+        try:
+            result = run(
+                [*command, prompt],
+                cwd=repo,
+                env=env,
+                timeout=cfg.verify_timeout_seconds,
+            )
+        except Exception as exc:  # spawn / timeout / OS error — failed to run
+            log("verify_check_failed", lens=lens, error=type(exc).__name__)
+            verdicts.append(Verdict(lens=lens, real=False, confidence=0.0, reason="", ok=False))
+            continue
+        if result.returncode:
+            log("verify_check_nonzero", lens=lens, returncode=result.returncode)
+            verdicts.append(Verdict(lens=lens, real=False, confidence=0.0, reason="", ok=False))
+            continue
+        verdict = parse_verdict(result.stdout or "", lens=lens)
+        if verdict is None:
+            log("verify_check_unparsed", lens=lens)
+            verdicts.append(Verdict(lens=lens, real=False, confidence=0.0, reason="", ok=False))
+            continue
+        verdicts.append(verdict)
+    return verdicts
+
+
 def read_config() -> ReviewConfig:
     """Load and apply ``config/env.toml``."""
     return load_review_config(CONFIG, log_event=log)
@@ -208,6 +262,8 @@ def record_finding(
     discussion_id: str | None = None,
     run_id: str | None = None,
     note_id: str | None = None,
+    verified: bool | None = None,
+    verify_votes: str | None = None,
 ) -> None:
     """Persist a finding with its rendered body.
 
@@ -215,11 +271,15 @@ def record_finding(
     matching the fingerprint), NOT the tone-aware posted body. So under a
     non-default ``[review].tone`` the stored body stays stable while the comment
     developers see (via :func:`findings.finding_comment_body`) carries the voice
-    — keeping the audit dataset comparable across tones.
+    — keeping the audit dataset comparable across tones. The DB layer takes
+    ``body`` as a parameter so it does not need to know about finding-formatting
+    rules.
 
     Note: the in-voice ``comment`` itself is not stored — ``review_findings``
     has no raw-finding column, so the canonical body is the durable record and
-    the voiced prose lives only on the posted SCM comment.
+    the voiced prose lives only on the posted SCM comment. ``verified`` /
+    ``verify_votes`` carry the opt-in verification verdict (``None`` when the
+    pass did not run).
     """
     _db_record_finding(
         project=project,
@@ -232,6 +292,8 @@ def record_finding(
         discussion_id=discussion_id,
         run_id=run_id,
         note_id=note_id,
+        verified=verified,
+        verify_votes=verify_votes,
     )
 
 
@@ -671,6 +733,7 @@ def post_or_plan_findings(
     run_id: str | None = None,
     telemetry: ReviewTelemetry | None = None,
     provider: ScmProvider | None = None,
+    repo: Path | None = None,
 ) -> tuple[int, int, int]:
     """Parse, filter, and post (or plan) findings for one change.
 
@@ -684,11 +747,17 @@ def post_or_plan_findings(
        ``finding_filtered`` log event with the reason.
     3. Map each finding's line to a diff position. Findings whose file/line
        isn't part of the change diff are recorded ``SKIPPED``.
-    4. In dry-run, record ``PLANNED``; otherwise post and record
+    4. **Opt-in verification (off by default):** for an in-diff,
+       non-duplicate survivor, run independent "is this real?" lenses; a
+       finding a majority refute is recorded ``REFUTED`` and dropped instead
+       of posted. Capped at ``cfg.verify_max_findings`` — findings past the
+       cap post unverified-but-logged, never silently suppressed.
+    5. In dry-run, record ``PLANNED``; otherwise post and record
        ``POSTED`` (or ``PENDING_EXTERNAL_ID`` if the post returned no ID).
 
     ``mr`` is the change payload (kept named ``mr`` for call-site
-    compatibility).
+    compatibility). ``repo`` is the checked-out worktree path the verifier
+    subprocess runs in (``cwd``); only used when verification is enabled.
     """
     provider = provider or get_provider(cfg)
     number = provider.change_number(mr)
@@ -732,6 +801,10 @@ def post_or_plan_findings(
     change = provider.get_change(cfg, token, project, number)
     changed = provider.changed_lines(cfg, token, project, number)
     posted = planned = skipped = 0
+    # Verification accounting (opt-in; counts logged at the end — no silent
+    # caps). ``verified_attempts`` is the count of findings the cap has let
+    # through to a verification pass so far.
+    verified_count = refuted_count = capped_count = verified_attempts = 0
     for finding in findings:
         fp = finding_fingerprint(project, number, sha, finding)
         if finding_seen(project, number, sha, fp):
@@ -765,6 +838,104 @@ def post_or_plan_findings(
             )
             skipped += 1
             continue
+        # Opt-in verification (off by default): only reached for an in-diff,
+        # non-duplicate survivor we are otherwise about to post/plan. Runs N
+        # independent refute-it lenses and drops a finding a majority refute.
+        # Verdict columns default to None so a verify-off run records nothing.
+        verified_flag: bool | None = None
+        verify_votes_json: str | None = None
+        if cfg.verify_findings:
+            if verified_attempts >= cfg.verify_max_findings:
+                # Cap reached: post unverified-but-logged (never silently drop).
+                capped_count += 1
+                log(
+                    "finding_verify_capped",
+                    project=project,
+                    iid=number,
+                    file=_position_file(position),
+                    line=_position_line(position),
+                    cap=cfg.verify_max_findings,
+                )
+            else:
+                verified_attempts += 1
+                verdicts = run_verification(finding, repo, cfg)
+                outcome = decide(
+                    verdicts,
+                    min_votes=cfg.verify_min_votes,
+                    confidence_floor=cfg.verify_confidence_floor,
+                )
+                # Number of lenses that actually produced a verdict. A
+                # "not survives" result is only a genuine refutation when
+                # enough lenses *ran* to reach min_votes; otherwise the
+                # non-survival is an artifact of a verifier outage, not a
+                # refutation, so we must NOT drop the finding (partial-outage
+                # safety — mirrors the total-outage case below).
+                ran_count = sum(1 for verdict in verdicts if verdict.ok)
+                verify_votes_json = votes_summary(verdicts)
+                if outcome.survives:
+                    # A majority confirmed it (survives implies ran_count >=
+                    # min_votes) — post as verified.
+                    verified_flag = True
+                    verified_count += 1
+                    if telemetry is not None:
+                        telemetry.record_verification(repo=project, outcome="verified")
+                    log(
+                        "finding_verified",
+                        project=project,
+                        iid=number,
+                        file=_position_file(position),
+                        line=_position_line(position),
+                        votes=f"{outcome.real_votes}/{outcome.total}",
+                    )
+                elif ran_count >= cfg.verify_min_votes:
+                    # Enough lenses ran and a majority did NOT affirm — a
+                    # genuine refutation. Drop + record for audit.
+                    refuted_count += 1
+                    record_finding(
+                        project=project,
+                        iid=number,
+                        sha=sha,
+                        fingerprint=fp,
+                        finding=finding,
+                        status=FindingStatus.REFUTED,
+                        run_id=run_id,
+                        verified=False,
+                        verify_votes=verify_votes_json,
+                    )
+                    emit_finding_metric(
+                        telemetry,
+                        repo=project,
+                        status=FindingStatus.REFUTED,
+                        finding=finding,
+                        dry_run=cfg.dry_run,
+                    )
+                    if telemetry is not None:
+                        telemetry.record_verification(repo=project, outcome="refuted")
+                    log(
+                        "finding_refuted",
+                        project=project,
+                        iid=number,
+                        file=_position_file(position),
+                        line=_position_line(position),
+                        votes=f"{outcome.real_votes}/{outcome.total}",
+                        min_votes=cfg.verify_min_votes,
+                    )
+                    skipped += 1
+                    continue
+                else:
+                    # Too few lenses ran to decide (verifier outage, partial
+                    # or total): post unverified-but-logged, never dropped.
+                    capped_count += 1
+                    verify_votes_json = None
+                    log(
+                        "finding_verify_unavailable",
+                        project=project,
+                        iid=number,
+                        file=_position_file(position),
+                        line=_position_line(position),
+                        ran=ran_count,
+                        min_votes=cfg.verify_min_votes,
+                    )
         # Posted body honors [review].tone; the DB/fingerprint stay canonical.
         body = finding_comment_body(finding, cfg.tone)
         if cfg.dry_run:
@@ -776,6 +947,8 @@ def post_or_plan_findings(
                 finding=finding,
                 status=FindingStatus.PLANNED,
                 run_id=run_id,
+                verified=verified_flag,
+                verify_votes=verify_votes_json,
             )
             emit_finding_metric(
                 telemetry,
@@ -803,6 +976,8 @@ def post_or_plan_findings(
                     finding=finding,
                     status=FindingStatus.PENDING_EXTERNAL_ID,
                     run_id=run_id,
+                    verified=verified_flag,
+                    verify_votes=verify_votes_json,
                 )
                 emit_finding_metric(
                     telemetry,
@@ -829,6 +1004,8 @@ def post_or_plan_findings(
                 status=FindingStatus.POSTED,
                 discussion_id=comment_id,
                 run_id=run_id,
+                verified=verified_flag,
+                verify_votes=verify_votes_json,
             )
             emit_finding_metric(
                 telemetry,
@@ -846,6 +1023,17 @@ def post_or_plan_findings(
                 discussion_id=comment_id,
             )
             posted += 1
+    if cfg.verify_findings:
+        log(
+            "verification_summary",
+            project=project,
+            iid=number,
+            verified=verified_count,
+            refuted=refuted_count,
+            capped=capped_count,
+            max_findings=cfg.verify_max_findings,
+            lenses=len(cfg.verify_lenses),
+        )
     return (posted, planned, skipped)
 
 
@@ -946,6 +1134,7 @@ def worker(job: Path) -> int:
                 run_id=run_id,
                 telemetry=telemetry,
                 provider=provider,
+                repo=repo,
             )
             status = (
                 ReviewStatus.NO_FINDINGS

@@ -173,6 +173,12 @@ def init_db() -> None:
             "category": "text",
             "confidence": "real",
             "note_id": "text",
+            # Opt-in verification (off by default) — per-finding verdict from
+            # the pre-post "is this real?" pass. `verified` is 1 (survived) /
+            # 0 (refuted) / NULL (not verified); `verify_votes` is the JSON
+            # per-lens tally. Additive so existing DBs migrate on next run.
+            "verified": "integer",
+            "verify_votes": "text",
         }.items():
             ensure_column(db, "review_findings", name, definition)
         db.execute(
@@ -655,6 +661,8 @@ def record_finding(
     discussion_id: str | None = None,
     run_id: str | None = None,
     note_id: str | None = None,
+    verified: bool | None = None,
+    verify_votes: str | None = None,
 ) -> None:
     """Upsert one ``review_findings`` row.
 
@@ -662,6 +670,12 @@ def record_finding(
     :func:`bubo.findings.finding_body` so this module does not
     have to depend on findings.py). Passing it in keeps the DB layer
     free of finding-formatting logic.
+
+    ``verified`` / ``verify_votes`` carry the opt-in verification verdict
+    (off by default; ``None`` when the pass did not run). They are written
+    *write-once*: the on-conflict branch ``COALESCE``s a non-NULL prior
+    verdict, so a later verify-off re-record at the same SHA cannot null out
+    an audit trail an earlier verified run wrote.
     """
     file_path = str(finding.get("file") or finding.get("path") or "")
     line = finding.get("line") or finding.get("new_line")
@@ -669,16 +683,17 @@ def record_finding(
     confidence = finding.get("confidence")
     try:
         confidence = float(confidence) if confidence is not None else None
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         confidence = None
+    verified_int = None if verified is None else int(verified)
     with connect_db() as db:
         db.execute(
             """
             insert into review_findings(
               project,iid,sha,fingerprint,file,line,status,discussion_id,body,updated_at,
-              run_id,type,severity,category,confidence,note_id
+              run_id,type,severity,category,confidence,note_id,verified,verify_votes
             )
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(project,iid,sha,fingerprint) do update set
               status=excluded.status,
               discussion_id=excluded.discussion_id,
@@ -689,6 +704,8 @@ def record_finding(
               category=excluded.category,
               confidence=excluded.confidence,
               note_id=excluded.note_id,
+              verified=coalesce(excluded.verified, review_findings.verified),
+              verify_votes=coalesce(excluded.verify_votes, review_findings.verify_votes),
               updated_at=excluded.updated_at
             """,
             (
@@ -708,6 +725,8 @@ def record_finding(
                 finding.get("category"),
                 confidence,
                 note_id,
+                verified_int,
+                verify_votes,
             ),
         )
 
@@ -1074,7 +1093,7 @@ def findings_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
         rows = db.execute(
             """
             select fingerprint,file,line,status,discussion_id,body,updated_at,
-                   run_id,type,severity,category,confidence,note_id
+                   run_id,type,severity,category,confidence,note_id,verified
             from review_findings
             where project=? and iid=? and sha=?
             order by updated_at asc
@@ -1099,6 +1118,7 @@ def findings_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
             "category": row[10],
             "confidence": row[11],
             "note_id": row[12],
+            "verified": row[13],
         }
         for row in rows
     ]
