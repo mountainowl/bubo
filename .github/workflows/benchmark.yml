@@ -1,0 +1,51 @@
+name: Benchmark
+
+# Runs the review benchmark on a schedule (and on demand / when the suite
+# changes) as a regression check. The replay run scores the committed sample
+# outputs against the labeled corpus — no API key needed. A live bubo run (and
+# competitor captures) feed the same scorer; see benchmarks/README.md.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "benchmarks/**"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Score the corpus (replay)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+
+      - name: Test the scorer
+        run: uv run pytest -q benchmarks/test_score.py
+
+      - name: Run the benchmark (replay)
+        run: uv run python benchmarks/run.py
+
+      - name: Upload the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bubo-benchmark-report
+          path: |
+            benchmarks/report.md
+            benchmarks/report.json
+          if-no-files-found: error

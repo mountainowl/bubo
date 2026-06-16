@@ -19,3 +19,7 @@ var/state/*.sqlite-*
 
 config/env.toml
 site/
+
+# benchmark run output
+benchmarks/report.md
+benchmarks/report.json

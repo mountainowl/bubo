@@ -1,0 +1,16 @@
+{
+  "id": "py-divzero-001",
+  "language": "python",
+  "source": "synthetic",
+  "description": "mean() divides by len(values) with no guard for the empty list.",
+  "diff": "stats.py: def mean(values):\n+    return sum(values) / len(values)\n",
+  "ground_truth": [
+    {
+      "file": "stats.py",
+      "line": 7,
+      "category": "correctness",
+      "severity": "blocking",
+      "summary": "ZeroDivisionError when values is empty: sum/len with no guard"
+    }
+  ]
+}

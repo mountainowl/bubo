@@ -1,0 +1,18 @@
+{
+  "reviewer": "baseline",
+  "cases": {
+    "py-divzero-001": {
+      "findings": [
+        {"file": "stats.py", "line": 7, "category": "correctness", "summary": "possible div by zero"},
+        {"file": "stats.py", "line": 2, "category": "style", "summary": "rename the parameter"}
+      ],
+      "efficiency": {"tokens_total": 9000, "seconds": 60.0, "cost_usd": 0.50}
+    },
+    "py-clean-001": {
+      "findings": [
+        {"file": "util.py", "line": 4, "category": "style", "summary": "prefer a comprehension here"}
+      ],
+      "efficiency": {"tokens_total": 8000, "seconds": 55.0, "cost_usd": 0.45}
+    }
+  }
+}

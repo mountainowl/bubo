@@ -1,0 +1,8 @@
+{
+  "id": "py-clean-001",
+  "language": "python",
+  "source": "synthetic",
+  "description": "A correct, idiomatic refactor with no defects — measures false positives.",
+  "diff": "util.py: small rename + type hint, behavior unchanged\n",
+  "ground_truth": []
+}

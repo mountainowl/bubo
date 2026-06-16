@@ -1,0 +1,16 @@
+{
+  "reviewer": "bubo",
+  "cases": {
+    "py-divzero-001": {
+      "findings": [
+        {"file": "stats.py", "line": 7, "category": "correctness", "severity": "blocking",
+         "summary": "divide by zero when values is empty"}
+      ],
+      "efficiency": {"tokens_total": 5400, "seconds": 41.2, "cost_usd": 0.27}
+    },
+    "py-clean-001": {
+      "findings": [],
+      "efficiency": {"tokens_total": 3100, "seconds": 22.0, "cost_usd": 0.14}
+    }
+  }
+}
