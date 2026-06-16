@@ -1,6 +1,6 @@
 [project]
 name = "bubo"
-version = "0.18.0"
+version = "0.19.0"
 description = "Bubo — agentic AI code review for GitLab MRs and GitHub PRs, with the LLM of your choice."
 readme = "README.md"
 requires-python = ">=3.14"
