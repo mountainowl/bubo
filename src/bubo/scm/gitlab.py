@@ -52,6 +52,18 @@ class GitLabProvider:
         diffs = gitlab.get_mr_diffs(cfg, token, project, number)
         return changed_lines_from_diffs(diffs)
 
+    def list_commits(
+        self, cfg: ReviewConfig, token: str, project: str, number: int
+    ) -> list[JsonObject]:
+        return [
+            {
+                "sha": str(commit.get("id") or ""),
+                "message": str(commit.get("message") or commit.get("title") or ""),
+                "author": str(commit.get("author_name") or ""),
+            }
+            for commit in gitlab.get_mr_commits(cfg, token, project, number)
+        ]
+
     def build_position(
         self, change: JsonObject, changed: dict[str, JsonObject], finding: JsonObject
     ) -> JsonObject | None:

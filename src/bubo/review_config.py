@@ -33,6 +33,7 @@ from bubo.config_values import (
     text_value,
 )
 from bubo.env_config import apply_runtime_env, read_config_file
+from bubo.governance_config import GovernanceConfig, governance_config_from_dict
 from bubo.paths import ROOT
 from bubo.telemetry import TelemetryConfig, telemetry_config_from_dict
 
@@ -118,6 +119,11 @@ class ReviewConfig:
         Reserved for a future "post one summary comment per MR" path.
     telemetry_config:
         Parsed :class:`TelemetryConfig` block.
+    governance_config:
+        Parsed :class:`~bubo.governance_config.GovernanceConfig` block —
+        the opt-in, off-by-default AI-provenance / governance surface. In its
+        first phase it only *captures* per-change provenance for audit and
+        changes no review behavior.
     projects:
         List of GitLab project paths the poller should scan, with disabled
         entries already filtered out.
@@ -178,6 +184,7 @@ class ReviewConfig:
     model: str | None = None
     post_summary: bool = False
     telemetry_config: TelemetryConfig = field(default_factory=TelemetryConfig)
+    governance_config: GovernanceConfig = field(default_factory=GovernanceConfig)
     projects: list[str] = field(default_factory=list)
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
     allowed_kinds: list[str] = field(default_factory=list)
@@ -268,6 +275,7 @@ def review_config_from_dict(
         ],
         model=str(agent["llm_model"]) if agent.get("llm_model") else None,
         telemetry_config=telemetry_config,
+        governance_config=governance_config_from_dict(raw),
         projects=[
             item["path"]
             for item in raw.get("projects", [])

@@ -61,6 +61,7 @@ from bubo.db import (
     prompt_version,
     record_finding_outcome,
     record_finding_outcome_sync_attempt,
+    record_provenance,
     record_review_run_finish,
     record_review_run_start,
     review_run_id,
@@ -81,6 +82,7 @@ from bubo.outcome_classifier import classify_developer_reply
 from bubo.paths import CONFIG, ROOT
 from bubo.prompt import render_meta_prompt as _render_meta_prompt
 from bubo.prompt import write_rendered_meta_prompt as write_rendered_prompt_file
+from bubo.provenance import compile_patterns, compute_provenance
 from bubo.review_config import ReviewConfig, load_review_config, review_config_from_dict
 from bubo.scm import ScmProvider, get_provider
 from bubo.secrets import redact_secrets
@@ -544,6 +546,64 @@ def post_no_findings_comment(
     return ("posted", comment_id)
 
 
+def capture_provenance(
+    cfg: ReviewConfig,
+    *,
+    token: str,
+    project: str,
+    number: int,
+    run_id: str,
+    provider: ScmProvider,
+    telemetry: ReviewTelemetry | None = None,
+) -> None:
+    """Record per-change provenance for governance/audit (opt-in, off by default).
+
+    Phase 1 of the governance feature: deterministic, declaration-first
+    provenance. Reads the change's commit trailers + changed paths, computes a
+    *banded* signal (never a verdict), and persists it write-once onto the
+    ``review_runs`` row. **Changes no review behavior.**
+
+    The commit/diff fetches happen only when ``capture_provenance`` is enabled
+    (so a disabled install makes zero extra API calls), and any failure is
+    soft — a provenance hiccup must never fail a review.
+    """
+    governance = cfg.governance_config
+    if not governance.capture_provenance:
+        return
+    try:
+        commits = provider.list_commits(cfg, token, project, number)
+        messages = [str(commit.get("message") or "") for commit in commits]
+        changed = provider.changed_lines(cfg, token, project, number)
+        signal = compute_provenance(
+            messages,
+            changed.keys(),
+            trailer_patterns=compile_patterns(governance.ai_trailer_patterns),
+            sensitive_globs=governance.sensitive_path_globs,
+        )
+        record_provenance(run_id, signal)
+        log(
+            "provenance_captured",
+            project=project,
+            iid=number,
+            run_id=run_id,
+            band=signal.band,
+            source=signal.source,
+            confidence=signal.confidence,
+            ai_signals=len(signal.ai_signals),
+            sensitive_paths=signal.sensitive_paths,
+        )
+        if telemetry is not None:
+            telemetry.record_provenance(repo=project, band=signal.band, source=signal.source)
+    except Exception as exc:  # provenance is additive — never fail the review
+        log(
+            "provenance_capture_failed",
+            project=project,
+            iid=number,
+            run_id=run_id,
+            error=redact_secrets(str(exc)),
+        )
+
+
 def post_or_plan_findings(
     *,
     cfg: ReviewConfig,
@@ -788,6 +848,18 @@ def worker(job: Path) -> int:
         with telemetry.span("llm_review.run", repo=project, mr_iid=iid, sha=sha, run_id=run_id):
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
             provider.checkout(cfg, project, mr, repo)
+            # Opt-in governance provenance capture (off by default). Records a
+            # banded provenance signal for the change; no-op + no API calls
+            # unless enabled. Runs regardless of whether findings exist.
+            capture_provenance(
+                cfg,
+                token=token,
+                project=project,
+                number=iid,
+                run_id=run_id,
+                provider=provider,
+                telemetry=telemetry,
+            )
             env = reviewer_env(os.environ)
             result = run(
                 [*cfg.reviewer_command, provider.review_prompt(project, mr, cfg)],

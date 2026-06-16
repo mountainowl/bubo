@@ -158,6 +158,12 @@ def get_pr_files(cfg: ReviewConfig, token: str, project: str, number: int) -> li
     return api_pages(cfg.github_api_url, token, f"/repos/{repo}/pulls/{number}/files")
 
 
+def get_pr_commits(cfg: ReviewConfig, token: str, project: str, number: int) -> list[JsonObject]:
+    """Return the commits on a pull request (each ``{sha, commit:{message, author}}``)."""
+    repo = _owner_repo(project)
+    return api_pages(cfg.github_api_url, token, f"/repos/{repo}/pulls/{number}/commits")
+
+
 def get_pr_review_comments(
     cfg: ReviewConfig, token: str, project: str, number: int
 ) -> list[JsonObject]:

@@ -81,6 +81,22 @@ class GitHubProvider:
             for f in files
         )
 
+    def list_commits(
+        self, cfg: ReviewConfig, token: str, project: str, number: int
+    ) -> list[JsonObject]:
+        out: list[JsonObject] = []
+        for entry in github.get_pr_commits(cfg, token, project, number):
+            commit = entry.get("commit") or {}
+            author = commit.get("author") or {}
+            out.append(
+                {
+                    "sha": str(entry.get("sha") or ""),
+                    "message": str(commit.get("message") or ""),
+                    "author": str(author.get("name") or ""),
+                }
+            )
+        return out
+
     def build_position(
         self, change: JsonObject, changed: dict[str, JsonObject], finding: JsonObject
     ) -> JsonObject | None:

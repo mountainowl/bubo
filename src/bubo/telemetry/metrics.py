@@ -37,6 +37,8 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         "operation",
         "outcome",
         "reviewer",
+        "provenance_band",
+        "provenance_source",
     }
 )
 
@@ -85,6 +87,7 @@ class ReviewTelemetry:
         self._tokens = _safe_instrument(self.meter.create_counter, "llm_review.tokens")
         self._cost = _safe_instrument(self.meter.create_counter, "llm_review.cost.usd")
         self._failures = _safe_instrument(self.meter.create_counter, "llm_review.failures")
+        self._provenance = _safe_instrument(self.meter.create_counter, "llm_review.provenance")
         self._review_duration = _safe_instrument(
             self.meter.create_histogram,
             "llm_review.latency.review_seconds",
@@ -171,6 +174,13 @@ class ReviewTelemetry:
             category=finding.get("category"),
         )
         self._add(self._findings, 1, attrs)
+
+    def record_provenance(self, *, repo: str, band: str, source: str) -> None:
+        self._add(
+            self._provenance,
+            1,
+            metric_attrs(repo=repo, provenance_band=band, provenance_source=source),
+        )
 
     def record_failure(self, *, repo: str, error_type: str, operation: str) -> None:
         self._add(

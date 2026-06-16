@@ -11,6 +11,23 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 ## [Unreleased]
 
 ### Added
+- **Opt-in AI-code provenance capture (governance).** For regulated/enterprise
+  teams, bubo can now record a per-change **provenance signal** for audit —
+  self-hosted, so the data never leaves your infrastructure. Gated behind
+  `[governance].capture_provenance` (default `false`); when off, no commit/diff
+  metadata is fetched and nothing is recorded. bubo reads the change's commit
+  trailers (it already checks the change out) and stores a *banded* signal on
+  the review run: `band` ∈ `unknown` / `likely_ai` / `collaborative`, plus a
+  `source` (`trailer` — deterministic; LLM `detection` deferred), the matched
+  declaration lines, and any `sensitive_path_globs` hits. Two honesty rules are
+  built in: it is a band **never a binary verdict**, and `unknown` is the
+  default (absence of a declaration is not proof of human authorship —
+  declared ≠ detected). Persisted **write-once** for audit integrity; surfaced
+  as a `provenance_captured` log event and the `llm_review.provenance` metric.
+  **Captures only — changes no review behavior** (rigor modulation and policy
+  gates are a later, separately opt-in phase). bubo does not block merges; it
+  produces auditable data your pipeline acts on. See
+  [docs/configuration.md](docs/configuration.md), "Governance & provenance".
 - **Opt-in dispute-driven noise suppression.** Bubo already records, per
   finding, whether the developer accepted or disputed it. The new
   `[review].suppress_disputed_classes` flag (default `false`) turns that

@@ -126,6 +126,12 @@ def get_mr_diffs(cfg: ReviewConfig, token: str, project: str, iid: int) -> list[
     return api_pages(cfg.gitlab_url, token, f"/projects/{encoded}/merge_requests/{iid}/diffs")
 
 
+def get_mr_commits(cfg: ReviewConfig, token: str, project: str, iid: int) -> list[JsonObject]:
+    """Return the commits on a merge request (each carries ``message``/``title``)."""
+    encoded = urllib.parse.quote(project, safe="")
+    return api_pages(cfg.gitlab_url, token, f"/projects/{encoded}/merge_requests/{iid}/commits")
+
+
 def get_mr_discussion(
     cfg: ReviewConfig, token: str, project: str, iid: int, discussion_id: str
 ) -> JsonObject:

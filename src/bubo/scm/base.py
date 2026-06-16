@@ -83,6 +83,18 @@ class ScmProvider(Protocol):
         """Return the added-line map for the change's diff."""
         ...
 
+    def list_commits(
+        self, cfg: ReviewConfig, token: str, project: str, number: int
+    ) -> list[JsonObject]:
+        """Return the change's commits, normalized to ``{sha, message, author}``.
+
+        Used by the opt-in governance provenance capture to read declared-AI
+        commit trailers. ``message`` is the full commit message; ``author`` is
+        a display name. Returned dicts are intentionally small (not the raw
+        provider payload) so the audit trail stays stable across providers.
+        """
+        ...
+
     def build_position(
         self, change: JsonObject, changed: dict[str, JsonObject], finding: JsonObject
     ) -> JsonObject | None:

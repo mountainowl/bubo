@@ -115,6 +115,31 @@ def text_value(value: object, name: str, *, default: str) -> str:
     return value
 
 
+def string_list(value: object, name: str) -> list[str]:
+    """Parse ``value`` as a list of strings, **preserving case**.
+
+    Like :func:`lower_string_list` but does not lowercase — for values where
+    case is significant: regex patterns and case-sensitive path globs (paths
+    are case-sensitive on Linux, so lowercasing a glob would silently break
+    matching). Each entry is stripped; empty entries and ``None`` are dropped.
+    An empty or absent list returns ``[]``.
+
+    Raises :class:`ConfigError` if ``value`` is not a list of scalars.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
+        raise ConfigError(f"{name} must be a list of strings")
+    out: list[str] = []
+    for item in value:
+        if item is None:
+            continue
+        text = str(item).strip()
+        if text:
+            out.append(text)
+    return out
+
+
 def lower_string_list(value: object, name: str) -> list[str]:
     """Parse ``value`` as a list of lowercase strings.
 

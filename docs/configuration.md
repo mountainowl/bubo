@@ -107,6 +107,22 @@ credentials live in that one TOML file.
       <td><code>5</code></td>
       <td>Minimum recorded outcomes in a category before its dispute rate is acted on. Only consulted when <code>suppress_disputed_classes = true</code>.</td>
     </tr>
+    <tr><th colspan="3"><code>[governance]</code></th></tr>
+    <tr>
+      <td><code>capture_provenance</code></td>
+      <td><code>false</code></td>
+      <td>Opt-in. When <code>true</code>, record a banded AI-provenance signal per change for audit. Captures only — no review-behavior change. See <a href="#governance-provenance">Governance &amp; provenance</a> below.</td>
+    </tr>
+    <tr>
+      <td><code>ai_trailer_patterns</code></td>
+      <td>built-in</td>
+      <td>Case-insensitive regexes matched against commit-message lines to detect <em>declared</em> AI assistance. Defaults match <code>Generated-by</code>/<code>AI-assisted</code> trailers and <code>Co-authored-by</code> naming a known agent. Only consulted when <code>capture_provenance = true</code>.</td>
+    </tr>
+    <tr>
+      <td><code>sensitive_path_globs</code></td>
+      <td><code>[]</code></td>
+      <td><code>fnmatch</code> globs (case-preserving) flagged when a change touches sensitive paths, e.g. <code>payments/**</code>, <code>*.pem</code>. Recorded for audit; no behavior change. Only consulted when <code>capture_provenance = true</code>.</td>
+    </tr>
     <tr><th colspan="3"><code>[poller]</code></th></tr>
     <tr>
       <td><code>state_dir</code></td>
@@ -299,3 +315,55 @@ not an accident. The escape hatches are all operator-side:
 - raise `dispute_suppress_threshold` or `dispute_suppress_min_samples`, or
 - set `suppress_disputed_classes = false` to re-post everything and rebuild
   fresh outcome history.
+
+## Governance & provenance
+
+For regulated and enterprise teams whose governance functions must **approve and
+monitor** AI-assisted code, bubo can capture a per-change **provenance signal**
+and keep it on-prem — there is no third party to ship code or audit data to,
+which is the whole compliance pitch of a self-hosted, BYO-LLM reviewer.
+
+This is **off by default** (`[governance].capture_provenance = false`) and, in
+its current phase, **captures only** — it does not change which findings post,
+raise severities, or block anything. Rigor modulation and policy gates are a
+later, separately opt-in phase.
+
+### How capture works
+
+bubo already checks out a change before reviewing it, so it reads the change's
+**commit trailers** and records a *banded* signal onto the review run. A
+category is derived from what the commits **declare** — e.g. a
+`Co-authored-by: Claude` trailer, or an `AI-assisted` trailer. Patterns are
+matched per commit-message line and the built-in defaults are anchored to
+trailer shape, so a prose body that merely mentions AI is not read as a
+declaration. The result is one row per change with `band`, `source`,
+`confidence`, the matched declaration lines (for the audit trail), and any
+matched `sensitive_path_globs`.
+
+### Two honesty rules (deliberate)
+
+- **A band, never a verdict.** `band` is one of `unknown` / `likely_ai` /
+  `collaborative`. bubo never emits a binary "this is AI / this is human" label —
+  post-hoc detection is fragile cross-domain, so a banded signal is the honest
+  shape.
+- **Declared ≠ detected, and `unknown` is the default.** The absence of an AI
+  declaration is **not** proof of human authorship, so a change with no signal is
+  `unknown`, never `human`. The `source` field (`trailer` vs `detection`) records
+  *which kind* of evidence produced the band. This phase is **deterministic
+  (`trailer`) only**; LLM-based AI *detection* is deliberately deferred and would
+  surface as `source = detection` — distinct, so an auditor always knows whether
+  they are looking at a declaration or a guess.
+
+### Audit integrity
+
+Provenance is computed once per run and persisted **write-once** — no code path
+retroactively rewrites it. The signal also appears in the JSON log stream as a
+`provenance_captured` event and (when telemetry is on) as the
+`llm_review.provenance` metric, labelled by band and source.
+
+### Capability boundary (read this)
+
+bubo **cannot block a merge** — it does not own CI or branch protection. It
+produces auditable data and an advisory signal; acting on that signal (required
+approvals, merge gates) stays with your pipeline. Capture is the foundation that
+makes those downstream gates *possible*, not a gate itself.

@@ -24,6 +24,7 @@ land on the first invocation after deploy.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,6 +32,7 @@ from pathlib import Path
 from bubo import paths
 from bubo.events import now
 from bubo.hash_utils import stable_digest, stable_hash
+from bubo.provenance import ProvenanceSignal
 from bubo.statuses import FindingStatus, ReviewMode, ReviewStatus
 from bubo.telemetry import TokenUsage
 from bubo.types import JsonObject
@@ -123,6 +125,17 @@ def init_db() -> None:
             )
             """
         )
+        # Governance/provenance (opt-in, off by default) — one banded signal
+        # per change, persisted write-once. Additive so existing DBs migrate
+        # on the next run. See bubo.provenance / record_provenance.
+        for name, definition in {
+            "provenance_band": "text",
+            "provenance_source": "text",
+            "provenance_confidence": "text",
+            "provenance_signals": "text",
+            "sensitive_paths": "text",
+        }.items():
+            ensure_column(db, "review_runs", name, definition)
         db.execute(
             """
             create table if not exists review_findings (
@@ -298,6 +311,63 @@ def record_review_run_finish(
                 run_id,
             ),
         )
+
+
+def record_provenance(run_id: str, signal: ProvenanceSignal) -> None:
+    """Persist a change's provenance onto its ``review_runs`` row — write-once.
+
+    Governance/audit integrity: provenance is computed once per run and must
+    never be retroactively rewritten, so this UPDATEs **only** when
+    ``provenance_band`` is still null. A no-op when the run row doesn't exist
+    yet or already carries provenance. The signal's list fields are stored as
+    JSON text for the audit trail.
+    """
+    with connect_db() as db:
+        db.execute(
+            """
+            update review_runs set
+              provenance_band=?,
+              provenance_source=?,
+              provenance_confidence=?,
+              provenance_signals=?,
+              sensitive_paths=?
+            where run_id=? and provenance_band is null
+            """,
+            (
+                signal.band,
+                signal.source,
+                signal.confidence,
+                json.dumps(signal.ai_signals),
+                json.dumps(signal.sensitive_paths),
+                run_id,
+            ),
+        )
+
+
+def provenance_for(run_id: str) -> JsonObject | None:
+    """Return the persisted provenance for ``run_id``, or ``None`` if absent.
+
+    The inverse of :func:`record_provenance`; the JSON list fields are decoded
+    back to lists. Used by tests now and by Phase 3 governance reporting later.
+    """
+    with connect_db() as db:
+        row = db.execute(
+            """
+            select provenance_band, provenance_source, provenance_confidence,
+                   provenance_signals, sensitive_paths
+            from review_runs where run_id=?
+            """,
+            (run_id,),
+        ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return {
+        "band": row[0],
+        "source": row[1],
+        "confidence": row[2],
+        "ai_signals": json.loads(row[3]) if row[3] else [],
+        "sensitive_paths": json.loads(row[4]) if row[4] else [],
+    }
 
 
 def record(
@@ -940,10 +1010,12 @@ __all__ = [
     "outcomes_for",
     "posted_findings_for_outcome_sync",
     "prompt_version",
+    "provenance_for",
     "record",
     "record_finding",
     "record_finding_outcome",
     "record_finding_outcome_sync_attempt",
+    "record_provenance",
     "record_review_run_finish",
     "record_review_run_start",
     "review_run_id",

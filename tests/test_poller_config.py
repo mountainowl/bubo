@@ -40,6 +40,19 @@ def test_default_runtime_config_is_consolidated_in_env_toml() -> None:
     assert config["poller"]["interval_seconds"] == 900
 
 
+def test_shipped_example_parses_with_governance_off() -> None:
+    # The packaged template must load end-to-end (tests elsewhere build configs
+    # from inline dicts and never exercise the real file). A broken [governance]
+    # block would silently break `bubo init` for every new operator.
+    config = tomllib.loads((ROOT / "config" / "env.example.toml").read_text())
+    cfg = normalize_config(config)
+
+    assert cfg.governance_config.capture_provenance is False
+    assert cfg.governance_config.sensitive_path_globs == []
+    # Defaults kick in (the example comments out ai_trailer_patterns).
+    assert cfg.governance_config.ai_trailer_patterns
+
+
 def test_new_config_names_normalize_to_internal_poller_keys() -> None:
     config = normalize_config(
         {
