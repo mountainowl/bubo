@@ -1,13 +1,16 @@
 # Bubo 🦉
 
-> **Agentic AI code review — with the LLM of your choice.**
-
+[![PyPI](https://img.shields.io/pypi/v/bubo?logo=pypi&logoColor=white)](https://pypi.org/project/bubo/)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-3776ab?logo=python&logoColor=white)](https://github.com/mountainowl/bubo/blob/main/pyproject.toml)
-[![Managed with uv](https://img.shields.io/badge/managed%20with-uv-2f3542)](https://github.com/mountainowl/bubo/blob/main/pyproject.toml)
+[![Docker: GHCR](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/mountainowl/bubo/pkgs/container/bubo)
 [![CI](https://github.com/mountainowl/bubo/actions/workflows/ci.yml/badge.svg)](https://github.com/mountainowl/bubo/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/mountainowl/bubo/badge)](https://scorecard.dev/viewer/?uri=github.com/mountainowl/bubo)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Managed with uv](https://img.shields.io/badge/managed%20with-uv-2f3542)](https://github.com/astral-sh/uv)
 [![Docs](https://img.shields.io/badge/docs-mountainowl.github.io%2Fbubo-4f62ad)](https://mountainowl.github.io/bubo/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827)](https://github.com/mountainowl/bubo/blob/main/LICENSE)
+
+> **Agentic AI code review — with the LLM of your choice.**
 
 [Bubo](https://en.wikipedia.org/wiki/Bubo_(genus)) is the genus of the great
 horned and eagle owls — patient night hunters that sit silent, see in the dark,
