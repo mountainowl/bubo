@@ -42,6 +42,91 @@ confidence must be a number from 0 to 1.
 Use line for the changed new-line where the inline comment should be placed.
 Return [] when there are no actionable findings."""
 
+# Per-tone voice directives appended to the review contract when the operator
+# selects a non-default ``[review].tone``. Each asks the reviewer for ONE extra
+# ``comment`` field — the finding rewritten in that voice — which bubo posts in
+# place of the structured render. Two invariants every block enforces:
+#   * the terse house style still governs title/impact/evidence/fix (those feed
+#     the audit dataset + the mood-neutral dedup fingerprint), so only the
+#     ``comment`` field changes voice;
+#   * the example teaches register only (cross-domain, "do not reuse"), which is
+#     the most reliable lever for tone and resists topic/phrasing overfit.
+_VOICE_HEADER = """In addition to the structured fields, add a "comment" field to each finding:
+the same finding rewritten as one short inline comment in the voice below. The
+terse house style still governs title/impact/evidence/fix — the voice applies to
+"comment" ONLY. Do not put a confidence number in "comment". The example shows
+voice only; do not reuse its wording or topic."""
+
+COMMENT_VOICES: dict[str, str] = {
+    "collaborative": _VOICE_HEADER
+    + """
+
+Voice: a thoughtful senior engineer leaving an inline note. Acknowledge intent
+when natural, show the bug with one concrete example, phrase the fix as a
+suggestion. Hedges ("I think") and contractions are fine.
+Example (style only):
+  fix:     "Guard the divide; return 0 when count is 0."
+  comment: "Heads up — if count comes in as 0 this throws, since we divide
+           total/count with no guard. Probably worth returning 0 (or skipping)
+           when the list is empty."
+""",
+    "socratic": _VOICE_HEADER
+    + """
+
+Voice: lead with a question that surfaces the gap, point at the mechanism, and
+invite the author to confirm rather than asserting a verdict.
+Example (style only):
+  fix:     "Guard the divide; return 0 when count is 0."
+  comment: "What happens here when count is 0? We divide total/count with no
+           guard, so this looks like it'll throw on an empty list — should we
+           return 0 (or skip) in that case?"
+""",
+    "formal": _VOICE_HEADER
+    + """
+
+Voice: measured and professional, complete sentences, no contractions or slang.
+State the condition, the consequence, and the recommendation.
+Example (style only):
+  fix:     "Guard the divide; return 0 when count is 0."
+  comment: "When count is 0, this computes total/count without a guard and will
+           raise a ZeroDivisionError. Recommend returning 0, or skipping, for
+           the empty case."
+""",
+    "casual": _VOICE_HEADER
+    + """
+
+Voice: relaxed, friendly, and brief. Contractions and light informality are
+fine; stay precise about the actual bug.
+Example (style only):
+  fix:     "Guard the divide; return 0 when count is 0."
+  comment: "Quick one — count being 0 will blow up here since we divide
+           total/count with no guard. Just return 0 (or bail) when it's empty."
+""",
+}
+
+
+def comment_voice_directive(tone: str) -> str:
+    """Return the voice directive for ``tone``, or ``""`` for the default.
+
+    ``terse`` (and any unrecognized value) returns the empty string, so the
+    review prompt — and therefore the whole review — is byte-identical to its
+    pre-tone behavior. Config validation (``review.tone`` via ``one_of``) keeps
+    unrecognized values from reaching here in practice.
+    """
+    return COMMENT_VOICES.get(tone, "")
+
+
+def build_review_contract(cfg: ReviewConfig) -> str:
+    """Build the finding-output contract for a review.
+
+    Fills the per-review ``max_findings`` cap and, when a non-default
+    ``[review].tone`` is set, appends that tone's voice directive. Shared by
+    both providers so their prompts cannot drift on the contract.
+    """
+    contract = REVIEW_CONTRACT.format(max_findings=cfg.max_findings_per_merge_request)
+    voice = comment_voice_directive(cfg.tone)
+    return f"{contract}\n\n{voice}" if voice else contract
+
 
 class ScmProvider(Protocol):
     """Structural interface every source-control backend implements.

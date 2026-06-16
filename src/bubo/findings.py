@@ -13,9 +13,17 @@ Responsibilities:
 * :func:`changed_lines_from_diffs` and :func:`build_position` — figure out
   whether a finding's ``file``/``line`` actually corresponds to an added
   line in the MR diff (only added lines can carry an inline GitLab comment).
-* :func:`finding_body` — render a finding object into the
-  Issue/Impact/Evidence/Fix/Confidence comment shape.
-* :func:`finding_fingerprint` — stable hash for idempotent posting.
+* :func:`finding_body` — render a finding into the canonical, mood-neutral
+  Issue/Impact/Evidence/Fix/Confidence comment shape. This is what feeds the
+  fingerprint and the recorded body, regardless of review tone.
+* :func:`finding_comment_body` — the body actually POSTED, which honors the
+  operator's ``[review].tone``: for a non-default tone it prefers the reviewer's
+  in-voice ``comment`` field, otherwise it falls back to :func:`finding_body`.
+  Kept separate from :func:`finding_body` so the *voice* never leaks into the
+  fingerprint or the audit dataset.
+* :func:`finding_fingerprint` — stable hash for idempotent posting; computed
+  from :func:`finding_body` (the structured render), so it is **tone-invariant**
+  — switching tone never re-posts a finding or splits its outcome history.
 
 Everything in this module is pure (no IO, no globals) so it is easily
 testable.
@@ -372,6 +380,19 @@ def build_position(
 
 
 def finding_body(finding: JsonObject) -> str:
+    """Render the canonical, mood-neutral comment body for a finding.
+
+    This is the structured ``**Issue (…):** … **Impact:** … **Evidence:** …
+    **Fix:** … **Confidence:** …`` shape. It is what the fingerprint and the
+    recorded DB body use, *independent of review tone* — see
+    :func:`finding_comment_body` for the tone-aware body that is actually
+    posted.
+
+    The ``body``/``comment`` fallback only fires for a degenerate finding that
+    has *no* structured fields (just a freeform body): the in-voice ``comment``
+    a non-default tone adds is ignored here because the structured fields are
+    present, which is exactly what keeps the fingerprint tone-invariant.
+    """
     body = finding.get("body") or finding.get("comment")
     title = finding.get("title") or "review finding"
     kind = finding.get("type") or "issue"
@@ -395,7 +416,34 @@ def finding_body(finding: JsonObject) -> str:
     return "\n\n".join(parts).strip()
 
 
+def finding_comment_body(finding: JsonObject, tone: str = "terse") -> str:
+    """Return the body to POST for ``finding``, honoring the review ``tone``.
+
+    For a non-default tone, prefer the reviewer's in-voice ``comment`` field
+    (produced by the tone directive in the review prompt); fall back to the
+    structured :func:`finding_body` when it is missing or blank, or whenever
+    the tone is the default ``terse``.
+
+    Deliberately separate from :func:`finding_body`: the fingerprint and the
+    recorded canonical body always use the structured render, so the posted
+    voice never affects dedup, outcome identity, or the audit dataset.
+    """
+    if tone != "terse":
+        comment = finding.get("comment")
+        if isinstance(comment, str) and comment.strip():
+            return comment.strip()
+    return finding_body(finding)
+
+
 def finding_fingerprint(project: str, iid: int, sha: str, finding: JsonObject) -> str:
+    """Stable hash identifying a finding for idempotent posting and dedup.
+
+    Uses :func:`finding_body` (the structured render) for the ``body`` part —
+    NOT :func:`finding_comment_body` — so the fingerprint is **tone-invariant**:
+    the same finding produces the same hash whether it is posted terse or in a
+    mood, which is what lets operators change ``[review].tone`` without
+    re-posting findings or fragmenting their accept/dispute history.
+    """
     payload = {
         "project": project,
         "iid": iid,

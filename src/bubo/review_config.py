@@ -28,6 +28,7 @@ from bubo.config_values import (
     bool_value,
     confidence_threshold,
     lower_string_list,
+    one_of,
     positive_int,
     section,
     text_value,
@@ -68,6 +69,15 @@ DEFAULT_REVIEWER_COMMAND = [
 # short on purpose — the value of the signal is "reviewer ran and was happy",
 # not a verbose summary.
 DEFAULT_NO_FINDINGS_COMMENT = "Automated review ran — no issues found."
+
+# Review-comment voice. ``terse`` (the default) is the current behavior: the
+# posted comment is the structured Impact/Evidence/Fix render, byte-identical
+# to before this knob existed. The other tones ask the reviewer for an extra
+# in-voice ``comment`` field that is posted instead — see
+# ``bubo.scm.base.comment_voice_directive``. The structured fields (and the
+# dedup fingerprint) stay mood-neutral regardless of tone.
+DEFAULT_TONE = "terse"
+VALID_TONES = ("terse", "collaborative", "socratic", "formal", "casual")
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +180,12 @@ class ReviewConfig:
         every poll. Falls back to :data:`DEFAULT_NO_FINDINGS_COMMENT` when
         unset; an empty or whitespace-only value disables the post even
         when ``post_no_findings_comment`` is ``True``.
+    tone:
+        Review-comment voice, one of :data:`VALID_TONES`. ``terse`` (default)
+        posts the structured render unchanged; the other tones inject a voice
+        directive into the review prompt and post the reviewer's in-voice
+        ``comment`` field instead. Mood-neutral fields/fingerprint are
+        unaffected.
     """
 
     provider: str = DEFAULT_PROVIDER
@@ -193,6 +209,7 @@ class ReviewConfig:
     dispute_suppress_min_samples: int = 5
     post_no_findings_comment: bool = True
     no_findings_comment_body: str = DEFAULT_NO_FINDINGS_COMMENT
+    tone: str = DEFAULT_TONE
 
 
 def load_review_config(
@@ -309,6 +326,7 @@ def review_config_from_dict(
             "no_findings_comment_body",
             default=DEFAULT_NO_FINDINGS_COMMENT,
         ),
+        tone=one_of(review.get("tone"), "review.tone", VALID_TONES, default=DEFAULT_TONE),
     )
 
 

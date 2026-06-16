@@ -46,6 +46,51 @@ distinguishable from one the reviewer never touched. It's default-on, dedup'd by
 bot author + exact body, and configurable under `[agents]` (see the
 [configuration reference](docs/configuration.md)).
 
+## 🎭 Give it a mood
+
+A finding only helps if someone actually reads it. The shape above is `terse` —
+the default, and the right call when you want pure signal. But a robotic comment
+gets skimmed; a comment that sounds like a teammate gets *fixed*. So Bubo lets
+you pick the **voice**. One knob:
+
+```toml
+[review]
+tone = "collaborative"   # terse · collaborative · socratic · formal · casual
+```
+
+Below is **one real finding** — a genuine cookie-deletion bug Bubo caught on a
+public PR — wearing four different moods. Same bug, same evidence, same `0.99`
+confidence underneath. Only the words change:
+
+> 🤝 **collaborative** — *for teams who want a teammate, not a linter*
+> Heads up — this removes by name only, so if the jar has `sid` for `a.example`
+> and `b.example`, one `popitem()` returns one pair but deletes both cookies.
+> Probably worth clearing the specific cookie using its domain/path/name.
+
+> 🤔 **socratic** — *for mentoring and review-as-teaching*
+> What happens here when the jar has the same cookie name for two domains?
+> `del self[name]` goes through `remove_cookie_by_name` without domain/path, so
+> this removes every matching cookie while returning only one pair — should we
+> clear the selected cookie by domain/path/name instead?
+
+> 🏛️ **formal** — *for regulated shops and a clean audit trail*
+> When multiple domains contain the same cookie name, this deletes by name only
+> and removes every matching cookie while returning a single pair. Recommend
+> clearing the specific cookie selected by `popitem` using its domain, path, and
+> name.
+
+> 😎 **casual** — *for startups who keep it light*
+> Quick one — this deletes by name only, so same-name cookies on other
+> domains/paths get cleared too. Grab the Cookie from the iterator and clear
+> that exact domain/path/name.
+
+**The catch? There isn't one.** Mood changes *only the words a developer reads*.
+The severity, the evidence, the confidence, the dedup fingerprint, and every row
+in your governance/audit dataset are identical across every tone — so you can
+tune the voice for your humans without disturbing the data your compliance
+reports run on. Ships as `terse`; opt in when you're ready, set it once, leave it
+to the operator. → [tone reference](docs/configuration.md#review-comment-tone-moods)
+
 Real (sanitized) inline findings on GitLab MRs:
 
 ![Sanitized inline finding — data primer](docs/images/gitlab-mr-review-data-primer.png)

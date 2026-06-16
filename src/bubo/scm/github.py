@@ -29,7 +29,7 @@ from bubo.events import log
 from bubo.findings import changed_lines_from_files, resolve_finding_line
 from bubo.paths import ROOT
 from bubo.review_config import ReviewConfig
-from bubo.scm.base import REVIEW_CONTRACT
+from bubo.scm.base import build_review_contract
 from bubo.secrets import redact_secrets
 from bubo.subproc import run_bounded
 from bubo.types import JsonObject
@@ -229,7 +229,7 @@ class GitHubProvider:
     def review_prompt(
         self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
     ) -> str:
-        contract = REVIEW_CONTRACT.format(max_findings=cfg.max_findings_per_merge_request)
+        contract = build_review_contract(cfg)
         head = change.get("head") or {}
         base = change.get("base") or {}
         suffix = f"\n\n{extra_directive}" if extra_directive else ""

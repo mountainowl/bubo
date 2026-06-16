@@ -11,6 +11,18 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 ## [Unreleased]
 
 ### Added
+- **Opt-in review-comment tone ("moods").** `[review].tone` chooses the *voice*
+  of a posted finding: `terse` (default — unchanged structured render),
+  `collaborative`, `socratic`, `formal`, or `casual`. For any non-default tone
+  bubo injects a short voice directive (register + one cross-domain style
+  example) into the review prompt, asking the reviewer for an in-voice
+  `comment` field that is posted in place of the structured render. The
+  structured fields **and the dedup fingerprint stay mood-neutral**, so
+  switching tone never re-posts a finding, splits its accept/dispute history,
+  or perturbs the governance dataset — only the words developers read change.
+  `terse` is byte-identical to prior behavior (no prompt change, no extra
+  tokens). See [docs/configuration.md](docs/configuration.md), "Review-comment
+  tone".
 - **Read-only governance report / export (`bubo report` + `get_governance_report`).**
   A new read-only CLI command and matching MCP tool assemble an auditable
   governance report from the metrics already in SQLite: review counts, a

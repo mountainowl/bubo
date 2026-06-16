@@ -14,7 +14,7 @@ from bubo import gitlab, mcp
 from bubo.config_values import ConfigError
 from bubo.findings import build_position, changed_lines_from_diffs
 from bubo.review_config import ReviewConfig
-from bubo.scm.base import REVIEW_CONTRACT
+from bubo.scm.base import build_review_contract
 from bubo.secrets import redact_secrets
 from bubo.subproc import run_bounded
 from bubo.types import JsonObject
@@ -148,7 +148,7 @@ class GitLabProvider:
     def review_prompt(
         self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
     ) -> str:
-        contract = REVIEW_CONTRACT.format(max_findings=cfg.max_findings_per_merge_request)
+        contract = build_review_contract(cfg)
         suffix = f"\n\n{extra_directive}" if extra_directive else ""
         return f"""Review GitLab MR {change.get("web_url")}
 Project: {project}

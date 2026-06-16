@@ -93,6 +93,11 @@ credentials live in that one TOML file.
       <td>Whitelist of finding kinds to post. A finding is kept if its <code>severity</code>, <code>category</code>, or <code>type</code> appears here (case-insensitive). Empty list = no kind filter — post everything that clears <code>min_confidence</code>. Common values: <code>"blocking"</code>, <code>"non-blocking"</code>, <code>"security"</code>, <code>"correctness"</code>, <code>"performance"</code>, <code>"issue"</code>, <code>"suggestion"</code>.</td>
     </tr>
     <tr>
+      <td><code>tone</code></td>
+      <td><code>"terse"</code></td>
+      <td>Review-comment voice ("mood"): <code>terse</code> (default) / <code>collaborative</code> / <code>socratic</code> / <code>formal</code> / <code>casual</code>. Affects ONLY how a posted finding reads. <code>terse</code> posts the structured Impact/Evidence/Fix render unchanged; other tones ask the reviewer for an in-voice <code>comment</code> field and post that instead. The structured fields and the dedup fingerprint are identical across tones, so switching never re-posts a finding or splits its outcome history. See <a href="#review-comment-tone-moods">Review-comment tone</a> below.</td>
+    </tr>
+    <tr>
       <td><code>suppress_disputed_classes</code></td>
       <td><code>false</code></td>
       <td>Opt-in. When <code>true</code>, drop finding <code>category</code> classes this repo has repeatedly rejected, using the accept/dispute outcome history. Off by default. See <a href="#dispute-driven-suppression">Dispute-driven suppression</a> below.</td>
@@ -279,6 +284,44 @@ credentials live in that one TOML file.
     </tr>
   </tbody>
 </table>
+
+## Review-comment tone (moods)
+
+`[review].tone` chooses the *voice* of a posted finding. It is purely a
+presentation choice and is left entirely to the operator — bubo ships with
+`terse` so behavior is unchanged unless you opt in.
+
+| tone | reads like |
+| --- | --- |
+| `terse` *(default)* | the structured `**Impact:** … **Evidence:** … **Fix:** …` render — byte-identical to bubo before this knob existed |
+| `collaborative` | a senior engineer's inline note — acknowledges intent, gives a concrete example, suggests the fix |
+| `socratic` | leads with a question that surfaces the gap and invites confirmation |
+| `formal` | measured, complete sentences, no contractions — for regulated/enterprise review |
+| `casual` | relaxed and brief |
+
+**How it works.** For any non-`terse` tone, bubo injects a short *voice
+directive* into the review prompt (a register description plus one
+cross-domain style example) asking the reviewer to add a single in-voice
+`comment` field per finding. bubo posts that `comment` in place of the
+structured render. This costs a few extra output tokens per finding.
+
+**What never changes with tone.** The structured fields
+(`title`/`impact`/`evidence`/`fix`/`confidence`) are still recorded to SQLite
+exactly as in `terse` mode, and the dedup **fingerprint is computed from those
+fields, not the voiced comment**. So you can change tone at any time without
+re-posting existing findings, splitting their accept/dispute history, or
+disturbing the governance dataset — only the words developers read change.
+
+### The same finding in each tone
+
+One real finding (a cookie-deletion bug, captured on a public PR) as each tone
+would post it — identical severity/evidence/confidence underneath:
+
+- **`terse`** *(default)* — `**Issue (non-blocking, correctness):** popitem removes duplicate-name cookies` followed by the structured `**Impact:** … **Evidence:** … **Fix:** … **Confidence:** 0.99` block.
+- **`collaborative`** — "Heads up — this removes by name only, so if the jar has `sid` for `a.example` and `b.example`, one `popitem()` returns one pair but deletes both cookies. Probably worth clearing the specific cookie using its domain/path/name."
+- **`socratic`** — "What happens here when the jar has the same cookie name for two domains? `del self[name]` goes through `remove_cookie_by_name` without domain/path, so this removes every matching cookie while returning only one pair — should we clear the selected cookie by domain/path/name instead?"
+- **`formal`** — "When multiple domains contain the same cookie name, this deletes by name only and removes every matching cookie while returning a single pair. Recommend clearing the specific cookie selected by `popitem` using its domain, path, and name."
+- **`casual`** — "Quick one — this deletes by name only, so same-name cookies on other domains/paths get cleared too. Grab the Cookie from the iterator and clear that exact domain/path/name."
 
 ## Dispute-driven suppression
 
