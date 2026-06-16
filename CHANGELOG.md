@@ -23,6 +23,24 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   `terse` is byte-identical to prior behavior (no prompt change, no extra
   tokens). See [docs/configuration.md](docs/configuration.md), "Review-comment
   tone".
+- **Feedback-loop & measurement surfaces in the governance report (read-only).**
+  Three signals bubo already captures are now queryable via `bubo report` and
+  MCP, so operators and governance teams can *see* the loop rather than have it
+  act silently. (1) A new `dispute_classes` report section lists per-category
+  dispute rates (`{category, total, rejected, dispute_rate}`, ordered by rate)
+  from `db.disputed_class_stats` — the **raw, config-independent** truth behind
+  dispute-driven suppression. A dedicated `get_dispute_classes(project)` MCP
+  tool additionally reads the operator's real
+  `[review].dispute_suppress_threshold` / `dispute_suppress_min_samples` and adds
+  a **truthful** `would_suppress` flag per category (never a hardcoded-threshold
+  guess; falls back to raw stats if config is unreadable). (2) A `latency`
+  section reports review-run wall-clock latency (`count`, p50/p95/max/avg
+  seconds) from `db.latency_summary`. (3) An `acknowledgements` rollup nested in
+  `reviews` makes the `{no_findings, success, failed}` status counts first-class,
+  mirroring `reviews.by_status`. `dispute_classes` is CSV-exportable
+  (`--section dispute_classes`); `latency`/`acknowledgements` are JSON-only. All
+  strictly read-only (never call `init_db`). See
+  [docs/operate.md](docs/operate.md), "Governance report".
 - **Read-only governance report / export (`bubo report` + `get_governance_report`).**
   A new read-only CLI command and matching MCP tool assemble an auditable
   governance report from the metrics already in SQLite: review counts, a

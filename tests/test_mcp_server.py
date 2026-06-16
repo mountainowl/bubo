@@ -279,6 +279,8 @@ def test_server_exposes_expected_tool_names() -> None:
         "get_findings",
         "get_finding_outcomes",
         "get_metrics",
+        "get_governance_report",
+        "get_dispute_classes",
         "review_change",
     }.issubset(names)
 
@@ -571,6 +573,100 @@ def test_get_metrics_project_filter_excludes_other_projects() -> None:
             other = mcp_server.get_metrics(since_hours=720, project="someone/else")
             assert other["reviews_total"] == 0
             assert other["tokens_total_sum"] == 0
+    finally:
+        paths.DB = original_db
+
+
+# ---------------------------------------------------------------------------
+# get_dispute_classes — read-only stats + truthful would_suppress from config.
+# ---------------------------------------------------------------------------
+
+
+def _seed_dispute_classes(tmp_db: Path) -> None:
+    """documentation: 3/5 disputed (0.6); security: 2/5 disputed (0.4)."""
+    paths.DB = tmp_db
+    db.init_db()
+    for category, n_disputed in [("documentation", 3), ("security", 2)]:
+        for i in range(5):
+            fp = f"{category}-{i}"
+            db.record_finding(
+                project="g/r",
+                iid=1,
+                sha="sha",
+                fingerprint=fp,
+                finding={"category": category, "file": "f.py", "line": 1, "confidence": 0.9},
+                status=FindingStatus.POSTED,
+                body="b",
+                discussion_id=f"d-{fp}",
+            )
+            db.record_finding_outcome(
+                project="g/r",
+                iid=1,
+                sha="sha",
+                fingerprint=fp,
+                discussion_id=f"d-{fp}",
+                outcome={
+                    "resolved": True,
+                    "deleted": False,
+                    "developer_replied": True,
+                    "disputed": i < n_disputed,
+                    "false_positive": False,
+                    "duplicate": False,
+                    "merged_unresolved": False,
+                },
+            )
+
+
+def test_get_dispute_classes_flags_would_suppress_from_config() -> None:
+    cfg = ReviewConfig(dispute_suppress_threshold=0.5, dispute_suppress_min_samples=5)
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            _seed_dispute_classes(Path(tmp) / "reviewer.sqlite")
+            with patch("bubo.mcp_server.load_review_config", return_value=cfg):
+                out = mcp_server.get_dispute_classes(project="g/r")
+    finally:
+        paths.DB = original_db
+    classes = {c["category"]: c for c in out["classes"]}
+    assert classes["documentation"]["dispute_rate"] == 0.6
+    assert classes["documentation"]["would_suppress"] is True
+    assert classes["security"]["would_suppress"] is False  # 0.4 < 0.5
+
+
+def test_get_dispute_classes_falls_back_to_raw_when_config_unreadable() -> None:
+    from bubo.config_values import ConfigError
+
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            _seed_dispute_classes(Path(tmp) / "reviewer.sqlite")
+            with patch(
+                "bubo.mcp_server.load_review_config",
+                side_effect=ConfigError("no config"),
+            ):
+                out = mcp_server.get_dispute_classes(project="g/r")
+    finally:
+        paths.DB = original_db
+    # No config → raw stats only, no would_suppress flag anywhere.
+    assert all("would_suppress" not in c for c in out["classes"])
+    doc = next(c for c in out["classes"] if c["category"] == "documentation")
+    assert doc["dispute_rate"] == 0.6
+
+
+def test_get_dispute_classes_does_not_init_db() -> None:
+    # Mirrors get_governance_report: read-only, must not create the DB file.
+    original_db = paths.DB
+    try:
+        paths.DB = Path(paths.WORK) / "missing-dispute" / "reviewer.sqlite"
+        with (
+            patch(
+                "bubo.mcp_server.load_review_config",
+                return_value=ReviewConfig(),
+            ),
+            pytest.raises(sqlite3.OperationalError),
+        ):
+            mcp_server.get_dispute_classes(project="g/r")
+        assert not paths.DB.exists()  # mode=ro never creates the file
     finally:
         paths.DB = original_db
 

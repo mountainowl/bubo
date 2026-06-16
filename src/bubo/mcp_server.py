@@ -310,16 +310,77 @@ def get_governance_report(
       the window.
     * ``roi`` — return-on-investment view: findings acted on versus LLM
       tokens and cost spent.
+    * ``latency`` — review-run wall-clock latency over the window
+      (``count`` plus ``p50``/``p95``/``max``/``avg`` seconds).
+    * ``dispute_classes`` — per-category dispute rates for the project
+      (raw stats; the dedicated :func:`get_dispute_classes` tool adds a
+      truthful ``would_suppress`` flag from the operator's config).
     * ``policy_decisions`` — governance/policy gate decisions recorded for
       the window.
     * ``audit`` — the flat, row-level audit trail (the section ``to_csv``
       defaults to exporting).
+
+    The ``reviews`` section additionally carries an ``acknowledgements``
+    rollup (``{no_findings, success, failed}``) mirroring its ``by_status``.
     """
     from bubo import report
 
     return report.build_report(
         since_hours=since_hours, since=since, until=until, project=project
     )
+
+
+@mcp.tool()
+def get_dispute_classes(project: str) -> dict[str, Any]:
+    """Per-category dispute rates for ``project``, with truthful suppression flag.
+
+    Surfaces the raw, config-independent dispute statistics that drive the
+    opt-in dispute-suppression filter (``[review].suppress_disputed_classes``):
+    every normalized finding category the project has accrued outcomes for,
+    as ``{category, total, rejected, dispute_rate}`` ordered by dispute rate
+    descending. These stats are **cumulative** — they span all recorded
+    outcomes for the project, not a rolling window (suppression itself is
+    cumulative), so this tool intentionally takes no window argument.
+
+    To keep the report honest for a governance auditor, the
+    ``would_suppress`` flag is computed against the operator's **real**
+    thresholds: this tool reads ``[review].dispute_suppress_threshold`` and
+    ``dispute_suppress_min_samples`` from ``config/env.toml`` (like
+    ``review_change`` resolves the provider) and passes them to
+    :func:`bubo.report.build_report`. If the config cannot be read the tool
+    falls back to raw stats with no flag (never a hardcoded-threshold guess).
+    Note the flag reflects whether a class *would* be suppressed if
+    suppression were enabled — it does **not** mean suppression is on.
+
+    Like :func:`get_governance_report` this is strictly read-only and does
+    **not** call ``db.init_db()``; a missing DB surfaces the reader's error.
+
+    Args:
+        project: Exact-match project (GitLab path-with-namespace or GitHub
+            ``owner/repo``). Required — dispute suppression is per-repo.
+
+    Returns the report's ``dispute_classes`` section: ``{classes: [...]}``.
+    """
+    from bubo import report
+
+    threshold: float | None = None
+    min_samples: int | None = None
+    try:
+        cfg = load_review_config(ENV_CONFIG)
+        threshold = cfg.dispute_suppress_threshold
+        min_samples = cfg.dispute_suppress_min_samples
+    except (ConfigError, OSError):
+        # Config unreadable: fall back to raw stats (no would_suppress flag)
+        # rather than guessing thresholds and misreporting reality.
+        threshold = None
+        min_samples = None
+
+    rep = report.build_report(
+        project=project,
+        suppress_threshold=threshold,
+        suppress_min_samples=min_samples,
+    )
+    return {"classes": rep["dispute_classes"]}
 
 
 @mcp.tool()
@@ -520,6 +581,7 @@ def main() -> None:
 
 
 __all__ = [
+    "get_dispute_classes",
     "get_finding_outcomes",
     "get_findings",
     "get_governance_report",

@@ -182,12 +182,14 @@ short-circuits the LLM call.
 ## Governance report
 
 `bubo report` assembles an auditable governance report from the metrics
-already in SQLite — review counts, a **provenance breakdown** (counts by
-band/source), the **accept-vs-dispute rate**, a **noise trend** (daily
-false-positive trend), a **bug-catch ROI proxy**, token/cost rollups,
-**policy-decision stats** (from the Phase 2 `governance_decisions`), and a
-per-change **audit trail**. It is the compliance-facing companion to the
-provenance + governance-decision capture described in
+already in SQLite — review counts (with a **no-findings acknowledgements**
+rollup), a **provenance breakdown** (counts by band/source), the
+**accept-vs-dispute rate**, a **noise trend** (daily false-positive trend),
+a **bug-catch ROI proxy**, **review latency** (p50/p95/max/avg seconds),
+**per-category dispute rates**, token/cost rollups, **policy-decision
+stats** (from the Phase 2 `governance_decisions`), and a per-change **audit
+trail**. It is the compliance-facing companion to the provenance +
+governance-decision capture described in
 [configuration.md](configuration.md), "Governance & provenance".
 
 It is strictly **READ-ONLY** — it only queries existing state and never
@@ -209,7 +211,7 @@ bubo report --since-hours 168 --format csv > audit.csv
 | Flag | Default | What it does |
 |---|---|---|
 | `--format {json,csv}` | `json` | Output format. JSON is the full nested report; CSV is a single tabular section. |
-| `--section` | `audit` | CSV only — which section to emit. `audit` (the per-change audit trail) or `noise_trend`. Ignored for JSON. |
+| `--section` | `audit` | CSV only — which section to emit. `audit` (the per-change audit trail), `noise_trend`, or `dispute_classes`. Ignored for JSON. |
 | `--since-hours` | `24` | Rolling window, in hours, for the report. |
 | `--since` / `--until` | unset | ISO dates bounding a fixed audit window. Override `--since-hours` for a reproducible window. |
 | `--project` | all | Restrict the report to a single project path. |
@@ -219,14 +221,16 @@ bubo report --since-hours 168 --format csv > audit.csv
 ### JSON vs CSV
 
 - **JSON** (default) is the full nested report. Sections: `meta`,
-  `reviews`, `provenance`, `outcomes`, `noise_trend`, `roi`,
+  `reviews` (with a nested `acknowledgements` rollup), `provenance`,
+  `outcomes`, `noise_trend`, `roi`, `latency`, `dispute_classes`,
   `policy_decisions`, and `audit`. Scalar rollups (review counts,
-  accept/dispute rate, ROI proxy, token/cost) are **JSON-only** — they
-  have no tabular form.
+  accept/dispute rate, ROI proxy, latency, token/cost) are **JSON-only** —
+  they have no tabular form.
 - **CSV** is a single tabular section, chosen with `--section`. The
   default is the per-change `audit` trail; `--section noise_trend` emits
-  the daily false-positive trend instead. CSV is intended for
-  spreadsheet/BI import of the row-shaped sections.
+  the daily false-positive trend, and `--section dispute_classes` the
+  per-category dispute rates (CLI path: raw stats, no `would_suppress`).
+  CSV is intended for spreadsheet/BI import of the row-shaped sections.
 
 ### MCP tool
 
@@ -235,6 +239,15 @@ Desktop, Cline) as `get_governance_report(since_hours, since, until,
 project)`. It returns the same nested JSON structure as `bubo report
 --format json`, so a governance analyst can pull the report into a chat
 session without shell access.
+
+A companion `get_dispute_classes(project)` tool returns just the
+per-category dispute stats (cumulative — these span all recorded outcomes,
+not a rolling window, so the tool takes no window argument). Unlike the CLI
+path it reads your real `[review].dispute_suppress_threshold` /
+`dispute_suppress_min_samples` and adds a truthful `would_suppress` flag per
+category — so an analyst can see which classes the suppression filter
+*would* drop if it were enabled, computed against your actual thresholds
+rather than a hardcoded guess.
 
 Policy-decision stats are populated only when Phase 2 governance is
 enabled (`[governance].policy_mode` not `off`). When it is off, the

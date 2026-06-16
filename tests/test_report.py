@@ -386,3 +386,288 @@ def test_cli_report_bad_date_exits_cleanly(tmp_path: Path, capsys) -> None:  # t
         db.init_db()
         rc = cli.main(["report", "--root", str(tmp_path), "--since", "not-a-date"])
     assert rc == 2
+
+
+# --- Story 1.2 latency: db.latency_summary -----------------------------------
+
+
+def _seed_run_with_duration(
+    *, run_id: str, started_at: str, finished_at: str | None, project: str = "g/r"
+) -> None:
+    with sqlite3.connect(paths.DB) as con:
+        con.execute(
+            """insert into review_runs(run_id,project,iid,sha,status,dry_run,
+               started_at,finished_at) values(?,?,?,?,?,?,?,?)""",
+            (run_id, project, 1, "sha", "success", 1, started_at, finished_at),
+        )
+
+
+def test_latency_summary_percentiles_from_fixed_rows() -> None:
+    # Durations 10,20,30,40,100s → nearest-rank p50=30, p95=100, max=100, avg=40.
+    base = "2026-06-16T12:00:00+00:00"
+    fins = [
+        ("2026-06-16T12:00:10+00:00", 10),
+        ("2026-06-16T12:00:20+00:00", 20),
+        ("2026-06-16T12:00:30+00:00", 30),
+        ("2026-06-16T12:00:40+00:00", 40),
+        ("2026-06-16T12:01:40+00:00", 100),
+    ]
+    with _temp_db():
+        for i, (fin, _secs) in enumerate(fins):
+            _seed_run_with_duration(run_id=f"r{i}", started_at=base, finished_at=fin)
+        out = db.latency_summary(since="2026-06-01", until="2026-06-30")
+    assert out["count"] == 5
+    assert out["p50_seconds"] == 30.0
+    assert out["p95_seconds"] == 100.0
+    assert out["max_seconds"] == 100.0
+    assert out["avg_seconds"] == 40.0
+
+
+def test_latency_summary_ignores_unfinished_runs() -> None:
+    base = "2026-06-16T12:00:00+00:00"
+    with _temp_db():
+        _seed_run_with_duration(
+            run_id="done", started_at=base, finished_at="2026-06-16T12:00:30+00:00"
+        )
+        _seed_run_with_duration(run_id="running", started_at=base, finished_at=None)
+        out = db.latency_summary(since="2026-06-01", until="2026-06-30")
+    assert out["count"] == 1  # the still-running row is excluded
+    assert out["max_seconds"] == 30.0
+
+
+def test_latency_summary_empty_window_is_all_zero() -> None:
+    with _temp_db():
+        out = db.latency_summary(since="2026-06-01", until="2026-06-30")
+    assert out == {
+        "count": 0,
+        "p50_seconds": 0.0,
+        "p95_seconds": 0.0,
+        "max_seconds": 0.0,
+        "avg_seconds": 0.0,
+    }
+
+
+# --- Story 1.1/1.2/1.3 report assembly: new sections -------------------------
+
+
+def test_build_report_has_latency_section_rounded_2dp() -> None:
+    from bubo import report
+
+    base = "2026-06-16T12:00:00+00:00"
+    with _temp_db():
+        # One run of exactly 1.5s so 2dp rounding is observable end-to-end.
+        _seed_run_with_duration(
+            run_id="r", started_at=base, finished_at="2026-06-16T12:00:01.5+00:00"
+        )
+        rep = report.build_report(
+            since="2026-06-01", until="2026-06-30", project="g/r", generated_at="fixed"
+        )
+    assert "latency" in rep
+    assert rep["latency"]["count"] == 1
+    assert rep["latency"]["max_seconds"] == 1.5
+    assert rep["latency"]["avg_seconds"] == 1.5
+
+
+def _seed_dispute_history(project: str = "g/r") -> None:
+    """documentation: 3/5 disputed (0.6); security: 2/5 disputed (0.4)."""
+    def _add(category: str, index: int, *, disputed: bool) -> None:
+        fp = f"{category}-{index}"
+        db.record_finding(
+            project=project,
+            iid=1,
+            sha="sha",
+            fingerprint=fp,
+            finding={"category": category, "file": "f.py", "line": 1, "confidence": 0.9},
+            status=db.FindingStatus.POSTED,
+            body="b",
+            discussion_id=f"d-{fp}",
+        )
+        db.record_finding_outcome(
+            project=project,
+            iid=1,
+            sha="sha",
+            fingerprint=fp,
+            discussion_id=f"d-{fp}",
+            outcome={
+                "resolved": True,
+                "deleted": False,
+                "developer_replied": True,
+                "disputed": disputed,
+                "false_positive": False,
+                "duplicate": False,
+                "merged_unresolved": False,
+            },
+        )
+
+    for i in range(3):
+        _add("documentation", i, disputed=True)
+    for i in range(3, 5):
+        _add("documentation", i, disputed=False)
+    for i in range(2):
+        _add("security", i, disputed=True)
+    for i in range(2, 5):
+        _add("security", i, disputed=False)
+
+
+def test_dispute_classes_raw_when_no_thresholds() -> None:
+    from bubo import report
+
+    with _temp_db():
+        _seed_dispute_history()
+        rep = report.build_report(project="g/r", generated_at="fixed")
+    classes = rep["dispute_classes"]
+    assert {c["category"] for c in classes} == {"documentation", "security"}
+    doc = next(c for c in classes if c["category"] == "documentation")
+    assert doc["dispute_rate"] == 0.6
+    # No thresholds passed → no would_suppress flag at all (raw stats only).
+    assert "would_suppress" not in doc
+
+
+def test_dispute_classes_would_suppress_is_truthful() -> None:
+    from bubo import report
+
+    with _temp_db():
+        _seed_dispute_history()
+        rep = report.build_report(
+            project="g/r",
+            generated_at="fixed",
+            suppress_threshold=0.5,
+            suppress_min_samples=5,
+        )
+    classes = {c["category"]: c for c in rep["dispute_classes"]}
+    # documentation 0.6 ≥ 0.5 with 5 samples → would_suppress True.
+    assert classes["documentation"]["would_suppress"] is True
+    # security 0.4 < 0.5 → would_suppress False even though it has 5 samples.
+    assert classes["security"]["would_suppress"] is False
+
+
+def test_dispute_classes_thin_class_not_suppressed_despite_full_rate() -> None:
+    """Sample-gate: a 100%-disputed but thin class must NOT would_suppress.
+
+    This is the dilution/under-suppression bias the Epic exists to protect:
+    a high rate on too few samples is not actionable.
+    """
+    from bubo import report
+
+    with _temp_db():
+        # 3/3 documentation findings disputed → rate 1.0 but only 3 samples.
+        for i in range(3):
+            db.record_finding(
+                project="g/r",
+                iid=1,
+                sha="sha",
+                fingerprint=f"doc-{i}",
+                finding={"category": "documentation", "file": "f.py", "line": 1,
+                         "confidence": 0.9},
+                status=db.FindingStatus.POSTED,
+                body="b",
+                discussion_id=f"d-doc-{i}",
+            )
+            db.record_finding_outcome(
+                project="g/r",
+                iid=1,
+                sha="sha",
+                fingerprint=f"doc-{i}",
+                discussion_id=f"d-doc-{i}",
+                outcome={
+                    "resolved": True,
+                    "deleted": False,
+                    "developer_replied": True,
+                    "disputed": True,
+                    "false_positive": False,
+                    "duplicate": False,
+                    "merged_unresolved": False,
+                },
+            )
+        rep = report.build_report(
+            project="g/r",
+            generated_at="fixed",
+            suppress_threshold=0.5,
+            suppress_min_samples=5,
+        )
+    doc = next(c for c in rep["dispute_classes"] if c["category"] == "documentation")
+    assert doc["dispute_rate"] == 1.0
+    assert doc["total"] == 3
+    # 3 < min_samples=5 → not suppressible despite the perfect dispute rate.
+    assert doc["would_suppress"] is False
+
+
+def test_dispute_classes_empty_when_project_none() -> None:
+    from bubo import report
+
+    with _temp_db():
+        _seed_dispute_history()
+        rep = report.build_report(project=None, generated_at="fixed")
+    # Per-project section is empty for the all-projects report.
+    assert rep["dispute_classes"] == []
+
+
+def test_acknowledgements_mirror_by_status() -> None:
+    from bubo import report
+
+    with _temp_db():
+        with sqlite3.connect(paths.DB) as con:
+            for status, n in [("no_findings", 2), ("success", 1), ("failed", 3)]:
+                for i in range(n):
+                    con.execute(
+                        "insert into reviewed_mrs(project,iid,sha,status,updated_at)"
+                        " values(?,?,?,?,?)",
+                        ("g/r", i, f"{status}{i}", status, "2026-06-16T12:00:00+00:00"),
+                    )
+        rep = report.build_report(
+            since="2026-06-01", until="2026-06-30", project="g/r", generated_at="fixed"
+        )
+    acks = rep["reviews"]["acknowledgements"]
+    by_status = rep["reviews"]["by_status"]
+    assert acks == {"no_findings": 2, "success": 1, "failed": 3}
+    # Mirrors by_status exactly for the three first-class keys.
+    for key in ("no_findings", "success", "failed"):
+        assert acks[key] == by_status.get(key, 0)
+
+
+def test_acknowledgements_zero_for_absent_status() -> None:
+    from bubo import report
+
+    with _temp_db():
+        with sqlite3.connect(paths.DB) as con:
+            con.execute(
+                "insert into reviewed_mrs(project,iid,sha,status,updated_at)"
+                " values(?,?,?,?,?)",
+                ("g/r", 1, "s", "success", "2026-06-16T12:00:00+00:00"),
+            )
+        rep = report.build_report(
+            since="2026-06-01", until="2026-06-30", project="g/r", generated_at="fixed"
+        )
+    acks = rep["reviews"]["acknowledgements"]
+    # no_findings/failed never occurred → 0, not KeyError.
+    assert acks == {"no_findings": 0, "success": 1, "failed": 0}
+
+
+def test_section_order_is_fixed() -> None:
+    from bubo import report
+
+    with _temp_db():
+        _seed()
+        rep = report.build_report(since_hours=24, project="g/r", generated_at="fixed")
+    assert list(rep) == [
+        "meta", "reviews", "provenance", "outcomes", "noise_trend",
+        "roi", "latency", "dispute_classes", "policy_decisions", "audit",
+    ]
+
+
+def test_to_csv_dispute_classes_section() -> None:
+    from bubo import report
+
+    rep = {
+        "dispute_classes": [
+            {"category": "documentation", "total": 5, "rejected": 3,
+             "dispute_rate": 0.6, "would_suppress": True},
+            {"category": "security", "total": 5, "rejected": 2, "dispute_rate": 0.4},
+        ]
+    }
+    csv_text = report.to_csv(rep, section="dispute_classes")
+    header = csv_text.splitlines()[0]
+    assert header == ",".join(report.DISPUTE_CLASS_COLUMNS)
+    # The raw row (no would_suppress key) renders an empty trailing cell.
+    assert "security,5,2,0.4," in csv_text
+    assert "documentation,5,3,0.6,True" in csv_text

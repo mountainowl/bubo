@@ -393,10 +393,32 @@ later, separately opt-in phase.
 
 To consume the captured provenance and governance decisions as auditable
 metrics — a provenance breakdown, accept-vs-dispute rate, noise trend, ROI
-proxy, token/cost rollups, policy-decision stats, and a per-change audit
-trail — use the read-only `bubo report` command (and the matching
+proxy, **review latency** (p50/p95/max/avg seconds over the window),
+**per-category dispute rates**, **no-findings acknowledgements**,
+token/cost rollups, policy-decision stats, and a per-change audit trail —
+use the read-only `bubo report` command (and the matching
 `get_governance_report` MCP tool). See [operate.md](operate.md),
 "Governance report".
+
+The report surfaces the same dispute history that drives
+[dispute-driven suppression](#dispute-driven-suppression), so an operator
+can *see* the feedback loop, not just have it act silently:
+
+- The `dispute_classes` section lists every finding category with recorded
+  outcomes for the project as `{category, total, rejected, dispute_rate}`,
+  ordered by dispute rate. These are the **raw, config-independent** stats.
+- The dedicated `get_dispute_classes(project)` MCP tool additionally reads
+  your real `dispute_suppress_threshold` / `dispute_suppress_min_samples`
+  from `[review]` and adds a truthful `would_suppress` flag per category —
+  i.e. whether the class *would* be suppressed **if** suppression were
+  enabled. (The flag never uses hardcoded thresholds, so it cannot
+  misreport what your config would actually do; if the config can't be
+  read it falls back to raw stats with no flag.) The `bubo report` CLI path
+  emits the raw stats only.
+- The `latency` section reports wall-clock review-run latency
+  (`finished_at - started_at`) over the window. The `acknowledgements`
+  rollup nested in `reviews` makes the `{no_findings, success, failed}`
+  status counts first-class, mirroring `reviews.by_status`.
 
 ### How capture works
 

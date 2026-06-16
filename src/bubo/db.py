@@ -25,6 +25,7 @@ land on the first invocation after deploy.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -833,6 +834,41 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     ]
 
 
+# Shared dispute-class aggregation. Both the suppression-set reader
+# (:func:`disputed_finding_classes`, poller path, writable connection) and the
+# read-only stats reader (:func:`disputed_class_stats`, report/MCP path) run the
+# EXACT same join + normalization through here so the two can never drift on what
+# "a category's dispute rate" means. The helper takes an OPEN connection rather
+# than opening its own, so each caller picks its own read/write mode.
+_DISPUTE_CLASS_SQL = """
+    select lower(trim(rf.category)) as category,
+           count(*) as total,
+           sum(case when fo.disputed = 1 or fo.false_positive = 1
+                    then 1 else 0 end) as rejected
+    from finding_outcomes fo
+    join review_findings rf
+      on rf.project || ':' || rf.iid || ':' || rf.sha || ':' || rf.fingerprint
+         = fo.finding_id
+    where rf.project = ?
+      and rf.category is not null
+      and trim(rf.category) != ''
+    group by category
+"""
+
+
+def _dispute_class_rows(db: sqlite3.Connection, project: str) -> list[tuple[str, int, int]]:
+    """Run the shared dispute-class aggregation against an open connection.
+
+    Returns ``(category, total, rejected)`` triples — the raw,
+    config-independent counts. ``total`` is *all* outcome rows for the
+    category (including the diluting sync-attempt rows); ``rejected`` is
+    ``count(disputed OR false_positive)``. Rate/threshold semantics live in
+    the callers so the SQL stays a single source of truth.
+    """
+    rows = db.execute(_DISPUTE_CLASS_SQL, (project,)).fetchall()
+    return [(str(category), int(total), int(rejected)) for category, total, rejected in rows]
+
+
 def disputed_finding_classes(
     project: str,
     *,
@@ -868,28 +904,56 @@ def disputed_finding_classes(
     ``docs/configuration.md``.
     """
     with connect_db() as db:
-        rows = db.execute(
-            """
-            select lower(trim(rf.category)) as category,
-                   count(*) as total,
-                   sum(case when fo.disputed = 1 or fo.false_positive = 1
-                            then 1 else 0 end) as rejected
-            from finding_outcomes fo
-            join review_findings rf
-              on rf.project || ':' || rf.iid || ':' || rf.sha || ':' || rf.fingerprint
-                 = fo.finding_id
-            where rf.project = ?
-              and rf.category is not null
-              and trim(rf.category) != ''
-            group by category
-            """,
-            (project,),
-        ).fetchall()
+        rows = _dispute_class_rows(db, project)
     return {
-        str(category)
+        category
         for category, total, rejected in rows
         if total >= min_samples and (rejected / total) >= threshold
     }
+
+
+def disputed_class_stats(project: str, *, min_samples: int) -> list[JsonObject]:
+    """Return raw per-category dispute stats for ``project`` (read-only).
+
+    The config-independent *truth* behind
+    :func:`disputed_finding_classes`: every normalized category with at least
+    ``min_samples`` outcome rows, as ``{category, total, rejected,
+    dispute_rate}`` where ``dispute_rate = rejected / total``. Ordered by
+    ``dispute_rate`` descending then ``category`` ascending for deterministic
+    output.
+
+    Shares the EXACT join + normalization + dilution semantics of
+    :func:`disputed_finding_classes` via :func:`_dispute_class_rows`, so the
+    two readers cannot drift. Unlike that reader this one carries no
+    ``threshold`` and no ``suppressed`` flag: whether a class *would* be
+    suppressed depends on the operator's real ``[review]`` thresholds, which
+    only the caller knows. The report layer (:func:`bubo.report.build_report`)
+    derives a truthful ``would_suppress`` flag from those when given them.
+
+    Read-only: opens a non-mutating connection and never calls ``init_db``.
+    """
+    with connect_db(readonly=True) as db:
+        rows = _dispute_class_rows(db, project)
+    # Sort the raw triples (rate desc, category asc) BEFORE building dicts so the
+    # sort key is concretely typed (mypy can't see into a dict[str, Any] value).
+    ranked = sorted(
+        (
+            (category, total, rejected)
+            for category, total, rejected in rows
+            if total >= min_samples
+        ),
+        key=lambda r: (-(r[2] / r[1]), r[0]),
+    )
+    stats: list[JsonObject] = [
+        {
+            "category": category,
+            "total": total,
+            "rejected": rejected,
+            "dispute_rate": rejected / total,
+        }
+        for category, total, rejected in ranked
+    ]
+    return stats
 
 
 def list_recent_reviews(
@@ -1511,11 +1575,78 @@ def audit_rows(
     return out
 
 
+def _percentile(sorted_values: list[float], fraction: float) -> float:
+    """Nearest-rank percentile over a non-empty, pre-sorted list.
+
+    Deterministic and interpolation-free: the rank is
+    ``ceil(fraction * n)`` clamped to ``[1, n]`` (1-based), so a fixture's
+    p50/p95 land on an actual observed value rather than a float blend.
+    Callers guarantee ``sorted_values`` is non-empty.
+    """
+    n = len(sorted_values)
+    rank = max(1, min(n, math.ceil(fraction * n)))
+    return sorted_values[rank - 1]
+
+
+def latency_summary(
+    *,
+    since_hours: int = 24,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+) -> JsonObject:
+    """Review-run wall-clock latency over the window (read-only).
+
+    Considers ``review_runs`` rows with a non-null ``finished_at`` (completed
+    runs); duration is ``finished_at - started_at``, both stored ISO-8601
+    UTC (``+00:00``) timestamps. Raw durations are pulled via SQL and the
+    percentiles computed in Python (nearest-rank, deterministic). Window is
+    resolved by :func:`_report_window` over ``started_at`` to match the other
+    ``review_runs`` readers.
+
+    Returns ``{count, p50_seconds, p95_seconds, max_seconds, avg_seconds}``;
+    every field is ``0`` / ``0.0`` for an empty window. Seconds are raw
+    floats here — :mod:`bubo.report` rounds them at the report boundary.
+    """
+    start, end = _report_window(since_hours, since, until)
+    where = (
+        "started_at >= ? and started_at <= ? and (? is null or project = ?) "
+        "and finished_at is not null"
+    )
+    args = (start, end, project, project)
+    with connect_db(readonly=True) as db:
+        rows = db.execute(
+            f"select started_at, finished_at from review_runs where {where}", args
+        ).fetchall()
+    durations = sorted(
+        (
+            datetime.fromisoformat(finished_at) - datetime.fromisoformat(started_at)
+        ).total_seconds()
+        for started_at, finished_at in rows
+    )
+    if not durations:
+        return {
+            "count": 0,
+            "p50_seconds": 0.0,
+            "p95_seconds": 0.0,
+            "max_seconds": 0.0,
+            "avg_seconds": 0.0,
+        }
+    return {
+        "count": len(durations),
+        "p50_seconds": _percentile(durations, 0.50),
+        "p95_seconds": _percentile(durations, 0.95),
+        "max_seconds": durations[-1],
+        "avg_seconds": sum(durations) / len(durations),
+    }
+
+
 __all__ = [
     "already_seen",
     "audit_rows",
     "connect_db",
     "count_inflight_workers",
+    "disputed_class_stats",
     "disputed_finding_classes",
     "ensure_column",
     "finding_seen",
@@ -1525,6 +1656,7 @@ __all__ = [
     "governance_decisions_for",
     "init_db",
     "init_dirs",
+    "latency_summary",
     "latest_reviewed_row",
     "list_recent_reviews",
     "metrics_summary",
