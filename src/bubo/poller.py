@@ -1094,49 +1094,67 @@ def worker(job: Path) -> int:
         )
         with telemetry.span("llm_review.run", repo=project, mr_iid=iid, sha=sha, run_id=run_id):
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
-            provider.checkout(cfg, project, mr, repo)
+            with telemetry.span("llm_review.checkout", repo=project, sha=sha):
+                provider.checkout(cfg, project, mr, repo)
             # Opt-in governance (off by default). Captures provenance and
             # evaluates the policy gate; returns a heightened-scrutiny directive
             # to inject into the prompt when the change escalates. No-op + no API
             # calls unless enabled; soft-fails so it never breaks a review.
-            governance = capture_provenance(
-                cfg,
-                token=token,
-                project=project,
-                number=iid,
-                sha=sha,
-                run_id=run_id,
-                provider=provider,
-                telemetry=telemetry,
-            )
+            with telemetry.span("llm_review.provenance", repo=project):
+                governance = capture_provenance(
+                    cfg,
+                    token=token,
+                    project=project,
+                    number=iid,
+                    sha=sha,
+                    run_id=run_id,
+                    provider=provider,
+                    telemetry=telemetry,
+                )
             extra_directive = governance[1] if governance else ""
             env = reviewer_env(os.environ)
-            result = run(
-                [
-                    *cfg.reviewer_command,
-                    provider.review_prompt(project, mr, cfg, extra_directive=extra_directive),
-                ],
-                cwd=repo,
-                timeout=cfg.timeout_seconds,
-                env=env,
-            )
-            safe_stdout = redact_secrets(result.stdout)
-            report.write_text(safe_stdout, encoding="utf-8")
-            tokens = parse_codex_token_usage(result.stdout)
-            cost_usd = estimate_cost_usd(tokens, cfg.telemetry_config.price_for(model))
-            if result.returncode:
-                raise RuntimeError(f"review exited {result.returncode}")
-            posted, planned, skipped = post_or_plan_findings(
-                cfg=cfg,
-                token=token,
-                project=project,
-                mr=mr,
-                raw_review=safe_stdout,
-                run_id=run_id,
-                telemetry=telemetry,
-                provider=provider,
-                repo=repo,
-            )
+            with telemetry.span("llm_review.agent", repo=project, model=model) as agent_span:
+                result = run(
+                    [
+                        *cfg.reviewer_command,
+                        provider.review_prompt(project, mr, cfg, extra_directive=extra_directive),
+                    ],
+                    cwd=repo,
+                    timeout=cfg.timeout_seconds,
+                    env=env,
+                )
+                safe_stdout = redact_secrets(result.stdout)
+                report.write_text(safe_stdout, encoding="utf-8")
+                tokens = parse_codex_token_usage(result.stdout)
+                cost_usd = estimate_cost_usd(tokens, cfg.telemetry_config.price_for(model))
+                telemetry.set_span_attrs(
+                    agent_span,
+                    tokens_input=tokens.input,
+                    tokens_output=tokens.output,
+                    tokens_total=tokens.total,
+                    cost_usd=cost_usd,
+                    exit_code=result.returncode,
+                )
+                if result.returncode:
+                    raise RuntimeError(f"review exited {result.returncode}")
+            with telemetry.span("llm_review.post", repo=project, dry_run=cfg.dry_run) as post_span:
+                posted, planned, skipped = post_or_plan_findings(
+                    cfg=cfg,
+                    token=token,
+                    project=project,
+                    mr=mr,
+                    raw_review=safe_stdout,
+                    run_id=run_id,
+                    telemetry=telemetry,
+                    provider=provider,
+                    repo=repo,
+                )
+                telemetry.set_span_attrs(
+                    post_span,
+                    findings_posted=posted,
+                    findings_planned=planned,
+                    findings_skipped=skipped,
+                )
             status = (
                 ReviewStatus.NO_FINDINGS
                 if (posted, planned, skipped) == (0, 0, 0)

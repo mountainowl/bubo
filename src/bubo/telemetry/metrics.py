@@ -15,7 +15,7 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Span, Status, StatusCode
+from opentelemetry.trace import Span
 
 from bubo.telemetry.config import TelemetryConfig
 from bubo.telemetry.cost import TokenUsage
@@ -113,32 +113,30 @@ class ReviewTelemetry:
 
     @contextmanager
     def span(self, name: str, **attrs: object) -> Iterator[Span | None]:
+        """Open an OTel span as the *current* span, so nested ``span`` calls
+        become children — a review run's stages (checkout, agent, post) form a
+        proper trace tree. No-op when telemetry is disabled. Body exceptions are
+        recorded on the span and re-raised (never swallowed).
+        """
         if not self.enabled:
             yield None
             return
-        span = None
         try:
-            span = self.tracer.start_span(name)
+            cm = self.tracer.start_as_current_span(name)
+        except Exception:
+            yield None
+            return
+        with cm as span:
+            self.set_span_attrs(span, **attrs)
+            yield span
+
+    def set_span_attrs(self, span: Span | None, **attrs: object) -> None:
+        """Attach scalar attributes to ``span``. No-op when disabled or ``None``."""
+        if not self.enabled or span is None:
+            return
+        with suppress(Exception):
             for key, value in span_attrs(attrs).items():
                 span.set_attribute(key, value)
-        except Exception:
-            span = None
-        try:
-            yield span
-        except Exception:
-            if span is not None:
-                try:
-                    sys_exc = sys.exc_info()[1]
-                    if sys_exc is not None:
-                        span.record_exception(sys_exc)
-                    span.set_status(Status(StatusCode.ERROR, str(sys_exc)))
-                except Exception:
-                    pass
-            raise
-        finally:
-            if span is not None:
-                with suppress(Exception):
-                    span.end()
 
     def add_event(self, span: Span | None, name: str, **attrs: object) -> None:
         if not self.enabled or span is None:

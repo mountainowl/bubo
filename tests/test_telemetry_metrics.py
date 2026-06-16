@@ -104,6 +104,32 @@ def test_telemetry_span_does_not_swallow_body_exceptions() -> None:
         raise AssertionError("telemetry span swallowed the review exception")
 
 
+def test_review_stage_spans_nest_under_run_with_attributes() -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    telemetry = ReviewTelemetry(TelemetryConfig(enabled=True))
+    telemetry.tracer = provider.get_tracer("bubo-test")  # bypass the global provider
+
+    with telemetry.span("llm_review.run", repo="r"):
+        with telemetry.span("llm_review.agent", repo="r", model="codex") as agent_span:
+            telemetry.set_span_attrs(agent_span, tokens_total=123, cost_usd=0.4)
+
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    assert {"llm_review.run", "llm_review.agent"} <= set(by_name)
+    # The stage span is a child of the run span (real trace tree, not siblings).
+    assert by_name["llm_review.agent"].parent is not None
+    assert by_name["llm_review.agent"].parent.span_id == by_name["llm_review.run"].context.span_id
+    # Stage attributes ride on the span for downstream tools to slice on.
+    assert by_name["llm_review.agent"].attributes["tokens_total"] == 123
+    assert by_name["llm_review.agent"].attributes["model"] == "codex"
+
+
 def test_configure_otel_can_retry_after_init_failure(monkeypatch) -> None:
     from bubo.telemetry import metrics as metrics_module
 

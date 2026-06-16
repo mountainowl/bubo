@@ -11,6 +11,7 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
 ## [Unreleased]
 
 ### Added
+=======
 - **GitHub Action — review pull requests in CI (experimental).** A composite
   `action.yml` at the repo root reviews the PR that triggered the workflow and
   posts findings inline via REST (no MCP/poller needed), on GitHub-hosted **or

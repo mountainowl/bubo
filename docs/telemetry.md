@@ -32,10 +32,31 @@ Two switches in `config/env.toml` let you trim emission cost:
 - **Quality / ROI**: ratio of `llm_review.findings{status="resolved"}` over `llm_review.findings{status="posted"}`, grouped by `severity`.
 - **Reliability**: `rate(llm_review.failures[5m])` broken out by `operation`.
 
+## Tracing — the per-review span tree
+
+Each review is one trace. The `llm_review.run` span has a **child span per
+stage**, so a trace shows exactly where a review's wall-clock went (a slow review
+is almost always the agent stage, not Bubo):
+
+```text
+llm_review.run                      repo, mr_iid, sha, run_id
+├─ llm_review.checkout              repo, sha
+├─ llm_review.provenance            repo            (only when governance is on)
+├─ llm_review.agent                 repo, model, tokens_input/output/total,
+│                                   cost_usd, exit_code
+└─ llm_review.post                  repo, dry_run, findings_posted/planned/skipped
+```
+
+The attributes ride on the spans, so any OpenTelemetry-aware backend (Tempo,
+Jaeger, Honeycomb, Grafana, Datadog, …) can break latency, tokens, and cost down
+**by stage and by model** without Bubo shipping a dashboard of its own — Bubo
+emits the data; you bring the tool. Spans are emitted only when
+`[telemetry].otlp_endpoint` is set; otherwise this is a no-op.
+
 ## Cardinality discipline
 
 Metric attributes are kept low-cardinality on purpose. MR IID, SHA, file
 path, line number, fingerprint, and discussion ID live in **SQLite or
-span events only**, never as metric labels — so the dashboard backend
+span attributes/events only**, never as metric labels — so the dashboard backend
 doesn't melt as the queue accelerates. Spans carry the full per-MR
 context for trace-level drilldown.
