@@ -9,8 +9,11 @@ splits a finding's outcome history.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from bubo import db, paths
 from bubo.config_values import ConfigError
 from bubo.findings import finding_body, finding_comment_body, finding_fingerprint
 from bubo.review_config import VALID_TONES, ReviewConfig, review_config_from_dict
@@ -126,3 +129,55 @@ def test_fingerprint_is_mood_invariant() -> None:
     assert finding_fingerprint("o/r", 5, "sha", with_comment) == finding_fingerprint(
         "o/r", 5, "sha", FINDING
     )
+
+
+# --- per-run tone tracking (Gap D: measure mood effectiveness) ----------
+
+
+def test_run_start_persists_tone_into_audit_trail(tmp_path: Path) -> None:
+    # The active [review].tone is recorded on the review_runs row so accept/
+    # dispute rates can later be A/B'd by tone. It surfaces in the audit trail.
+    original = paths.DB
+    try:
+        paths.DB = tmp_path / "reviewer.sqlite"
+        db.init_db()
+        run_id = db.review_run_id("o/r", 5, "deadbeef")
+        db.record_review_run_start(
+            run_id=run_id,
+            project="o/r",
+            iid=5,
+            sha="deadbeef",
+            model="gpt-5.5",
+            prompt_version="v1",
+            review_mode="diff",
+            dry_run=True,
+            tone="collaborative",
+        )
+        rows = db.audit_rows(since_hours=720, project="o/r")
+        assert len(rows) == 1
+        assert rows[0]["tone"] == "collaborative"
+    finally:
+        paths.DB = original
+
+
+def test_run_start_tone_defaults_to_terse(tmp_path: Path) -> None:
+    # A caller that omits tone (and legacy rows) read back as the terse default.
+    original = paths.DB
+    try:
+        paths.DB = tmp_path / "reviewer.sqlite"
+        db.init_db()
+        run_id = db.review_run_id("o/r", 6, "cafe")
+        db.record_review_run_start(
+            run_id=run_id,
+            project="o/r",
+            iid=6,
+            sha="cafe",
+            model="m",
+            prompt_version="v",
+            review_mode="diff",
+            dry_run=True,
+        )
+        rows = db.audit_rows(since_hours=720, project="o/r")
+        assert rows[0]["tone"] == "terse"
+    finally:
+        paths.DB = original

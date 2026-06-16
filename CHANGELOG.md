@@ -21,8 +21,10 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   switching tone never re-posts a finding, splits its accept/dispute history,
   or perturbs the governance dataset — only the words developers read change.
   `terse` is byte-identical to prior behavior (no prompt change, no extra
-  tokens). See [docs/configuration.md](docs/configuration.md), "Review-comment
-  tone".
+  tokens). The active tone is recorded per run (`review_runs.tone`) and
+  surfaced in the `bubo report` audit trail so accept-vs-dispute rates can be
+  A/B'd by tone. See [docs/configuration.md](docs/configuration.md),
+  "Review-comment tone".
 - **Feedback-loop & measurement surfaces in the governance report (read-only).**
   Three signals bubo already captures are now queryable via `bubo report` and
   MCP, so operators and governance teams can *see* the loop rather than have it

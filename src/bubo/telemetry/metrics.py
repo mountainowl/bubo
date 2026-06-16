@@ -41,6 +41,7 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         "provenance_source",
         "governance_mode",
         "governance_action",
+        "tone",
     }
 )
 
@@ -158,9 +159,15 @@ class ReviewTelemetry:
         duration_seconds: float,
         tokens: TokenUsage,
         cost_usd: float,
+        tone: str | None = None,
     ) -> None:
         attrs = metric_attrs(
-            repo=repo, model=model, status=status, review_mode=review_mode, dry_run=dry_run
+            repo=repo,
+            model=model,
+            status=status,
+            review_mode=review_mode,
+            dry_run=dry_run,
+            tone=tone,
         )
         self._add(self._runs, 1, attrs)
         self._record(self._review_duration, duration_seconds, attrs)

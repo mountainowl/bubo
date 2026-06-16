@@ -149,6 +149,10 @@ def init_db() -> None:
             "sensitive_paths": "text",
         }.items():
             ensure_column(db, "review_runs", name, definition)
+        # Review-comment voice (``[review].tone``) recorded per run so mood
+        # effectiveness can be A/B'd against outcomes. Additive; legacy rows read
+        # back as the default ``terse``. See bubo.review_config.VALID_TONES.
+        ensure_column(db, "review_runs", "tone", "text")
         db.execute(
             """
             create table if not exists review_findings (
@@ -274,19 +278,25 @@ def record_review_run_start(
     prompt_version: str,
     review_mode: ReviewMode | str,
     dry_run: bool,
+    tone: str = "terse",
 ) -> None:
     """Insert (or reset) the ``review_runs`` row at the start of a worker.
 
     Idempotent: a retried worker with the same ``run_id`` clears
     ``finished_at`` and ``error`` and updates the start metadata.
+
+    ``tone`` records the active ``[review].tone`` so mood effectiveness can be
+    analyzed against outcomes; it defaults to ``terse`` (the byte-identical
+    house style) for callers that do not set it.
     """
     with connect_db() as db:
         db.execute(
             """
             insert into review_runs(
-              run_id,project,iid,sha,status,model,prompt_version,review_mode,dry_run,started_at
+              run_id,project,iid,sha,status,model,prompt_version,review_mode,dry_run,
+              started_at,tone
             )
-            values(?,?,?,?,?,?,?,?,?,?)
+            values(?,?,?,?,?,?,?,?,?,?,?)
             on conflict(run_id) do update set
               status=excluded.status,
               model=excluded.model,
@@ -294,6 +304,7 @@ def record_review_run_start(
               review_mode=excluded.review_mode,
               dry_run=excluded.dry_run,
               started_at=excluded.started_at,
+              tone=excluded.tone,
               finished_at=null,
               error=null
             """,
@@ -308,6 +319,7 @@ def record_review_run_start(
                 review_mode,
                 int(dry_run),
                 now(),
+                tone,
             ),
         )
 
@@ -1554,7 +1566,8 @@ def audit_rows(
                    (select count(*) from finding_outcomes o
                       where o.project=r.project and o.iid=r.iid and o.sha=r.sha
                       and o.false_positive=1),
-                   {gov_select}
+                   {gov_select},
+                   r.tone
             from review_runs r
             {gov_join}
             where r.started_at >= ? and r.started_at <= ? and (? is null or r.project = ?)
@@ -1590,6 +1603,7 @@ def audit_rows(
                 "outcomes_false_positive": int(r[20]),
                 "policy_action": r[21],
                 "policy_mode": r[22],
+                "tone": r[23] or "terse",
             }
         )
     return out

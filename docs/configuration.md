@@ -312,6 +312,11 @@ fields, not the voiced comment**. So you can change tone at any time without
 re-posting existing findings, splitting their accept/dispute history, or
 disturbing the governance dataset — only the words developers read change.
 
+**Measuring which mood works.** The active tone is recorded per run on the
+`review_runs` row and surfaced in the `bubo report` audit trail (and its CSV
+export), so you can A/B accept-vs-dispute rates by tone before committing your
+team to one voice.
+
 ### The same finding in each tone
 
 One real finding (a cookie-deletion bug, captured on a public PR) as each tone

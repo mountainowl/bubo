@@ -1090,6 +1090,7 @@ def worker(job: Path) -> int:
             prompt_version=prompt_version(rendered_prompt),
             review_mode=ReviewMode.DIFF,
             dry_run=cfg.dry_run,
+            tone=cfg.tone,
         )
         with telemetry.span("llm_review.run", repo=project, mr_iid=iid, sha=sha, run_id=run_id):
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
@@ -1175,6 +1176,7 @@ def worker(job: Path) -> int:
                 duration_seconds=round(time.monotonic() - started, 2),
                 tokens=tokens,
                 cost_usd=cost_usd,
+                tone=cfg.tone,
             )
             log(
                 "review_done",
@@ -1223,6 +1225,7 @@ def worker(job: Path) -> int:
                 duration_seconds=round(time.monotonic() - started, 2),
                 tokens=tokens,
                 cost_usd=cost_usd,
+                tone=cfg.tone if cfg is not None else None,
             )
         log(
             "review_failed",

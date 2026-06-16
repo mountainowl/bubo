@@ -70,6 +70,7 @@ AUDIT_COLUMNS = (
     "outcomes_false_positive",
     "policy_action",
     "policy_mode",
+    "tone",
 )
 
 NOISE_COLUMNS = (
