@@ -2,37 +2,57 @@
 
 **Agentic AI code review — with the LLM of your choice.**
 
-Bubo reviews your GitLab MRs and GitHub PRs, posts only the findings worth
-acting on, and runs on the LLM *you* pick — self-hosted, so nothing leaves your
-infrastructure. Like the owl it's named for, it stays quiet until it has
-something worth saying: no chatbot chatter, no praise, no summaries.
+[Bubo](https://en.wikipedia.org/wiki/Bubo_(genus)) is the genus of the great
+horned and eagle owls — patient night hunters that sit silent, see in the dark,
+and strike only when they're sure. Code review, same idea: Bubo watches your
+diffs, stays quiet through the noise, and speaks only when it finds something
+worth the author's time. It runs on the LLM *you* pick, self-hosted, so nothing
+leaves your infrastructure — no chatbot chatter, no praise, no summaries.
 
-![Bubo hero](images/bubo-hero.png)
+<div class="grid cards" markdown>
 
-[Copy-paste recipes :material-silverware-fork-knife:](recipes.md){ .md-button .md-button--primary }
-[60-second quickstart :material-rocket-launch:](install-and-configure.md){ .md-button }
-[Source on GitHub :material-github:](https://github.com/mountainowl/bubo){ .md-button }
+-   :material-silverware-fork-knife:{ .lg .middle } **Copy-paste recipes**
+
+    ---
+
+    GitLab & GitHub setups you can paste and run.
+
+    [:octicons-arrow-right-24: Recipes](recipes.md)
+
+-   :material-rocket-launch:{ .lg .middle } **60-second quickstart**
+
+    ---
+
+    Install, configure, first review — fast.
+
+    [:octicons-arrow-right-24: Get started](install-and-configure.md)
+
+-   :material-github:{ .lg .middle } **Source on GitHub**
+
+    ---
+
+    MIT-licensed, self-hostable, BYO-LLM.
+
+    [:octicons-arrow-right-24: View the repo](https://github.com/mountainowl/bubo)
+
+</div>
 
 ---
 
-## Features
+## Features at a glance
 
-- **Bring your own LLM.** Codex, Claude, or any model your CLI can drive. No
-  vendor lock-in.
-- **Self-hosted.** Code, diffs, and review data stay on your infrastructure.
-- **GitLab MRs and GitHub PRs**, one config, same behavior on both.
-- **Signal over noise.** Only actionable inline findings — Issue / Impact /
-  Evidence / Fix / Confidence. A clean change gets one "all good" acknowledgement.
-- **Give it a mood.** Pick the review voice — `terse`, `collaborative`,
-  `socratic`, `formal`, or `casual` — without touching the underlying data.
-- **Learns your team's taste.** Tracks which findings get accepted vs. disputed
-  and can suppress the finding-classes you keep rejecting.
-- **Verify before posting.** Optional independent "is this real?" passes drop
-  findings that don't hold up — point them at a second model for real diversity.
-- **Built for governance.** Opt-in AI-code provenance, review-rigor modulation,
-  and an auditable on-prem report (accept rate, ROI, noise trend, latency,
-  policy decisions) via CLI and MCP.
-- **Observability in.** OpenTelemetry metrics; cosign-signed releases with SBOMs.
+| | |
+|---|---|
+| 🧠 **Bring your own LLM** | Codex, Claude, or any model your CLI drives — no vendor lock-in. |
+| 🔒 **Self-hosted** | Code, diffs, and review data stay on your infrastructure. |
+| 🔀 **GitLab + GitHub** | MRs and PRs, one config, identical behavior on both. |
+| 🎯 **Signal over noise** | Only actionable inline findings (Issue / Impact / Evidence / Fix / Confidence); one "all good" ack on a clean change. |
+| 🎭 **Moods** | Pick the review voice — `terse` / `collaborative` / `socratic` / `formal` / `casual` — without touching the data. |
+| 📉 **Learns your taste** | Suppresses finding-classes your team repeatedly disputes. |
+| ✅ **Verify before posting** | Optional "is this real?" passes drop findings that don't hold up — point them at a second model for real diversity. |
+| 🛡️ **Governance-ready** | AI-code provenance, review-rigor modulation, and an auditable on-prem report (accept rate, ROI, noise trend, latency, policy decisions). |
+| 📊 **Observability** | OpenTelemetry metrics; cosign-signed releases with SBOMs. |
+| 🔌 **MCP + CI** | Built-in `bubo-mcp` server, and a GitHub Action to review PRs in CI. |
 
 ## What it does
 

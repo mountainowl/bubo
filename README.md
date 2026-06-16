@@ -9,12 +9,26 @@
 [![Docs](https://img.shields.io/badge/docs-mountainowl.github.io%2Fbubo-4f62ad)](https://mountainowl.github.io/bubo/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827)](https://github.com/mountainowl/bubo/blob/main/LICENSE)
 
-Bubo reviews your GitLab MRs and GitHub PRs with **the LLM you choose** (Codex,
-Claude, or any model your CLI drives) and posts only the findings worth acting on
-as inline threads — no chatbot noise, no praise, no summaries. Like the owl it's
-named for, it stays silent until it has something worth saying.
+[Bubo](https://en.wikipedia.org/wiki/Bubo_(genus)) is the genus of the great
+horned and eagle owls — patient night hunters that sit silent, see in the dark,
+and strike only when sure. Code review, same idea: Bubo reviews your GitLab MRs
+and GitHub PRs with **the LLM you choose** (Codex, Claude, or any model your CLI
+drives) and posts only the findings worth acting on as inline threads — no
+chatbot noise, no praise, no summaries.
 
-![Bubo hero](https://raw.githubusercontent.com/mountainowl/bubo/main/docs/images/bubo-hero.png)
+## Features at a glance
+
+| | |
+|---|---|
+| 🧠 **Bring your own LLM** | Codex, Claude, or any model your CLI drives — no vendor lock-in. |
+| 🔒 **Self-hosted** | Code, diffs, and review data stay on your infrastructure. |
+| 🔀 **GitLab + GitHub** | MRs and PRs, one config, identical behavior on both. |
+| 🎯 **Signal over noise** | Only actionable inline findings; one "all good" ack on a clean change. |
+| 🎭 **Moods** | Pick the review voice — terse / collaborative / socratic / formal / casual. |
+| 📉 **Learns your taste** | Suppresses finding-classes your team repeatedly disputes. |
+| ✅ **Verify before posting** | Optional "is this real?" passes drop findings that don't hold up. |
+| 🛡️ **Governance-ready** | AI-code provenance, rigor modulation, auditable on-prem report. |
+| 🔌 **MCP + CI** | Built-in `bubo-mcp` server + a GitHub Action to review PRs in CI. |
 
 ## 📖 Documentation
 
@@ -90,14 +104,8 @@ your humans without touching the data your compliance reports run on. Ships as
 `terse`; opt in when you're ready, set it once, leave it to the operator.
 → [tone reference](https://github.com/mountainowl/bubo/blob/main/docs/configuration.md#review-comment-tone-moods)
 
-Real (sanitized) inline findings on GitLab MRs:
-
-![Sanitized inline finding — data primer](https://raw.githubusercontent.com/mountainowl/bubo/main/docs/images/gitlab-mr-review-data-primer.png)
-
-![Sanitized inline finding — exception handler](https://raw.githubusercontent.com/mountainowl/bubo/main/docs/images/gitlab-mr-review-exception-handler.png)
-
-More sanitized examples are in [docs/examples/README.md](https://github.com/mountainowl/bubo/blob/main/docs/examples/README.md).
-Demo GIF: [docs/media/bubo-demo.gif](https://github.com/mountainowl/bubo/blob/main/docs/media/bubo-demo.gif).
+More sanitized review examples are in
+[docs/examples/README.md](https://github.com/mountainowl/bubo/blob/main/docs/examples/README.md).
 
 ## 60-second quickstart
 

@@ -65,10 +65,11 @@ nav:
   - Prerequisites: prerequisites.md
   - Install and configure: install-and-configure.md
   - Run: run.md
+  - MCP server: mcp.md
   - GitHub Action (CI review): github-action.md
   - Configuration reference: configuration.md
   - Operate: operate.md
-  - Telemetry: telemetry.md
+  - Metrics & telemetry: telemetry.md
   - Examples: examples/README.md
   - References: references.md
 
