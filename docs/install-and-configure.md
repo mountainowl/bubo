@@ -1,24 +1,23 @@
 # Install and configure
 
-Before you start, make sure the runtime and provider tools listed in
-[prerequisites.md](prerequisites.md) are on `PATH` and the bot/LLM
-credentials are in hand.
+You're a few minutes from a first review. First, check that the runtime and
+provider tools in [prerequisites.md](prerequisites.md) are on `PATH` and your
+bot/LLM credentials are handy.
 
 ## Install
 
-The recommended install path is `uv tool install` against the GitHub
-release. The previous shell-installer scripts (`scripts/install-package.sh`
-and `scripts/deploy-package.sh`) have been removed — use the `uv tool
-install` flow below (or pipx) instead.
+`uv tool install` is the recommended path. The old shell-installer scripts
+(`scripts/install-package.sh` and `scripts/deploy-package.sh`) are gone — use
+the `uv tool install` flow below (or pipx).
 
 ### Option 1 — `uv tool install` (recommended)
 
-Single command, isolated venv managed by uv, entry points placed on
-`PATH`. Then `bubo init` handles per-host configuration:
+One command: an isolated venv managed by uv, with entry points on `PATH`.
+Then `bubo init` handles per-host configuration:
 
 ```sh
-# Install the latest tagged release.
-uv tool install git+https://github.com/mountainowl/bubo@v0.8.0
+# Install the latest release.
+uv tool install bubo
 
 # Place ~/.codex/config.toml, ~/.claude/settings.json, config/env.toml seed,
 # the var/ workspace, prompts, skills, plugins, and initialize the SQLite DB.
@@ -27,6 +26,9 @@ bubo init
 # Verify — non-zero exit on any missing piece. Suitable for cron / monitoring.
 bubo doctor
 ```
+
+Want the latest unreleased code? Track main with
+`uv tool install git+https://github.com/mountainowl/bubo`.
 
 `bubo init` supports:
 
@@ -37,20 +39,20 @@ bubo doctor
 | `--no-agent-config` | skip the `~/.codex/` and `~/.claude/` writes (for hosts that already have a hand-rolled agent config) |
 | `--root PATH` | install under `PATH` instead of the default `$BUBO_ROOT` or `~/.local/share/bubo` |
 
-To upgrade, re-run `uv tool install` against the new tag:
+To upgrade, reinstall:
 
 ```sh
-uv tool install --reinstall git+https://github.com/mountainowl/bubo@v0.8.1
+uv tool install --reinstall bubo
 bubo init     # idempotent — re-applies packaged template updates
 bubo doctor
 ```
 
 ### Option 2 — pipx (functionally equivalent)
 
-For hosts that don't have uv but already use pipx:
+For hosts without uv that already use pipx:
 
 ```sh
-pipx install git+https://github.com/mountainowl/bubo@v0.8.0
+pipx install bubo
 bubo init
 ```
 
@@ -63,14 +65,12 @@ uv run pytest
 
 ## Configure
 
-`bubo init` seeds the config at
-`$BUBO_ROOT/config/env.toml` (default
-`~/.local/share/bubo/config/env.toml`) from the packaged
-example. The file is **not** under your current working directory — it
-lives under the install root and stays untouched on subsequent
-`bubo init` runs unless you pass `--force`.
+`bubo init` seeds the config at `$BUBO_ROOT/config/env.toml` (default
+`~/.local/share/bubo/config/env.toml`) from the packaged example. It's **not**
+in your current working directory — it lives under the install root and survives
+later `bubo init` runs untouched unless you pass `--force`.
 
-Open it and fill in the minimum to get a first review running:
+Open it and fill in the minimum for a first review:
 
 ```sh
 "${EDITOR:-vi}" "$BUBO_ROOT/config/env.toml"
@@ -91,29 +91,27 @@ path = "your-group/your-repo"
 enabled = true
 ```
 
-Bubo is model-agnostic — `llm_api_key_env` names the variable your LLM
-CLI/SDK reads the key from, so you're never locked to one provider. See
-the [recipes](recipes.md) for end-to-end setups.
+Bubo is model-agnostic: `llm_api_key_env` names the variable your LLM CLI/SDK
+reads the key from, so you're never locked to one provider. The
+[recipes](recipes.md) have end-to-end setups.
 
-Keep `[review].dry_run = true` (the default) until your first real
-review output looks right — the poller will plan findings without
-posting comments. The full set of knobs and defaults lives in the
-[configuration reference](configuration.md).
+Leave `[review].dry_run = true` (the default) until your first review output
+looks right — the poller plans findings without posting comments. Every knob
+and default lives in the [configuration reference](configuration.md).
 
 ## Verify
 
-After editing `env.toml`, confirm the install end-to-end:
+After editing `env.toml`, confirm the install end to end:
 
 ```sh
 bubo doctor                # workspace + env.toml + DB + Codex profile
 bubo-poller                   # one dry-run poll cycle; exits at the end
 ```
 
-`doctor` exits non-zero on any missing piece. The first
-`bubo-poller` run with `[review].dry_run = true` records planned
-findings to SQLite without posting comments to the SCM, so you can
-read `var/reports/*.txt` and decide whether the agent's output looks
-right before flipping `dry_run` to `false`.
+`doctor` exits non-zero on any missing piece. With `[review].dry_run = true`,
+the first `bubo-poller` run records planned findings to SQLite without posting
+to the SCM — so you can read `var/reports/*.txt` and judge the agent's output
+before flipping `dry_run` to `false`.
 
 ## GitLab bot setup
 
@@ -135,7 +133,7 @@ right before flipping `dry_run` to `false`.
 
 ## Where files live after `bubo init`
 
-For reference and operate-time troubleshooting:
+Handy for reference and operate-time troubleshooting:
 
 | Path | What |
 |---|---|

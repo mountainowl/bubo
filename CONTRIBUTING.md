@@ -1,6 +1,6 @@
 # Contributing
 
-LLM Reviewer is intentionally small. Good contributions keep the runtime simple,
+Bubo is intentionally small. Good contributions keep the runtime simple,
 generic, and safe to run against private repositories.
 
 ## Ground Rules

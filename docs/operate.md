@@ -1,14 +1,17 @@
 # Operate
 
+This page covers running Bubo in production: deploying to a host, scheduling
+the poller, grading outcomes, governance reporting, and one-shot backfill.
+
 ## Deploy to a host
 
-Recommended single-host install:
+Single-host install, three commands:
 
 ```sh
-# 1. Install the Python package + entry points into an isolated venv.
-uv tool install git+https://github.com/mountainowl/bubo@v0.8.0
+# 1. Install the package + entry points into an isolated venv.
+uv tool install bubo
 
-# 2. Place the per-host workspace, Codex profile, Claude settings,
+# 2. Lay down the per-host workspace, Codex profile, Claude settings,
 #    rendered cron/systemd templates, and SQLite schema.
 bubo init
 
@@ -16,32 +19,30 @@ bubo init
 bubo doctor
 ```
 
-`bubo init` writes under `$BUBO_ROOT` (default
-`~/.local/share/bubo`). Pass `--root /opt/bubo` to
-override. The init step is **idempotent**: re-running it on an upgrade
-is a no-op for `config/env.toml` (operator edits preserved) and a
-refresh-overwrite for the packaged prompts/skills/plugins. Use
-`--force` to overwrite `config/env.toml` or `~/.codex/config.toml` too.
+`bubo init` writes under `$BUBO_ROOT` (default `~/.local/share/bubo`); pass
+`--root /opt/bubo` to override. Init is **idempotent**: on an upgrade it leaves
+`config/env.toml` alone (your edits are preserved) and refresh-overwrites the
+packaged prompts/skills/plugins. Add `--force` to overwrite `config/env.toml`
+or `~/.codex/config.toml` too.
 
 ### Remote host (SSH)
 
 ```sh
 ssh user@host '
-  uv tool install git+https://github.com/mountainowl/bubo@v0.8.0 &&
+  uv tool install bubo &&
   bubo init &&
   bubo doctor
 '
 ```
 
-For a fleet, wrap the three lines in your config-management tool of
-choice (Ansible, Pyinfra, Salt). The previous bespoke
-`scripts/deploy-package.sh` has been removed; use the `uv tool install`
-flow above.
+For a fleet, wrap the three lines in your config-management tool (Ansible,
+Pyinfra, Salt). The old bespoke `scripts/deploy-package.sh` is gone — use the
+`uv tool install` flow above.
 
 ### Upgrades
 
 ```sh
-uv tool install --reinstall git+https://github.com/mountainowl/bubo@v0.8.1
+uv tool install --reinstall bubo
 bubo init                         # idempotent — refreshes packaged assets
 bubo doctor                       # confirm
 ```
@@ -60,20 +61,20 @@ rm -f ~/.codex/skills/code-reviewer            # this is a symlink
 ## Schedule the poller
 
 > **`bubo init` does NOT install cron entries or systemd units.**
-> Scheduling is a separate, deliberate step — operators run bubo
-> under different regimes (cron, systemd, Kubernetes CronJob, Nomad, …)
-> and the install path stays scheduler-agnostic.
+> Scheduling is a separate, deliberate step — operators run Bubo under
+> different regimes (cron, systemd, Kubernetes CronJob, Nomad, …), so the
+> install path stays scheduler-agnostic.
 
 `bubo init` materializes three ready-to-install templates under
-`$BUBO_ROOT/deploy/templates/`. The `{{ROOT}}` placeholder
-has already been substituted with your actual install path, so the
-files are ready for `sudo install` / `systemctl enable` with no
-further hand-editing required. Pick **one** of the two paths below;
-both achieve the same cadence (poll every 15 min, sync outcomes
-hourly, health probe every 5 min) and both ship with **separate
-`flock` files per role** (poller / outcome-sync / health) to prevent
-the cross-role lock collision that broke a production deploy in 0.5.0
-(see [CHANGELOG.md](https://github.com/mountainowl/bubo/blob/main/CHANGELOG.md) `[0.5.1]`).
+`$BUBO_ROOT/deploy/templates/`. The `{{ROOT}}` placeholder is already
+substituted with your install path, so the files are ready for `sudo install` /
+`systemctl enable` with no hand-editing. Pick **one** of the two paths below.
+Both run the same cadence (poll every 15 min, sync outcomes hourly, health
+probe every 5 min) and both ship **separate `flock` files per role** (poller /
+outcome-sync / health) to prevent the cross-role lock collision that broke a
+production deploy in 0.5.0 (see
+[CHANGELOG.md](https://github.com/mountainowl/bubo/blob/main/CHANGELOG.md)
+`[0.5.1]`).
 
 ### Cron
 
@@ -90,10 +91,9 @@ sudo install -m 0644 \
 ```
 
 The three lines fire `bubo-poller` (poll cycle),
-`bubo-poller --sync-outcomes` (outcome grading), and
-`bubo-poller --health` (liveness probe) at staggered cadences.
-Each invocation is a single exit — there is no daemon mode, so tight
-intervals are safe.
+`bubo-poller --sync-outcomes` (outcome grading), and `bubo-poller --health`
+(liveness probe) at staggered cadences. Each invocation runs once and exits —
+there's no daemon mode, so tight intervals are safe.
 
 ### systemd
 
@@ -105,8 +105,8 @@ sudo systemctl enable --now bubo.timer
 ```
 
 The service file uses `LoadCredential=` to inject secrets from
-`/etc/bubo/credentials/`, so tokens stay off-disk in
-`config/env.toml`. Pair with TOML env interpolation in the config:
+`/etc/bubo/credentials/`, keeping tokens out of `config/env.toml` on disk.
+Pair it with TOML env interpolation in the config:
 
 ```toml
 [gitlab]
@@ -127,76 +127,71 @@ llm_api_key = "${LLM_API_KEY}"
 | SQLite DB initialized | Schema-init step skipped or DB file deleted. |
 | `~/.codex/config.toml` contains `[profiles.bubo]` | Codex profile missing or hand-edited away — the v0.5.0 incident's exact failure mode. |
 
-The Codex profile check is suppressed by `--no-agent-config` for hosts
-that hand-roll the Codex config. Doctor returns 0 on full pass and
-non-zero on any failure, so it slots cleanly into a cron-driven
-liveness probe.
+Pass `--no-agent-config` to skip the Codex profile check on hosts that
+hand-roll the Codex config. Doctor returns 0 on a full pass and non-zero on any
+failure, so it drops cleanly into a cron-driven liveness probe.
 
 ## Outcome sync
 
-`--sync-outcomes` grades posted findings against current SCM state. It
-runs from the same cron line `bubo init` materializes; you
-don't need to invoke it by hand once scheduling is set up.
+`--sync-outcomes` grades posted findings against current SCM state. It runs
+from the cron line `bubo init` materializes, so once scheduling is set up you
+never call it by hand.
 
 ```sh
 bubo-poller --sync-outcomes
 ```
 
-Records whether each finding was resolved, left unresolved after merge,
+It records whether each finding was resolved, left unresolved after merge,
 deleted, replied to, marked disputed, marked false-positive, or marked
-duplicate — feeding the `llm_review.findings{status=…}` counter
-described in [telemetry.md](telemetry.md).
+duplicate — feeding the `llm_review.findings{status=…}` counter described in
+[telemetry.md](telemetry.md).
 
 ### Reply classification
 
-A thread can be resolved because the developer **fixed** the finding or
-because they **rejected** it ("working as intended", "not a blocker") —
-the two are indistinguishable from the `resolved` flag alone, which would
-overcount the reviewer's precision. So when a finding's discussion has a
-developer reply and no explicit dispute marker, `--sync-outcomes` asks an
-LLM to read the bot's finding plus the reply and decide whether it was
-**accepted** or **rejected**; a rejection sets `disputed` (and
-`false_positive` when the reply says the finding is factually wrong).
+A thread can be resolved because the developer **fixed** the finding or because
+they **rejected** it ("working as intended", "not a blocker"). The `resolved`
+flag alone can't tell them apart, which would overcount the reviewer's
+precision. So when a finding's discussion has a developer reply and no explicit
+dispute marker, `--sync-outcomes` asks an LLM to read the bot's finding plus the
+reply and decide whether it was **accepted** or **rejected**. A rejection sets
+`disputed` (and `false_positive` when the reply says the finding is factually
+wrong).
 
-- **Model-agnostic.** Classification runs the same agent you configured in
-  `[agents].reviewer_command` (the default is `codex exec --profile bubo`;
-  a custom command such as `claude -p` is reused as-is). The review contract
-  lives in the review prompt, not the command, so the same command does the
-  free-form accept/reject judgement here.
-- **Classified once.** Each finding is classified a single time (tracked by
-  the `reply_classified` column) to bound LLM cost across the hourly sync.
-  A reply that arrives *after* the first classification is not re-graded.
-- **Cold-start safe.** At most a few dozen findings are classified per sync
-  run, so the first sync after upgrading — when the whole backlog of
-  resolved-with-reply findings is unclassified — does not fire hundreds of
-  agent calls at once. The backlog drains over subsequent runs.
+- **Model-agnostic.** Classification runs the same agent you set in
+  `[agents].reviewer_command` (default `codex exec --profile bubo`; a custom
+  command like `claude -p` is reused as-is). The review contract lives in the
+  prompt, not the command, so the same command makes the accept/reject call here.
+- **Classified once.** Each finding is classified one time (tracked by the
+  `reply_classified` column) to bound LLM cost across the hourly sync. A reply
+  that arrives *after* the first classification isn't re-graded.
+- **Cold-start safe.** At most a few dozen findings are classified per run, so
+  the first sync after upgrading — when the whole backlog of resolved-with-reply
+  findings is unclassified — won't fire hundreds of agent calls at once. The
+  backlog drains over later runs.
 - **Fail-safe.** A *transient* classifier failure (timeout, non-zero exit)
-  leaves the finding unclassified and is retried on a later sync;
-  unparseable output degrades to "unclear". Either way the sync is never
-  blocked.
+  leaves the finding unclassified and retries on a later sync; unparseable
+  output degrades to "unclear". Either way the sync keeps going.
 
-Operators who prefer the explicit path can still tag a reply with
-`[llm-review:disputed]` / `[llm-review:false-positive]`; an explicit marker
-short-circuits the LLM call.
+Prefer the explicit path? Tag a reply with `[llm-review:disputed]` /
+`[llm-review:false-positive]` — an explicit marker short-circuits the LLM call.
 
 ## Governance report
 
-`bubo report` assembles an auditable governance report from the metrics
-already in SQLite — review counts (with a **no-findings acknowledgements**
-rollup), a **provenance breakdown** (counts by band/source), the
-**accept-vs-dispute rate**, a **noise trend** (daily false-positive trend),
-a **bug-catch ROI proxy**, **review latency** (p50/p95/max/avg seconds),
-**per-category dispute rates**, token/cost rollups, **policy-decision
-stats** (from the Phase 2 `governance_decisions`), and a per-change **audit
-trail**. It is the compliance-facing companion to the provenance +
-governance-decision capture described in
+`bubo report` assembles an auditable governance report from the metrics already
+in SQLite: review counts (with a **no-findings acknowledgements** rollup), a
+**provenance breakdown** (counts by band/source), the **accept-vs-dispute
+rate**, a **noise trend** (daily false-positives), a **bug-catch ROI proxy**,
+**review latency** (p50/p95/max/avg seconds), **per-category dispute rates**,
+token/cost rollups, **policy-decision stats** (from the Phase 2
+`governance_decisions`), and a per-change **audit trail**. It's the
+compliance-facing companion to the provenance + governance-decision capture in
 [configuration.md](configuration.md), "Governance & provenance".
 
-It is strictly **READ-ONLY** — it only queries existing state and never
-mutates review state, so it is safe to run from a monitoring cron next to
-`bubo doctor`. It is also **self-hosted**: the data is read from your own
-SQLite and never leaves your infrastructure, which is the whole compliance
-pitch for regulated/enterprise governance teams.
+It is strictly **READ-ONLY** — it only queries existing state, never mutates it,
+so it's safe to run from a monitoring cron alongside `bubo doctor`. It's also
+**self-hosted**: the data comes from your own SQLite and never leaves your
+infrastructure, which is the whole compliance pitch for regulated and enterprise
+governance teams.
 
 ```sh
 # Full nested report as JSON (the default).
@@ -220,55 +215,52 @@ bubo report --since-hours 168 --format csv > audit.csv
 
 ### JSON vs CSV
 
-- **JSON** (default) is the full nested report. Sections: `meta`,
-  `reviews` (with a nested `acknowledgements` rollup), `provenance`,
-  `outcomes`, `noise_trend`, `roi`, `latency`, `dispute_classes`,
-  `policy_decisions`, and `audit`. Scalar rollups (review counts,
-  accept/dispute rate, ROI proxy, latency, token/cost) are **JSON-only** —
-  they have no tabular form.
-- **CSV** is a single tabular section, chosen with `--section`. The
-  default is the per-change `audit` trail; `--section noise_trend` emits
-  the daily false-positive trend, and `--section dispute_classes` the
-  per-category dispute rates (CLI path: raw stats, no `would_suppress`).
-  CSV is intended for spreadsheet/BI import of the row-shaped sections.
+- **JSON** (default) is the full nested report. Sections: `meta`, `reviews`
+  (with a nested `acknowledgements` rollup), `provenance`, `outcomes`,
+  `noise_trend`, `roi`, `latency`, `dispute_classes`, `policy_decisions`, and
+  `audit`. Scalar rollups (review counts, accept/dispute rate, ROI proxy,
+  latency, token/cost) are **JSON-only** — they have no tabular form.
+- **CSV** is a single tabular section, picked with `--section`. The default is
+  the per-change `audit` trail; `--section noise_trend` emits the daily
+  false-positive trend, and `--section dispute_classes` the per-category dispute
+  rates (CLI path: raw stats, no `would_suppress`). Use CSV for spreadsheet/BI
+  import of the row-shaped sections.
 
 ### MCP tool
 
-The same report is available to MCP-capable chat clients (Codex, Claude
-Desktop, Cline) as `get_governance_report(since_hours, since, until,
-project)`. It returns the same nested JSON structure as `bubo report
---format json`, so a governance analyst can pull the report into a chat
-session without shell access.
+The same report is available to MCP-capable chat clients (Codex, Claude Desktop,
+Cline) as `get_governance_report(since_hours, since, until, project)`. It
+returns the same nested JSON as `bubo report --format json`, so a governance
+analyst can pull the report into a chat session without shell access.
 
-A companion `get_dispute_classes(project)` tool returns just the
-per-category dispute stats (cumulative — these span all recorded outcomes,
-not a rolling window, so the tool takes no window argument). Unlike the CLI
-path it reads your real `[review].dispute_suppress_threshold` /
-`dispute_suppress_min_samples` and adds a truthful `would_suppress` flag per
-category — so an analyst can see which classes the suppression filter
-*would* drop if it were enabled, computed against your actual thresholds
-rather than a hardcoded guess.
+A companion `get_dispute_classes(project)` tool returns just the per-category
+dispute stats (cumulative — they span all recorded outcomes, not a rolling
+window, so the tool takes no window argument). Unlike the CLI path, it reads
+your real `[review].dispute_suppress_threshold` / `dispute_suppress_min_samples`
+and adds a truthful `would_suppress` flag per category — so an analyst can see
+which classes the suppression filter *would* drop if enabled, computed against
+your actual thresholds rather than a hardcoded guess.
 
-Policy-decision stats are populated only when Phase 2 governance is
-enabled (`[governance].policy_mode` not `off`). When it is off, the
-`policy_decisions` section reports `available: false` rather than empty
-counts, so an auditor can tell "no decisions recorded" apart from
-"governance decisions were never turned on".
+Policy-decision stats are populated only when Phase 2 governance is enabled
+(`[governance].policy_mode` not `off`). When it's off, the `policy_decisions`
+section reports `available: false` rather than empty counts, so an auditor can
+tell "no decisions recorded" apart from "governance decisions were never turned
+on".
 
 ## Backfill — one-shot, not a cron job
 
-The backfill commands import bot comments that **already exist on the
-SCM** into local SQLite. Use them when:
+The backfill commands import bot comments that **already exist on the SCM** into
+local SQLite. Reach for them when:
 
-- You just deployed against a project where the bot has historically
-  posted from another install.
-- You reset `var/state/reviewer.sqlite` (test, rebuild, host migration)
-  and need the per-finding metrics to reflect history, not just go-forward.
+- You just deployed against a project where the bot has posted before from
+  another install.
+- You reset `var/state/reviewer.sqlite` (test, rebuild, host migration) and need
+  the per-finding metrics to reflect history, not just go-forward.
 
-They are **deliberately not on the cron schedule.** Each run scans every
-MR/PR updated since the cutoff — fine for a one-shot recovery, wasteful
-to repeat every 15 minutes. Run them once, then let `--sync-outcomes`
-take over for go-forward grading.
+They are **deliberately off the cron schedule.** Each run scans every MR/PR
+updated since the cutoff — fine for a one-shot recovery, wasteful every 15
+minutes. Run them once, then let `--sync-outcomes` take over for go-forward
+grading.
 
 ```sh
 # GitLab
@@ -281,29 +273,27 @@ BUBO_PROVIDER=github bubo-poller --backfill-github-bot-comments-since 2026-05-25
 bubo-poller --sync-outcomes
 ```
 
-Both backfill commands are idempotent — a comment already in SQLite is
-upserted, not duplicated — so re-running with a different cutoff is
-safe.
+Both backfill commands are idempotent — a comment already in SQLite is upserted,
+not duplicated — so re-running with a different cutoff is safe.
 
 ## Migrating from the shell installer
 
-The `scripts/install-package.sh` / `scripts/deploy-package.sh` shell
-installers (used by v0.5.x and earlier) have been **removed**. Operators
-still running an old shell-installer deployment should migrate to the
-`uv tool install` path:
+The `scripts/install-package.sh` / `scripts/deploy-package.sh` shell installers
+(v0.5.x and earlier) have been **removed**. If you're still running an old
+shell-installer deployment, migrate to the `uv tool install` path:
 
 ```sh
 # On the host that has a working shell-installer deploy:
-uv tool install git+https://github.com/mountainowl/bubo@v0.8.0
+uv tool install bubo
 bubo init                                # idempotent — keeps env.toml
 bubo doctor                              # confirm
 
-# Optional cleanup once you're satisfied with the new install:
+# Optional cleanup once the new install looks good:
 rm -rf "$BUBO_ROOT/bin" \
        "$BUBO_ROOT/scripts" \
        "$BUBO_ROOT/src"               # left over from shell-installer copy
 ```
 
-State (`var/state/reviewer.sqlite`) and operator config
-(`config/env.toml`) are preserved across the migration — `bubo init`
-shares the same workspace layout as the old shell installer.
+State (`var/state/reviewer.sqlite`) and operator config (`config/env.toml`)
+survive the migration — `bubo init` shares the same workspace layout as the old
+shell installer.

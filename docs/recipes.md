@@ -1,13 +1,13 @@
 # Recipes
 
-Copy-paste setups you can follow top to bottom — replace the values in
-`< >` with your own. Codex is the bundled default; the [Claude](#claude)
-section covers reviewing with Claude instead.
+Copy-paste setups, top to bottom — swap the `< >` placeholders for your own
+values. Codex is the bundled default; [Claude](#claude) covers reviewing with
+Claude instead.
 
 !!! tip "Codex or Claude"
     Bubo runs the review through a small wrapper around your agent CLI.
     **Codex is bundled and works out of the box**, so the recipes below use
-    it; you can review with **Claude** instead — see [Claude](#claude).
+    it. Prefer **Claude**? See [Claude](#claude).
 
 ---
 
@@ -17,7 +17,7 @@ The fastest path to a first review on a GitLab merge request.
 
 ### 1. Prerequisites
 
-Install these once and make sure they're on `PATH` (see
+Install these once and put them on `PATH` (see
 [prerequisites](prerequisites.md) for platform-specific commands):
 
 - **uv**, **Python 3.14+**, **Git**
@@ -28,10 +28,13 @@ Install these once and make sure they're on `PATH` (see
 ### 2. Install Bubo
 
 ```sh
-uv tool install git+https://github.com/mountainowl/bubo@v0.8.0
+uv tool install bubo
 bubo init           # writes ~/.codex/config.toml (with [profiles.bubo]),
                     # ~/.claude/settings.json, the workspace, and the SQLite DB
 ```
+
+Want the bleeding edge? Track `main` instead:
+`uv tool install git+https://github.com/mountainowl/bubo`.
 
 ### 3. Configure
 
@@ -62,11 +65,10 @@ bubo doctor          # checks workspace, config, DB, and the Codex profile block
 bubo-poller          # one poll cycle; reviews open MRs, then exits
 ```
 
-The first run is **dry-run by default** (`[review].dry_run = true`) — Bubo
+The first run is **dry-run by default** (`[review].dry_run = true`): Bubo
 plans findings and writes them to SQLite but posts nothing. Read a
-transcript under `~/.local/share/bubo/var/reports/`, and when the output
-looks right, flip `[review].dry_run = false` to start posting inline
-review threads.
+transcript under `~/.local/share/bubo/var/reports/`. When it looks right,
+flip `[review].dry_run = false` to start posting inline review threads.
 
 ### 5. Schedule it (optional)
 
@@ -78,7 +80,7 @@ the install steps.
 
 ## Codex (OpenAI) — GitHub
 
-Identical to the GitLab recipe with three changes:
+Same as the GitLab recipe, with three changes:
 
 - Install the **`gh` CLI** instead of `glab`, authenticated to GitHub.
 - Use a **GitHub token** with pull-request read+write.
@@ -110,7 +112,7 @@ provider for a single run with `BUBO_PROVIDER=github bubo-poller`.
 
 Bubo doesn't hardcode providers — `llm_api_key_env` names the variable
 your CLI reads. To point Codex at a different model, change the model
-in your Codex profile (`~/.codex/config.toml`, `[profiles.bubo]`) and set:
+in your Codex profile (`~/.codex/config.toml`, `[profiles.bubo]`), then set:
 
 ```toml
 [agents]
@@ -124,7 +126,7 @@ llm_api_key_env = "<THE_ENV_VAR_YOUR_CLI_READS>"   # e.g. OPENAI_API_KEY
 ## Claude
 
 Bubo runs the review through a wrapper around your agent CLI, so Claude works
-the same way as Codex — only the CLI it calls and the key it uses change.
+like Codex — only the CLI it calls and the key it uses change.
 Install the Claude CLI, then set Claude as your agent in `[agents]`:
 
 ```toml
@@ -134,8 +136,8 @@ llm_api_key = "<your-anthropic-key>"
 llm_api_key_env = "ANTHROPIC_API_KEY"   # the env var the Claude CLI reads
 ```
 
-Codex is the agent that ships pre-wired, so reviewing with Claude needs one
-extra step — having the wrapper call the Claude CLI for the review. Verify it
-the same way as Codex: keep `[review].dry_run = true`, run `bubo-poller` once,
-and read the transcript under `var/reports/` to confirm findings come through
-before you flip `dry_run` to `false`.
+Codex ships pre-wired, so reviewing with Claude takes one extra step: point
+the wrapper at the Claude CLI for the review. Verify it like Codex — keep
+`[review].dry_run = true`, run `bubo-poller` once, and read the transcript
+under `var/reports/` to confirm findings come through before you flip
+`dry_run` to `false`.

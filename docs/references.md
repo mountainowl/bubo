@@ -1,11 +1,10 @@
 # References & further reading
 
 The sources below shaped Bubo's design, packaging, supply-chain posture,
-and the way the project presents itself. They're grouped by topic, and
-each entry notes *why* it's here — what we actually took from it — rather
-than being a bare link dump. Where a source is a peer-reviewed/academic
-preprint vs. vendor documentation vs. engineering writing, that's called
-out so you can weight it accordingly.
+and how the project presents itself. They're grouped by topic, and each
+entry notes *why* it's here — what we took from it — not a bare link dump.
+Academic preprints, vendor docs, and engineering writing are called out as
+such, so you can weight them accordingly.
 
 ## Research & academic
 
@@ -45,8 +44,9 @@ out so you can weight it accordingly.
 
 - **uv — Tools guide**:
   [docs.astral.sh/uv/guides/tools](https://docs.astral.sh/uv/guides/tools/).
-  `uv tool install git+https://…` is Bubo's primary install path; this
-  documents the Git/tag/subdirectory syntax and PATH placement.
+  `uv tool install bubo` (from PyPI) is Bubo's primary install path; this
+  documents tool installs, the `git+https://…` "track main" syntax, and PATH
+  placement.
 - **uv — Build backend concepts**:
   [docs.astral.sh/uv/concepts/build-backend](https://docs.astral.sh/uv/concepts/build-backend/).
   Why the default backend ships only the module root — the root cause of

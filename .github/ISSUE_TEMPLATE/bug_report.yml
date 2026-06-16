@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem with LLM Reviewer.
+description: Report a reproducible problem with Bubo.
 title: "bug: "
 labels: ["bug"]
 body:

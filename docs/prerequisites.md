@@ -1,12 +1,11 @@
 # Prerequisites
 
-Install these by hand on the review host before the package will run.
-Nothing is bundled implicitly — if a tool below is missing, the corresponding
-code path fails immediately.
+A short list of tools to install on the review host before Bubo runs.
+Nothing is bundled implicitly — a missing tool fails its code path right away.
 
 ## Runtime — required for any review
 
-Required for any review path, regardless of provider. Copy-paste a block:
+Needed for every review path, whatever provider you use. Copy-paste a block:
 
 **macOS**
 
@@ -56,8 +55,8 @@ sudo apt install -y git
 | **GitLab** (`provider = "gitlab"`) | [`glab`](https://gitlab.com/gitlab-org/cli) (clones each MR) + a **GitLab MCP server** on `PATH` as `mcp-gitlab` / `gitlab-mcp` (posts inline threads). | `brew install glab` + `npm install -g @zereight/mcp-gitlab` | `sudo apt install glab` (or [other distros](https://gitlab.com/gitlab-org/cli#installation)) + `npm install -g @zereight/mcp-gitlab` |
 | **GitHub** (`provider = "github"`) | [`gh`](https://cli.github.com/) (clones each PR) + a **GitHub MCP server** on `PATH` as `github-mcp-server` / `mcp-github` / `gh-mcp-server` (posts inline review comments; falls back to REST if the MCP tool name differs). | `brew install gh` + install [github-mcp-server](https://github.com/github/github-mcp-server) (release binary or `go install`) | [`gh` apt setup](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) + install [github-mcp-server](https://github.com/github/github-mcp-server) (release binary or `go install`) |
 
-After installing the CLIs, **authenticate each one once** so the
-`glab repo clone` / `gh repo clone` paths can reach private repositories:
+**Authenticate each CLI once** so the `glab repo clone` / `gh repo clone`
+paths can reach private repositories:
 
 ```sh
 # GitLab
@@ -66,15 +65,15 @@ glab auth login              # paste a PAT or use the web flow
 gh auth login                # web flow (recommended) or paste a PAT
 ```
 
-These authentications are independent of the bot token in `config/env.toml` —
-the CLI tokens authorize the clone host on the review machine; the bot token
-authorizes the REST/MCP calls that read MRs/PRs and post comments.
+These logins are separate from the bot token in `config/env.toml`: the CLI
+tokens authorize cloning on the review machine; the bot token authorizes the
+REST/MCP calls that read MRs/PRs and post comments.
 
 ## Credentials — required for any review
 
 | Credential | What it does | Notes |
 |---|---|---|
-| **Bot user + token** | The bot account whose name appears on review threads/comments. | **GitLab:** token with `api` scope. **GitHub:** token with pull-request read+write. Create a dedicated bot account and add it to every reviewed project. |
+| **Bot user + token** | The bot account whose name shows on review threads/comments. | **GitLab:** token with `api` scope. **GitHub:** token with pull-request read+write. Use a dedicated bot account and add it to every reviewed project. |
 | **LLM API key** | OpenAI, Anthropic, Gemini, or whatever model your review CLI runs. | Exported as `LLM_API_KEY` plus the operator-named variable in `[agents].llm_api_key_env` (e.g. `OPENAI_API_KEY`). |
 
 ## Optional
@@ -86,13 +85,11 @@ authorizes the REST/MCP calls that read MRs/PRs and post comments.
 
 ## Verify the install
 
-`uv tool install` only verifies `uv` itself; the other prerequisites
-are runtime-resolved at first poll. `bubo doctor` checks the
-Python-side install (workspace, env.toml, DB, Codex profile), but it
-does NOT check that the external CLIs the worker shells out to are on
-`PATH`. Run this one-liner after `bubo init` to catch a
-missing tool before the first cycle — that's the most common cause
-of a first-cycle worker failure:
+`uv tool install` checks only `uv` itself; the rest resolve at the first poll.
+`bubo doctor` covers the Python side (workspace, env.toml, DB, Codex profile)
+but does NOT check that the external CLIs the worker shells out to are on
+`PATH`. Run this after `bubo init` to catch a missing tool before the first
+cycle — the most common cause of a first-cycle worker failure:
 
 ```sh
 for bin in uv python3 git glab gh codex claude github-mcp-server mcp-gitlab; do
@@ -100,5 +97,5 @@ for bin in uv python3 git glab gh codex claude github-mcp-server mcp-gitlab; do
 done
 ```
 
-You only need the tools for the providers and agents you've actually enabled
-in `config/env.toml` — `MISSING` on the others is fine.
+You only need tools for the providers and agents you've enabled in
+`config/env.toml` — `MISSING` on the rest is fine.

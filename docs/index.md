@@ -2,12 +2,10 @@
 
 **Agentic AI code review — with the LLM of your choice.**
 
-Bubo is an agentic AI code reviewer for GitLab MRs and GitHub PRs. It
-watches open changes, runs a structured agentic review with the LLM you
-choose (Codex, Claude, or any model your CLI drives), and posts only
-actionable findings as inline review threads — no chatbot noise, no
-praise, no summaries. Like the owl it's named for, it stays silent until
-it has something worth saying.
+Bubo reviews your GitLab MRs and GitHub PRs, posts only the findings worth
+acting on, and runs on the LLM *you* pick — self-hosted, so nothing leaves your
+infrastructure. Like the owl it's named for, it stays quiet until it has
+something worth saying: no chatbot chatter, no praise, no summaries.
 
 ![Bubo hero](images/bubo-hero.png)
 
@@ -17,12 +15,30 @@ it has something worth saying.
 
 ---
 
+## Features
+
+- **Bring your own LLM.** Codex, Claude, or any model your CLI can drive. No
+  vendor lock-in.
+- **Self-hosted.** Code, diffs, and review data stay on your infrastructure.
+- **GitLab MRs and GitHub PRs**, one config, same behavior on both.
+- **Signal over noise.** Only actionable inline findings — Issue / Impact /
+  Evidence / Fix / Confidence. A clean change gets one "all good" acknowledgement.
+- **Give it a mood.** Pick the review voice — `terse`, `collaborative`,
+  `socratic`, `formal`, or `casual` — without touching the underlying data.
+- **Learns your team's taste.** Tracks which findings get accepted vs. disputed
+  and can suppress the finding-classes you keep rejecting.
+- **Verify before posting.** Optional independent "is this real?" passes drop
+  findings that don't hold up — point them at a second model for real diversity.
+- **Built for governance.** Opt-in AI-code provenance, review-rigor modulation,
+  and an auditable on-prem report (accept rate, ROI, noise trend, latency,
+  policy decisions) via CLI and MCP.
+- **Observability in.** OpenTelemetry metrics; cosign-signed releases with SBOMs.
+
 ## What it does
 
-The poller watches open merge requests / pull requests for projects you
-list in `config/env.toml`, forks a worker per change, runs a Codex or
-Claude review skill against the diff, and posts each structured finding
-as an inline review thread. Findings follow a fixed shape:
+Bubo watches the merge/pull requests for the projects in your `config/env.toml`,
+forks a worker per change, runs your Codex or Claude review skill against the
+diff, and posts each finding as an inline thread. Findings follow a fixed shape:
 
 ```text
 Issue: HS256 JWT fallback is skipped when Cognito URL construction fails.
@@ -32,17 +48,15 @@ Fix: Treat Cognito validation construction failures as failed Cognito auth when 
 Confidence: 0.94
 ```
 
-When a review completes with zero actionable findings, it posts a single
-change-level acknowledgement so reviewers can distinguish "reviewer ran
-and was happy" from "reviewer never ran":
+Found nothing? Bubo says so once, so a clean review reads differently from a
+review that never ran:
 
 ```text
 Automated review ran — no issues found.
 ```
 
-The acknowledgement is dedup'd by exact body match scoped to the bot's
-author — re-reviews on rebases or repeated polls reuse the existing
-comment instead of stacking duplicates.
+That acknowledgement is dedup'd by exact body and bot author, so rebases and
+repeated polls reuse it instead of stacking duplicates.
 
 ## How it works
 
@@ -57,38 +71,33 @@ flowchart LR
     A --> B --> C --> D --> E --> F
 ```
 
-1. **Discover.** Poller lists open MRs/PRs for each configured project,
-   skipping any already reviewed at the current head SHA.
-2. **Review.** For each eligible change, it forks a worker that checks
-   out the diff, runs the agent review skill, and parses structured
+1. **Discover.** List open MRs/PRs per project, skipping any already reviewed at
+   the current head SHA.
+2. **Review.** Fork a worker, check out the diff, run the agent skill, parse the
    findings.
-3. **Post.** Each finding is mapped to a changed line and posted as an
-   inline review thread (or stored as a "planned" finding if `dry_run`
-   is on).
-4. **Acknowledge.** If a review finishes with zero findings, the worker
-   posts a single change-level acknowledgement so a clean MR/PR is
-   distinguishable from one the reviewer never touched.
-5. **Persist.** SQLite records reviewed SHAs and posted-finding
-   fingerprints so the bot does not spam the same MR or duplicate a
-   comment.
-6. **Grade.** `--sync-outcomes` later checks which posted findings were
-   resolved, replied to, marked false-positive, deleted, or
-   merged-unresolved.
+3. **Post.** Map each finding to a changed line and post it inline — or store it
+   as "planned" when `dry_run` is on.
+4. **Acknowledge.** Zero findings → one change-level "all good" comment.
+5. **Persist.** SQLite remembers reviewed SHAs and finding fingerprints, so Bubo
+   never spams or double-posts.
+6. **Grade.** `--sync-outcomes` later checks which findings were resolved,
+   replied to, disputed, deleted, or merged unresolved.
 
-The poller doesn't try to be a code-review brain. It orchestrates SCM
-access, state, prompt rendering, posting, and metrics. The actual
-review logic lives in the configured CLI skill.
+Bubo isn't trying to be the code-review brain — it orchestrates SCM access,
+state, prompting, posting, and metrics. The review smarts live in your CLI skill.
 
 ## Install
 
 ```sh
-uv tool install git+https://github.com/mountainowl/bubo@v0.8.0
-bubo init              # idempotent; --dry-run to preview
-bubo doctor            # verify before first poll
-bubo-poller            # one poll cycle; exits at the end
+uv tool install bubo                          # or: pip install bubo
+bubo init                                     # idempotent; --dry-run to preview
+bubo doctor                                   # verify before the first poll
+bubo-poller                                   # one poll cycle; exits at the end
 ```
 
-Full walkthrough in **[Install and configure](install-and-configure.md)**.
+Prefer a container? `docker pull ghcr.io/mountainowl/bubo` (multi-arch; the
+review-agent CLI is BYO). Full walkthrough in
+**[Install and configure](install-and-configure.md)**.
 
 ## Further reading
 
@@ -104,22 +113,21 @@ Full walkthrough in **[Install and configure](install-and-configure.md)**.
 ## Project status
 
 - **GitLab posting via polling** — production path. Stable.
-- **GitHub posting via polling** — supported, at outcome-metric parity
-  with GitLab. Set `[scm].provider = "github"` (or `BUBO_PROVIDER=github`).
-- **MCP server (`bubo-mcp`)** — first-class. Two interfaces:
-  read-only metrics + triggered reviews. stdio or HTTP transport.
-- **Webhook-driven triggering** — not implemented; polling is the only path.
+- **GitHub posting via polling** — supported, at outcome-metric parity with
+  GitLab. Set `[scm].provider = "github"` (or `BUBO_PROVIDER=github`).
+- **MCP server (`bubo-mcp`)** — first-class: read-only metrics + triggered
+  reviews, over stdio or HTTP.
+- **Webhook-driven triggering** — not yet; polling is the only path today.
 
 ## Security
 
-- `config/env.toml` is gitignored and holds tokens. **Never print or
-  commit values from it.**
-- Review-agent stdout is redacted (`GITLAB_TOKEN=`, `OPENAI_API_KEY=`,
-  `glpat-…`, `sk-…`, and credentialed Git URLs) before being written to
-  reports, logs, or the database.
-- The reviewer subprocess is launched with a strict env allowlist —
-  host secrets are not passed wholesale into the LLM agent.
-- Releases are cosign-signed via Sigstore keyless OIDC; SBOM (SPDX
-  JSON) attached to every release.
+- `config/env.toml` is gitignored and holds tokens. **Never print or commit its
+  values.**
+- Review-agent stdout is redacted (`GITLAB_TOKEN=`, `OPENAI_API_KEY=`, `glpat-…`,
+  `sk-…`, credentialed Git URLs) before it touches reports, logs, or the database.
+- The reviewer subprocess runs under a strict env allowlist — host secrets aren't
+  handed wholesale to the LLM agent.
+- Releases are cosign-signed via Sigstore keyless OIDC, with an SBOM (SPDX JSON)
+  on every release.
 - Report vulnerabilities per
   [SECURITY.md](https://github.com/mountainowl/bubo/blob/main/SECURITY.md).

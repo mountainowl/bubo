@@ -1,7 +1,7 @@
 # Telemetry
 
-LLM Reviewer emits OpenTelemetry metrics and traces so dashboard rollups
-stay outside the poller. All metrics are namespaced `llm_review.*` and
+Bubo emits OpenTelemetry metrics and traces, so dashboard rollups stay
+outside the poller. All metrics are namespaced `llm_review.*` and
 registered in `src/bubo/telemetry/metrics.py`.
 
 ## Emitted metrics

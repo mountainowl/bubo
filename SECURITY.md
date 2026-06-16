@@ -2,8 +2,8 @@
 
 ## Supported Versions
 
-LLM Reviewer is pre-1.0 and ships from `main`. The latest tagged release and
-the current `main` branch receive security fixes; older tags do not.
+Bubo is pre-1.0 and ships from `main`. The latest tagged release and the
+current `main` branch receive security fixes; older tags do not.
 
 | Version           | Supported |
 | ----------------- | --------- |
@@ -78,8 +78,7 @@ Out of scope:
 
 ## Secret handling
 
-LLM Reviewer is designed to run against private repositories. Keep these
-rules:
+Bubo is designed to run against private repositories. Keep these rules:
 
 - Store tokens only in ignored `config/env.toml` or host secret management
   (systemd `LoadCredential=`, GitHub Actions secrets, etc.).

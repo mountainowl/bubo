@@ -1,8 +1,7 @@
 # Review Examples
 
-These examples are sanitized from real review output. They show the comment
-shape LLM Reviewer aims to produce: concrete impact, visible evidence, a local
-fix, and confidence.
+Sanitized from real review output, these show the comment shape Bubo aims
+for: concrete impact, visible evidence, a local fix, and confidence.
 
 ## Resource Leak
 

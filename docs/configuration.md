@@ -1,7 +1,7 @@
 # Configuration reference
 
 Public defaults live in [`config/env.example.toml`](https://github.com/mountainowl/bubo/blob/main/config/env.example.toml).
-Copy it to ignored `config/env.toml` before running. Runtime config and
+Copy it to the gitignored `config/env.toml` before running. Runtime config and
 credentials live in that one TOML file.
 
 <table>
@@ -287,9 +287,9 @@ credentials live in that one TOML file.
 
 ## Review-comment tone (moods)
 
-`[review].tone` chooses the *voice* of a posted finding. It is purely a
-presentation choice and is left entirely to the operator — bubo ships with
-`terse` so behavior is unchanged unless you opt in.
+`[review].tone` chooses the *voice* of a posted finding — a pure presentation
+choice, entirely yours. Bubo ships with `terse`, so behavior is unchanged unless
+you opt in.
 
 | tone | reads like |
 | --- | --- |
@@ -299,16 +299,16 @@ presentation choice and is left entirely to the operator — bubo ships with
 | `formal` | measured, complete sentences, no contractions — for regulated/enterprise review |
 | `casual` | relaxed and brief |
 
-**How it works.** For any non-`terse` tone, bubo injects a short *voice
-directive* into the review prompt (a register description plus one
-cross-domain style example) asking the reviewer to add a single in-voice
-`comment` field per finding. bubo posts that `comment` in place of the
-structured render. This costs a few extra output tokens per finding.
+**How it works.** For any non-`terse` tone, Bubo injects a short *voice
+directive* into the review prompt (a register description plus one cross-domain
+style example) asking the reviewer to add a single in-voice `comment` field per
+finding. Bubo posts that `comment` in place of the structured render, at the cost
+of a few extra output tokens per finding.
 
 **What never changes with tone.** The structured fields
 (`title`/`impact`/`evidence`/`fix`/`confidence`) are still recorded to SQLite
 exactly as in `terse` mode, and the dedup **fingerprint is computed from those
-fields, not the voiced comment**. So you can change tone at any time without
+fields, not the voiced comment**. So you can switch tone any time without
 re-posting existing findings, splitting their accept/dispute history, or
 disturbing the governance dataset — only the words developers read change.
 
@@ -330,27 +330,24 @@ would post it — identical severity/evidence/confidence underneath:
 
 ## Dispute-driven suppression
 
-Bubo records, per finding, whether the developer accepted or disputed it —
-the accept/dispute signal kept in the `finding_outcomes` table and surfaced
-by `bubo --sync-outcomes`. **Dispute-driven suppression** turns that history
-into a precision lever: when enabled, the poller stops posting finding
-`category` classes that a team has *repeatedly rejected on a given repo*,
-instead of re-litigating the same noise on every merge request.
+Bubo records, per finding, whether the developer accepted or disputed it — the
+accept/dispute signal kept in the `finding_outcomes` table and surfaced by `bubo
+--sync-outcomes`. **Dispute-driven suppression** turns that history into a
+precision lever: when enabled, the poller stops posting finding `category`
+classes a team has *repeatedly rejected on a given repo*, instead of
+re-litigating the same noise on every merge request.
 
-It is **off by default** (`[review].suppress_disputed_classes = false`).
-Reach for it only after you have built up outcome history and have observed
-a specific category — say `documentation` or `maintainability` — generating
-persistent, dismissed noise. The per-finding `min_confidence` and
-`allowed_kinds` filters are the first-line controls; this is a sharper,
-repo-learned complement.
+It is **off by default** (`[review].suppress_disputed_classes = false`). Reach
+for it only after you've built up outcome history and watched a specific
+category — say `documentation` or `maintainability` — generate persistent,
+dismissed noise. The per-finding `min_confidence` and `allowed_kinds` filters are
+the first-line controls; this is a sharper, repo-learned complement.
 
-The feature is **conservative by design**: it is a precision lever for teams
-with accumulated accept/dispute history, and it does nothing on a fresh
-install. Even with the flag turned on, no category is suppressed until enough
-outcomes accrue to clear both `dispute_suppress_min_samples` and
-`dispute_suppress_threshold` — so enabling it early cannot silence findings
-off a thin signal. It simply stays inert until the data earns a suppression,
-which is the correct, cautious behavior for a noise filter.
+It's **conservative by design** and does nothing on a fresh install. Even with
+the flag on, no category is suppressed until enough outcomes accrue to clear both
+`dispute_suppress_min_samples` and `dispute_suppress_threshold` — so enabling it
+early can't silence findings off a thin signal. It stays inert until the data
+earns a suppression, which is the right behavior for a noise filter.
 
 ### How a category gets suppressed
 
@@ -362,23 +359,22 @@ by normalized `category`. A category is suppressed when **both** hold:
 - the dispute rate — `disputed-or-false-positive ÷ total outcomes` — is at
   or above `dispute_suppress_threshold` (default `0.5`).
 
-The denominator is *all* outcome rows for the category, including rows
-written when an outcome-sync check failed (which count as not-disputed).
-That deliberately dilutes the rate: the bias is toward **under**-suppressing,
-so a genuinely useful class is never silenced off a thin or noisy signal.
-Suppressed findings are dropped before posting and logged with reason
+The denominator is *all* outcome rows for the category, including rows written
+when an outcome-sync check failed (which count as not-disputed). That
+deliberately dilutes the rate: the bias is toward **under**-suppressing, so a
+genuinely useful class is never silenced off a thin or noisy signal. Suppressed
+findings are dropped before posting and logged with reason
 `disputed_class_suppressed` (visible in the JSON log stream and the
-`finding_filtered` event), so an operator can always see what got swallowed.
+`finding_filtered` event), so you can always see what got swallowed.
 
 ### Known limitation: suppression is self-reinforcing
 
-Once a category is suppressed, bubo stops posting it, so no new
-`review_findings` / `finding_outcomes` rows accrue for that category. Its
-dispute rate is therefore **frozen** at the snapshot that crossed the
-threshold — there is no organic recovery path if the team later starts
-caring about that class again. This is within the feature's intent (a class
-the team keeps rejecting should stay gone), but it is a conscious trade-off,
-not an accident. The escape hatches are all operator-side:
+Once a category is suppressed, Bubo stops posting it, so no new `review_findings`
+/ `finding_outcomes` rows accrue for it. Its dispute rate is therefore **frozen**
+at the snapshot that crossed the threshold — there's no organic recovery path if
+the team later starts caring about that class again. This is within the feature's
+intent (a class the team keeps rejecting should stay gone), but it's a conscious
+trade-off, not an accident. The escape hatches are all operator-side:
 
 - raise `dispute_suppress_threshold` or `dispute_suppress_min_samples`, or
 - set `suppress_disputed_classes = false` to re-post everything and rebuild
@@ -386,31 +382,29 @@ not an accident. The escape hatches are all operator-side:
 
 ## Verification before posting
 
-**Off by default.** When `verify_findings = true`, every finding that is
-otherwise about to be posted is first re-checked by N independent "is this
-real?" lenses; a finding a *majority refute* is dropped (recorded `refuted`)
-instead of posted. Each lens re-asks a verifier to **try to refute** the
-finding from a different angle — `correctness` (is it a real defect?),
-`in_diff` (does the cited line do what the finding claims?), and `reproduce`
-(can the failure actually occur?) — and answer with a strict JSON verdict
-`{"real": ..., "confidence": ..., "reason": ...}`. A finding survives only if
-at least `verify_min_votes` lenses vote it real at or above
-`verify_confidence_floor`.
+**Off by default.** When `verify_findings = true`, every finding about to be
+posted is first re-checked by N independent "is this real?" lenses; a finding a
+*majority refute* is dropped (recorded `refuted`) instead of posted. Each lens
+re-asks a verifier to **try to refute** the finding from a different angle —
+`correctness` (is it a real defect?), `in_diff` (does the cited line do what the
+finding claims?), and `reproduce` (can the failure actually occur?) — and answers
+with a strict JSON verdict `{"real": ..., "confidence": ..., "reason": ...}`. A
+finding survives only if at least `verify_min_votes` lenses vote it real at or
+above `verify_confidence_floor`.
 
-The contract is deliberately **conservative**: an unparseable answer, a
-missing `real` flag, or a missing/garbled `confidence` resolves to *not real*
-/ zero confidence, so uncertainty never sneaks a finding past the floor.
+The contract is deliberately **conservative**: an unparseable answer, a missing
+`real` flag, or a missing/garbled `confidence` resolves to *not real* / zero
+confidence, so uncertainty never sneaks a finding past the floor.
 
 ### Honesty: this is the weaker, correlated form by default
 
-This is important enough to state plainly. With the default `verify_command`
-(empty → it reuses `[agents].reviewer_command`), verification re-asks **the
-same model** with different lens prompts. That shares the original finding's
-blind spots — it is the **weaker, correlated** form of pre-post verification.
-The strong form that the literature credits with ~94–98% false-positive
-elimination is either a **hybrid static-analysis + LLM** check or a
-**genuinely different model**. The real diversity payoff lives in pointing
-`verify_command` at a different model:
+Stated plainly: with the default `verify_command` (empty → it reuses
+`[agents].reviewer_command`), verification re-asks **the same model** with
+different lens prompts. That shares the original finding's blind spots — the
+**weaker, correlated** form of pre-post verification. The strong form the
+literature credits with ~94–98% false-positive elimination is either a **hybrid
+static-analysis + LLM** check or a **genuinely different model**. The real
+diversity payoff lives in pointing `verify_command` at a different model:
 
 ```toml
 [review]
@@ -420,16 +414,16 @@ verify_findings = true
 verify_command = ["claude", "-p"]
 ```
 
-bubo never labels self-refutation as hard-proven "verified" anywhere in the
-audit trail or telemetry — a survived finding is recorded as **not refuted**
-(the `verified` column is `1`), and the per-lens vote tally is persisted in
+Bubo never labels self-refutation as hard-proven "verified" anywhere in the
+audit trail or telemetry — a survived finding is recorded as **not refuted** (the
+`verified` column is `1`), and the per-lens vote tally is persisted in
 `verify_votes` so you can see exactly what each lens said.
 
 ### Cost and the guardrails
 
-Verification can fan out to up to `verify_max_findings ×
-len(verify_lenses)` extra **serial** LLM calls per change. That cost is why
-the feature is off by default and why it is fenced in:
+Verification can fan out to up to `verify_max_findings × len(verify_lenses)`
+extra **serial** LLM calls per change. That cost is why the feature is off by
+default and why it's fenced in:
 
 - It runs only on **in-diff, non-duplicate, post-filter survivors** — the
   findings actually about to be posted. Out-of-diff and policy-dropped
@@ -466,12 +460,12 @@ the feature is off by default and why it is fenced in:
 ## Governance & provenance
 
 For regulated and enterprise teams whose governance functions must **approve and
-monitor** AI-assisted code, bubo can capture a per-change **provenance signal**
-and keep it on-prem — there is no third party to ship code or audit data to,
-which is the whole compliance pitch of a self-hosted, BYO-LLM reviewer.
+monitor** AI-assisted code, Bubo can capture a per-change **provenance signal**
+and keep it on-prem. There's no third party to ship code or audit data to —
+the whole compliance pitch of a self-hosted, BYO-LLM code reviewer.
 
 This is **off by default** (`[governance].capture_provenance = false`) and, in
-its current phase, **captures only** — it does not change which findings post,
+its current phase, **captures only** — it doesn't change which findings post,
 raise severities, or block anything. Rigor modulation and policy gates are a
 later, separately opt-in phase.
 
@@ -506,20 +500,19 @@ can *see* the feedback loop, not just have it act silently:
 
 ### How capture works
 
-bubo already checks out a change before reviewing it, so it reads the change's
-**commit trailers** and records a *banded* signal onto the review run. A
-category is derived from what the commits **declare** — e.g. a
-`Co-authored-by: Claude` trailer, or an `AI-assisted` trailer. Patterns are
-matched per commit-message line and the built-in defaults are anchored to
-trailer shape, so a prose body that merely mentions AI is not read as a
-declaration. The result is one row per change with `band`, `source`,
-`confidence`, the matched declaration lines (for the audit trail), and any
-matched `sensitive_path_globs`.
+Bubo already checks out a change before reviewing it, so it reads the change's
+**commit trailers** and records a *banded* signal onto the review run. The
+category is derived from what the commits **declare** — e.g. a `Co-authored-by:
+Claude` trailer, or an `AI-assisted` trailer. Patterns match per commit-message
+line and the built-in defaults are anchored to trailer shape, so a prose body
+that merely mentions AI isn't read as a declaration. The result is one row per
+change with `band`, `source`, `confidence`, the matched declaration lines (for
+the audit trail), and any matched `sensitive_path_globs`.
 
 ### Two honesty rules (deliberate)
 
 - **A band, never a verdict.** `band` is one of `unknown` / `likely_ai` /
-  `collaborative`. bubo never emits a binary "this is AI / this is human" label —
+  `collaborative`. Bubo never emits a binary "this is AI / this is human" label —
   post-hoc detection is fragile cross-domain, so a banded signal is the honest
   shape.
 - **Declared ≠ detected, and `unknown` is the default.** The absence of an AI
@@ -528,7 +521,7 @@ matched `sensitive_path_globs`.
   *which kind* of evidence produced the band. This phase is **deterministic
   (`trailer`) only**; LLM-based AI *detection* is deliberately deferred and would
   surface as `source = detection` — distinct, so an auditor always knows whether
-  they are looking at a declaration or a guess.
+  they're looking at a declaration or a guess.
 
 ### Audit integrity
 
@@ -539,7 +532,7 @@ retroactively rewrites it. The signal also appears in the JSON log stream as a
 
 ### Capability boundary (read this)
 
-bubo **cannot block a merge** — it does not own CI or branch protection. It
+Bubo **cannot block a merge** — it doesn't own CI or branch protection. It
 produces auditable data and an advisory signal; acting on that signal (required
 approvals, merge gates) stays with your pipeline. Capture is the foundation that
 makes those downstream gates *possible*, not a gate itself.
@@ -557,15 +550,15 @@ agree.
 
 - **Rigor modulation** (`rigor_modulation = true`): an escalated change injects
   a heightened-scrutiny directive (prioritize the security lens) into *that
-  change's* review prompt. It is prompt context, never a verdict. (Honest
+  change's* review prompt. It's prompt context, never a verdict. (Honest
   limitation: whether the directive measurably improves the review is LLM
-  behavior — bubo guarantees the directive is *injected*, not that the model
-  acts on it.)
+  behavior — Bubo guarantees the directive is *injected*, not that the model acts
+  on it.)
 - **Policy gate** (`policy_mode = report-only | soft`): records an auditable,
   **write-once** governance *decision* per change — `action` is `flag` (escalated)
   or `clear` — surfaced as a `governance_decision` log event and the
-  `llm_review.governance` metric, and queryable for reporting. There is no
-  `enforce` mode: every mode is advisory because bubo cannot block a merge.
+  `llm_review.governance` metric, and queryable for reporting. There's no
+  `enforce` mode: every mode is advisory because Bubo cannot block a merge.
 
 Turning on either capability auto-implies the provenance fetch even if
 `capture_provenance = false` — the per-change commit read is what all three

@@ -1,30 +1,30 @@
 # Run
 
-One-off review of the current checkout — run your configured review agent
-directly with a task (the bundled default is Codex; no GitLab interaction
-beyond the agent's own MCP calls):
+To review the current checkout once, run your configured agent directly with a
+task (Codex is the bundled default; no GitLab interaction beyond the agent's
+own MCP calls):
 
 ```sh
 codex --ask-for-approval never exec --profile bubo --skip-git-repo-check \
   "Review the current changes."
 ```
 
-The GitLab poller (one cycle):
+The GitLab poller, one cycle:
 
 ```sh
 uv run bubo-poller
 ```
 
-Schedule it via cron or a systemd timer for continuous operation — there is
+For continuous operation, schedule it under cron or a systemd timer — there's
 deliberately no daemon mode. Each invocation processes up to
 `max_merge_requests_per_poll` MRs and exits. See [operate.md](operate.md)
 for ready-to-copy cron/systemd templates.
 
 ## MCP interface (`bubo-mcp`)
 
-bubo ships its own MCP server with **two interfaces** — a metrics
-side for inspecting review state, and a review side for triggering a
-fresh review by URL or `(provider, project, number)`.
+Bubo ships its own MCP server with **two interfaces**: a metrics side for
+inspecting review state, and a review side for triggering a fresh review by
+URL or `(provider, project, number)`.
 
 **Metrics interface — read-only, against SQLite:**
 
@@ -47,16 +47,15 @@ fresh review by URL or `(provider, project, number)`.
 given, otherwise falls back to `[scm].provider` in `config/env.toml`.
 `review_change` blocks until the underlying `reviewer_command` subprocess
 completes — set the client-side `tool_timeout_sec` accordingly. **MCP-triggered
-reviews return findings inline; they do not write to `reviewed_mrs`**, so
-they will not show up in the metrics tools. Use the poller for state-tracked
-reviews.
+reviews return findings inline; they do not write to `reviewed_mrs`**, so they
+won't show up in the metrics tools. Use the poller for state-tracked reviews.
 
 ### Three deployment patterns
 
 The server supports two transports — stdio (default) and HTTP+SSE with
 bearer-token auth — selected via `[mcp_server].transport` in
 `config/env.toml`. Pick the pattern that matches where Codex and the
-reviewer actually live.
+reviewer live.
 
 **Pattern 1 — same host (laptop runs Codex *and* the reviewer):**
 
@@ -70,8 +69,8 @@ tool_timeout_sec    = 1800   # ≥ [review].timeout_seconds for review_change
 ```
 
 No reviewer-side config change needed — `[mcp_server].transport` defaults
-to `"stdio"`. `~/` expansion is supported, so a `~/bubo/...` path
-works across machines that install to the same per-user location.
+to `"stdio"`. `~/` expansion works, so a `~/bubo/...` path holds across
+machines that install to the same per-user location.
 
 **Pattern 2 — remote via SSH (laptop runs Codex; server runs the reviewer + holds the SQLite):**
 
@@ -89,11 +88,10 @@ startup_timeout_sec = 30
 tool_timeout_sec    = 1800
 ```
 
-Operator prerequisites: key-based SSH (interactive password breaks the
-stdio loop), the install root readable by the SSH user, and no
-MOTD/banner noise on stdout (set `PrintMotd no` server-side or
-`LogLevel QUIET` client-side). Zero new code — SSH multiplexes the MCP
-stdio over the wire.
+Operator prerequisites: key-based SSH (an interactive password breaks the
+stdio loop), the install root readable by the SSH user, and no MOTD/banner
+noise on stdout (set `PrintMotd no` server-side or `LogLevel QUIET`
+client-side). No new code — SSH multiplexes the MCP stdio over the wire.
 
 **Pattern 3 — remote over HTTP+bearer (multi-tenant or org-wide):**
 
@@ -121,8 +119,8 @@ tool_timeout_sec    = 1800
 
 The server enforces `Authorization: Bearer <token>` on every request and
 returns 401 otherwise. **The server does not terminate TLS** — bind to
-`127.0.0.1` and front it with nginx/caddy, expose only over a VPN, or
-accept that the token traverses the network in clear text.
+`127.0.0.1` and front it with nginx/caddy, expose it only over a VPN, or
+accept that the token crosses the network in clear text.
 
 ### Upstream wrappers
 
@@ -130,20 +128,20 @@ The dispatcher also fronts the **upstream** MCP servers — `bin/bubo
 mcp-upstream gitlab` and `bin/bubo mcp-upstream github` — which locate the
 third-party GitLab / GitHub MCP server on `PATH` and exec it with
 `config/env.toml` tokens injected. The poster path uses these to create
-inline review threads; you can also point Codex at them directly if you want
-a chat-driven session with the same MCP surface the reviewer uses.
+inline review threads. Point Codex at them directly for a chat-driven session
+with the same MCP surface the reviewer uses.
 
 ## How the GitHub provider talks to GitHub
 
 The poller is provider-agnostic: a single `ScmProvider` abstraction
-(see `src/bubo/scm/`) drives both GitLab and GitHub. The
-GitHub-specific mechanics worth knowing:
+(see `src/bubo/scm/`) drives both GitLab and GitHub. Two
+GitHub-specific mechanics are worth knowing:
 
 - **Inline-comment posting** goes through a GitHub MCP server. The MCP
-  tool name varies between server implementations and is overrideable
-  via the `BUBO_GITHUB_MCP_TOOL` environment variable. If the
-  MCP call fails or the tool is missing, the poster falls back to the
-  GitHub REST API for the same operation.
+  tool name varies between server implementations; override it with the
+  `BUBO_GITHUB_MCP_TOOL` environment variable. If the MCP call fails or
+  the tool is missing, the poster falls back to the GitHub REST API for
+  the same operation.
 - **Thread resolution** (used by `--sync-outcomes`) is read via GitHub's
   GraphQL `reviewThreads` API, so resolved/unresolved counts reflect the
   actual review-thread state. If GraphQL is unavailable or the comment's
