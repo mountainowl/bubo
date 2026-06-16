@@ -78,6 +78,48 @@ def test_telemetry_config_rejects_invalid_protocol() -> None:
         raise AssertionError("expected invalid protocol to fail")
 
 
+def test_telemetry_config_rejects_quoted_boolean() -> None:
+    # The footgun: bare bool("false") is True, so a quoted "false" used to
+    # silently *enable* telemetry. bool_value now rejects the string outright.
+    try:
+        telemetry_config_from_dict({"telemetry": {"enabled": "false"}})
+    except ValueError as exc:
+        assert "telemetry.enabled" in str(exc)
+    else:
+        raise AssertionError("expected quoted boolean to be rejected")
+
+
+def test_read_config_disables_quoted_boolean_telemetry_without_failing_reviews() -> None:
+    # End-to-end: a quoted `enabled = "false"` is a ConfigError (ValueError
+    # subclass) that flows through read_config's disable-on-error catch, so
+    # telemetry ends up *off* rather than silently on. This is the
+    # operator-visible behavior the bool_value hardening protects.
+    original_config = poller.CONFIG
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            poller.CONFIG = Path(tmp) / "env.toml"
+            poller.CONFIG.write_text(
+                """
+[gitlab]
+url = "https://gitlab.com"
+
+[telemetry]
+enabled = "false"
+
+[[projects]]
+path = "example/enabled-repo"
+enabled = true
+""",
+                encoding="utf-8",
+            )
+
+            cfg = poller.read_config()
+
+            assert cfg.telemetry_config.enabled is False
+    finally:
+        poller.CONFIG = original_config
+
+
 def test_read_config_disables_invalid_telemetry_without_failing_reviews() -> None:
     original_config = poller.CONFIG
     try:

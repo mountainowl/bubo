@@ -25,17 +25,14 @@ then drives it.
 from __future__ import annotations
 
 import json
-import time
 import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any, cast
 
+from bubo import _http
 from bubo.review_config import ReviewConfig
 from bubo.types import JsonObject
 
-API_MAX_ATTEMPTS = 3
-API_RETRY_STATUSES = {429, 500, 502, 503, 504}
 API_VERSION = "2022-11-28"
 
 
@@ -53,28 +50,20 @@ def _request(
 ) -> tuple[Any, dict[str, str]]:
     """Issue one GitHub REST request to an absolute URL, with retry.
 
-    Retries on transient statuses and connection errors, honoring
-    ``Retry-After``. A ``403`` with ``X-RateLimit-Remaining: 0`` is treated
-    as a (retryable) rate-limit rather than a hard auth failure.
+    Delegates the shared retry/backoff loop to
+    :func:`bubo._http.request_json`, passing :func:`_is_rate_limited` as the
+    extra retryable condition: a ``403`` with ``X-RateLimit-Remaining: 0`` is
+    GitHub's primary rate-limit and is retried rather than treated as a hard
+    auth failure (a distinction GitLab does not need).
     """
-    payload = None if body is None else json.dumps(body).encode()
-    for attempt in range(API_MAX_ATTEMPTS):
-        req = urllib.request.Request(url, data=payload, method=method, headers=_headers(token))
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                data = resp.read().decode() or "null"
-                headers = dict(resp.headers)
-            return json.loads(data), headers
-        except urllib.error.HTTPError as exc:
-            retryable = exc.code in API_RETRY_STATUSES or _is_rate_limited(exc)
-            if not retryable or attempt == API_MAX_ATTEMPTS - 1:
-                raise
-            time.sleep(api_retry_delay(exc.headers, attempt))
-        except urllib.error.URLError:
-            if attempt == API_MAX_ATTEMPTS - 1:
-                raise
-            time.sleep(api_retry_delay({}, attempt))
-    raise RuntimeError("GitHub API retry loop exhausted")
+    return _http.request_json(
+        url,
+        method=method,
+        headers=_headers(token),
+        body=body,
+        extra_retryable=_is_rate_limited,
+        provider="GitHub",
+    )
 
 
 def _is_rate_limited(exc: urllib.error.HTTPError) -> bool:
@@ -82,17 +71,6 @@ def _is_rate_limited(exc: urllib.error.HTTPError) -> bool:
         return False
     remaining = exc.headers.get("X-RateLimit-Remaining") if hasattr(exc.headers, "get") else None
     return remaining == "0"
-
-
-def api_retry_delay(headers: object, attempt: int) -> float:
-    retry_after = headers.get("Retry-After") if hasattr(headers, "get") else None
-    if retry_after:
-        try:
-            return min(60.0, max(0.0, float(retry_after)))
-        except ValueError:
-            pass
-    delay = 0.5 * (2**attempt)
-    return 10.0 if delay > 10.0 else delay
 
 
 def api(

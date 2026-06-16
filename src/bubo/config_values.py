@@ -56,6 +56,23 @@ def positive_int(value: object, name: str) -> int:
     return parsed
 
 
+def non_negative_float(value: object, name: str) -> float:
+    """Parse ``value`` as a float ``>= 0.0``.
+
+    Used for cost/rate config (e.g. telemetry pricing) where a negative value
+    is meaningless. Raises :class:`ConfigError` with the field ``name`` if
+    ``value`` is non-numeric or negative, so the operator can locate the
+    offending TOML key.
+    """
+    try:
+        parsed = float(str(value))
+    except ValueError:
+        raise ConfigError(f"{name} must be a non-negative number") from None
+    if parsed < 0:
+        raise ConfigError(f"{name} must be a non-negative number")
+    return parsed
+
+
 def confidence_threshold(value: object, name: str) -> float:
     """Parse ``value`` as a confidence threshold in the inclusive range
     ``[0.0, 1.0]``.

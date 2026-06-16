@@ -3,8 +3,9 @@
 Stdlib-only — no `requests` or `httpx` dependency, deliberately. Everything
 the poller needs (list MRs, fetch diffs, fetch and create discussions) is a
 handful of GET/POST calls against ``/api/v4``. The trade-off is that
-pagination, retry/backoff, and Retry-After handling all live here as
-explicit code rather than coming "for free" from a library.
+pagination lives here as explicit code rather than coming "for free" from a
+library; the shared retry/backoff and ``Retry-After`` handling live in
+:mod:`bubo._http`.
 
 Two things this module does NOT do, despite reading like a full client:
 
@@ -18,22 +19,12 @@ Two things this module does NOT do, despite reading like a full client:
 
 from __future__ import annotations
 
-import json
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any, cast
 
+from bubo import _http
 from bubo.review_config import ReviewConfig
 from bubo.types import JsonObject
-
-# Total attempts (initial + retries) for a single REST call before giving up.
-API_MAX_ATTEMPTS = 3
-# Status codes that trigger a retry. 429 is rate-limit; 5xx are GitLab-side
-# transient errors. 4xx other than 429 fail immediately (e.g. 401 is not
-# going to fix itself).
-API_RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 
 def api(
@@ -41,47 +32,19 @@ def api(
 ) -> tuple[Any, dict[str, str]]:
     """Issue a single GitLab REST call with retry on transient errors.
 
-    Returns ``(parsed_json, response_headers)``. Retries up to
-    :data:`API_MAX_ATTEMPTS` times on statuses in :data:`API_RETRY_STATUSES`
-    or on connection errors, honoring the ``Retry-After`` header when
-    GitLab provides one (clamped to a sane upper bound by
-    :func:`api_retry_delay`). Other HTTP errors propagate immediately so
-    auth/permission failures fail fast rather than burning the retry
-    budget.
+    Returns ``(parsed_json, response_headers)``. The retry/backoff policy
+    (attempts, retryable statuses, ``Retry-After`` handling) lives in
+    :func:`bubo._http.request_json`; this wrapper only supplies GitLab's
+    ``/api/v4`` URL and ``PRIVATE-TOKEN`` auth header. Other HTTP errors
+    propagate immediately so auth/permission failures fail fast.
     """
-    payload = None if body is None else json.dumps(body).encode()
-    for attempt in range(API_MAX_ATTEMPTS):
-        req = urllib.request.Request(
-            base.rstrip("/") + "/api/v4" + path,
-            data=payload,
-            method=method,
-            headers={"PRIVATE-TOKEN": token, "Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                data = resp.read().decode() or "null"
-                headers = dict(resp.headers)
-            return json.loads(data), headers
-        except urllib.error.HTTPError as exc:
-            if exc.code not in API_RETRY_STATUSES or attempt == API_MAX_ATTEMPTS - 1:
-                raise
-            time.sleep(api_retry_delay(exc.headers, attempt))
-        except urllib.error.URLError:
-            if attempt == API_MAX_ATTEMPTS - 1:
-                raise
-            time.sleep(api_retry_delay({}, attempt))
-    raise RuntimeError("GitLab API retry loop exhausted")
-
-
-def api_retry_delay(headers: object, attempt: int) -> float:
-    retry_after = headers.get("Retry-After") if hasattr(headers, "get") else None
-    if retry_after:
-        try:
-            return min(60.0, max(0.0, float(retry_after)))
-        except ValueError:
-            pass
-    delay = 0.5 * (2**attempt)
-    return 10.0 if delay > 10.0 else delay
+    return _http.request_json(
+        base.rstrip("/") + "/api/v4" + path,
+        method=method,
+        headers={"PRIVATE-TOKEN": token, "Content-Type": "application/json"},
+        body=body,
+        provider="GitLab",
+    )
 
 
 def api_pages(base: str, token: str, path: str) -> list[JsonObject]:

@@ -97,7 +97,26 @@ production tag (`0.1.0`) cuts everything currently under "Unreleased".
   still short-circuit the LLM call. See
   [docs/operate.md](docs/operate.md), "Reply classification".
 
+### Fixed
+- **`[telemetry]` now rejects quoted booleans instead of silently misreading
+  them.** A quoted `enabled = "false"` (or `emit_finding_events`/
+  `emit_outcome_sync`) was parsed with bare `bool()`, which treats any
+  non-empty string as truthy — so `"false"` *enabled* telemetry, the opposite
+  of the operator's intent. These now parse through the strict
+  `config_values` helpers and raise a `ConfigError` for quoted booleans /
+  malformed strings (telemetry then disables via the existing
+  load-error fallback rather than coming up misconfigured). Telemetry written
+  with real TOML booleans (`enabled = true`) is unaffected.
+
 ### Changed
+- **Internal: the GitLab and GitHub REST clients now share one HTTP
+  transport (`bubo._http`).** The retry/backoff loop, retryable-status set,
+  and `Retry-After` handling were duplicated across `bubo.gitlab` and
+  `bubo.github` (byte-identical in places) and had begun to drift. They are
+  consolidated into a single `request_json`; each client keeps only its own
+  dialect (URL/auth/pagination) and passes provider-specific retry conditions
+  via a hook (GitHub's 403 primary rate-limit). No change to request behavior;
+  the shared loop gains direct test coverage it previously lacked.
 - **BREAKING: the `bin/` launchers are consolidated into a single `bin/bubo`
   dispatcher.** `bin/bubo-poller`, `bin/bubo-mcp`, `bin/mcp-upstream-gitlab`,
   `bin/mcp-upstream-github`, and `bin/bubo-env` are replaced by subcommands —

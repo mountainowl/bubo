@@ -373,8 +373,10 @@ def test_gitlab_api_retries_retryable_errors() -> None:
             raise item
         return item
 
-    with patch("bubo.gitlab.urllib.request.urlopen", side_effect=fake_urlopen):
-        with patch("bubo.gitlab.time.sleep") as sleep:
+    # The shared retry/backoff loop (urlopen + sleep) now lives in bubo._http;
+    # gitlab.api delegates to it, so the transport seams are patched there.
+    with patch("bubo._http.urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("bubo._http.time.sleep") as sleep:
             data, _headers = gitlab.api("https://gitlab.example", "token", "GET", "/projects")
 
     assert data == {"ok": True}
