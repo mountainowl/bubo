@@ -21,20 +21,19 @@ def test_project_tree_keeps_config_but_not_runtime_checkouts() -> None:
     readme = (ROOT / "README.md").read_text()
 
     assert (ROOT / "config" / "env.example.toml").is_file()
-    assert (ROOT / "docs" / "images" / "bubo-hero.png").is_file()
-    assert (ROOT / "docs" / "images" / "bubo-avatar-preview.png").is_file()
-    assert (ROOT / "docs" / "images" / "gitlab-mr-review-data-primer.png").is_file()
-    assert (ROOT / "docs" / "images" / "gitlab-mr-review-exception-handler.png").is_file()
-    assert (ROOT / "docs" / "media" / "bubo-demo.gif").is_file()
-    assert (ROOT / "docs" / "examples" / "README.md").is_file()
-    assert (ROOT / "assets" / "bubo.png").is_file()
-    assert "docs/images/bubo-hero.png" in readme
-    assert "docs/images/bubo-avatar-preview.png" in readme
-    assert "docs/images/gitlab-mr-review-data-primer.png" in readme
-    assert "docs/images/gitlab-mr-review-exception-handler.png" in readme
-    assert "docs/media/bubo-demo.gif" in readme
-    assert "docs/examples/README.md" in readme
-    assert "assets/bubo.png" in readme
+    # Asset guard: every image/doc the README links to must exist on disk, so a
+    # docs edit can never leave a broken link. The list tracks what the README
+    # *currently references* — #100 dropped the hero render and the
+    # stale-branded GitLab MR screenshots, so they are no longer asserted here
+    # (those files may still linger in docs/images/ but are not referenced).
+    referenced_assets = [
+        "docs/images/bubo-avatar-preview.png",
+        "docs/examples/README.md",
+        "assets/bubo.png",
+    ]
+    for asset in referenced_assets:
+        assert (ROOT / asset).is_file(), f"referenced asset missing on disk: {asset}"
+        assert asset in readme, f"README no longer links to asserted asset: {asset}"
     assert "config/env.toml" in (ROOT / ".gitignore").read_text()
     assert not any(path.name.startswith("secrets.") for path in (ROOT / "config").iterdir())
     assert not (ROOT / "config" / "config.env").exists()
