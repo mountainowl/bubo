@@ -31,9 +31,12 @@ from bubo.types import JsonObject
 # that takes longer than a minute to post a comment is wedged.
 MCP_TIMEOUT_SECONDS = 60
 
-# Default MCP server wrapper — the GitLab one, for backwards compatibility
-# with the original single-provider call sites.
-DEFAULT_MCP_SERVER = ROOT / "bin" / "mcp-upstream-gitlab"
+# Default MCP server command — the consolidated dispatcher running the
+# upstream GitLab MCP server (`bin/bubo mcp-upstream gitlab`, which execs the
+# external gitlab-mcp / mcp-gitlab if installed). An argv list (not a bare
+# path) since the dispatcher takes a subcommand. When the dispatcher or the
+# upstream server is absent, the spawn fails and callers fall back to REST.
+DEFAULT_MCP_SERVER = [str(ROOT / "bin" / "bubo"), "mcp-upstream", "gitlab"]
 
 
 def thread_args(project: str, iid: int, body: str, position: JsonObject) -> JsonObject:
@@ -46,13 +49,15 @@ def thread_args(project: str, iid: int, body: str, position: JsonObject) -> Json
     }
 
 
-def call_tool(name: str, arguments: JsonObject, *, server: str | None = None) -> JsonObject:
+def call_tool(
+    name: str, arguments: JsonObject, *, server: str | list[str] | None = None
+) -> JsonObject:
     """Invoke a tool on an MCP server wrapper and return its result.
 
-    ``server`` is the path to the server wrapper script (e.g.
-    ``bin/bubo mcp-upstream gitlab`` or ``bin/bubo mcp-upstream github``); defaults to
-    :data:`DEFAULT_MCP_SERVER` (GitLab) so existing call sites are
-    unchanged.
+    ``server`` is the MCP server command — an argv list (e.g.
+    ``[".../bin/bubo", "mcp-upstream", "gitlab"]``) or a single executable
+    path as a string. Defaults to :data:`DEFAULT_MCP_SERVER` (GitLab) so
+    existing call sites are unchanged.
 
     Raises
     ------
@@ -62,7 +67,12 @@ def call_tool(name: str, arguments: JsonObject, *, server: str | None = None) ->
         If the server returns a JSON-RPC ``error`` or never sends a
         response with the expected ``id``.
     """
-    server_bin = str(server) if server is not None else str(DEFAULT_MCP_SERVER)
+    if server is None:
+        argv = list(DEFAULT_MCP_SERVER)
+    elif isinstance(server, str):
+        argv = [server]
+    else:
+        argv = list(server)
     messages = [
         {
             "jsonrpc": "2.0",
@@ -84,7 +94,7 @@ def call_tool(name: str, arguments: JsonObject, *, server: str | None = None) ->
     ]
     payload = "".join(json.dumps(message) + "\n" for message in messages)
     with subprocess.Popen(
-        [server_bin],
+        argv,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,

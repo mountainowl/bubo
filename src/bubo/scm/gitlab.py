@@ -12,6 +12,7 @@ from pathlib import Path
 
 from bubo import gitlab, mcp
 from bubo.config_values import ConfigError
+from bubo.events import log
 from bubo.findings import build_position, changed_lines_from_diffs
 from bubo.review_config import ReviewConfig
 from bubo.scm.base import build_review_contract
@@ -100,12 +101,18 @@ class GitLabProvider:
         body: str,
         position: JsonObject,
     ) -> str:
-        result = mcp.call_tool(
-            "create_merge_request_thread", mcp.thread_args(project, number, body, position)
-        )
-        found = mcp.discussion_id(result)
-        if found:
-            return found
+        # Prefer the MCP server; fall back to REST on any MCP failure so a
+        # missing upstream server / launcher (e.g. after the bin/ consolidation
+        # in #77) never crashes a review. Mirrors the GitHub provider.
+        try:
+            result = mcp.call_tool(
+                "create_merge_request_thread", mcp.thread_args(project, number, body, position)
+            )
+            found = mcp.discussion_id(result)
+            if found:
+                return found
+        except (RuntimeError, TimeoutError, OSError) as exc:
+            log("gitlab_mcp_post_failed", project=project, number=number, error=str(exc))
         existing = gitlab.find_discussion_by_body(cfg, token, project, number, body)
         if existing:
             return existing

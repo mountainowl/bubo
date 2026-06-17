@@ -34,8 +34,9 @@ from bubo.secrets import redact_secrets
 from bubo.subproc import run_bounded
 from bubo.types import JsonObject
 
-# GitHub MCP server wrapper (mirrors bin/bubo mcp-upstream gitlab).
-_GITHUB_MCP_SERVER = ROOT / "bin" / "mcp-upstream-github"
+# GitHub MCP server command — the dispatcher running the upstream GitHub MCP
+# server (mirrors the GitLab default). argv list; absent → REST fallback.
+_GITHUB_MCP_SERVER = [str(ROOT / "bin" / "bubo"), "mcp-upstream", "github"]
 # Tool name for posting an inline PR review comment. Overrideable because
 # different GitHub MCP servers name this tool differently.
 _GITHUB_MCP_TOOL = os.environ.get("BUBO_GITHUB_MCP_TOOL", "create_pull_request_review_comment")
@@ -157,7 +158,7 @@ class GitHubProvider:
         # tool-name mismatch (which varies across GitHub MCP servers) never
         # blocks a review.
         try:
-            result = mcp.call_tool(_GITHUB_MCP_TOOL, args, server=str(_GITHUB_MCP_SERVER))
+            result = mcp.call_tool(_GITHUB_MCP_TOOL, args, server=_GITHUB_MCP_SERVER)
             found = mcp.discussion_id(result)
             if found:
                 return found
