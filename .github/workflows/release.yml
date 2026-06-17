@@ -21,6 +21,8 @@ jobs:
     permissions:
       contents: write # required to create the GitHub release
       id-token: write # required for cosign keyless signing via Sigstore OIDC
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }} # SLSA subjects for the provenance job
     steps:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -75,6 +77,16 @@ jobs:
           artifact-name: bubo-sbom.spdx.json
           output-file: dist/bubo-sbom.spdx.json
 
+      - name: Compute artifact digests (SLSA subjects)
+        id: hash
+        # Base64-encoded `sha256sum` of the published distributables (wheel,
+        # sdist, deploy bundle, SBOM) — the subjects the SLSA generator
+        # attests. Computed after every artifact exists but before cosign,
+        # since the .bundle files are signatures, not release distributables.
+        run: |
+          cd dist
+          echo "hashes=$(sha256sum *.whl *.tar.gz bubo-sbom.spdx.json | base64 -w0)" >> "$GITHUB_OUTPUT"
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
@@ -109,3 +121,26 @@ jobs:
             dist/*.bundle
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+  # SLSA Build Level 3 provenance for the released artifacts. The generator
+  # runs as an isolated, trusted reusable workflow — that isolation (the build
+  # cannot be tampered with by this repo's own workflow) is what earns L3. It
+  # signs an in-toto provenance attestation keylessly via Sigstore and attaches
+  # the .intoto.jsonl to the release. Verify with:
+  #   slsa-verifier verify-artifact <artifact> \
+  #     --provenance-path <artifact>.intoto.jsonl \
+  #     --source-uri github.com/mountainowl/bubo
+  provenance:
+    name: SLSA provenance (Build L3)
+    needs: [release]
+    permissions:
+      actions: read # read the workflow run metadata recorded in the provenance
+      id-token: write # mint the OIDC token for keyless provenance signing
+      contents: write # attach the provenance attestation to the GitHub release
+    # MUST be a semantic-version tag, NOT a commit SHA: the generator reads its
+    # own ref to assert the trusted-builder identity, so a SHA pin breaks it.
+    # This is the documented exception to the repo's hash-pinning convention.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      upload-assets: true # attach the .intoto.jsonl provenance to the release
