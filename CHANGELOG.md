@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.2](https://github.com/mountainowl/bubo/compare/v0.21.1...v0.21.2) (2026-06-17)
+
+
+### Bug Fixes
+
+* **scm:** restore GitLab inline posting after the bin/ launcher removal ([#111](https://github.com/mountainowl/bubo/issues/111)) ([c20082e](https://github.com/mountainowl/bubo/commit/c20082efdb36415c8169cc2725098de33f5b6bd5))
+
 ## [0.21.1](https://github.com/mountainowl/bubo/compare/v0.21.0...v0.21.1) (2026-06-16)
 
 
