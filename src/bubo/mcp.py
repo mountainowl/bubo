@@ -23,6 +23,7 @@ import json
 import subprocess
 import urllib.parse
 
+from bubo.errors import describe
 from bubo.paths import ROOT
 from bubo.subproc import kill_process_group
 from bubo.types import JsonObject
@@ -105,7 +106,16 @@ def call_tool(
             stdout, _ = proc.communicate(input=payload, timeout=MCP_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired as exc:
             kill_process_group(proc)
-            raise TimeoutError(f"MCP tool timed out: {name}") from exc
+            raise TimeoutError(
+                describe(
+                    f"MCP tool timed out: {name}",
+                    reason="the MCP tool did not respond within the timeout",
+                    fix=(
+                        "check the MCP server is running/reachable and raise the timeout if "
+                        "the tool is legitimately slow."
+                    ),
+                )
+            ) from exc
     for line in (stdout or "").splitlines():
         if not line.strip():
             continue
@@ -113,9 +123,21 @@ def call_tool(
         if response.get("id") != 2:
             continue
         if response.get("error"):
-            raise RuntimeError(json.dumps(response["error"]))
+            raise RuntimeError(
+                describe(
+                    "MCP tool returned an error",
+                    reason=json.dumps(response["error"]),
+                    fix="inspect the MCP server logs; verify the tool name and arguments.",
+                )
+            )
         return response.get("result") or {}
-    raise RuntimeError(f"MCP tool did not return: {name}")
+    raise RuntimeError(
+        describe(
+            f"MCP tool did not return: {name}",
+            reason="the response had no result field",
+            fix="check the MCP server implementation/version.",
+        )
+    )
 
 
 def discussion_id(result: JsonObject) -> str:

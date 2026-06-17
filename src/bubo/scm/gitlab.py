@@ -12,6 +12,7 @@ from pathlib import Path
 
 from bubo import gitlab, mcp
 from bubo.config_values import ConfigError
+from bubo.errors import describe
 from bubo.events import log
 from bubo.findings import build_position, changed_lines_from_diffs
 from bubo.review_config import ReviewConfig
@@ -30,7 +31,16 @@ class GitLabProvider:
         for key in ("GITLAB_TOKEN", "GITLAB_PERSONAL_ACCESS_TOKEN", "GLAB_TOKEN"):
             if os.environ.get(key):
                 return os.environ[key]
-        raise ConfigError("missing GitLab token")
+        raise ConfigError(
+            describe(
+                "missing GitLab token",
+                reason="no GitLab token found in the environment",
+                fix=(
+                    "set [gitlab].token in config/env.toml or export GITLAB_TOKEN "
+                    "(needs api scope)."
+                ),
+            )
+        )
 
     def bot_username(self) -> str:
         return os.environ.get("BUBO_GITLAB_USERNAME", "bubo")
@@ -77,7 +87,16 @@ class GitLabProvider:
         if not (dest / ".git").exists():
             result = run_bounded(["glab", "repo", "clone", project, str(dest)], timeout=900)
             if result.returncode:
-                raise RuntimeError(redact_secrets(result.stdout[-3000:]))
+                raise RuntimeError(
+                    describe(
+                        "git clone failed for the change",
+                        reason=redact_secrets(result.stdout[-3000:]),
+                        fix=(
+                            "verify the repo URL, the token's scope/permissions, and "
+                            "network access to the host."
+                        ),
+                    )
+                )
         for args in (
             ["git", "fetch", "origin", "--prune"],
             [
@@ -90,7 +109,16 @@ class GitLabProvider:
         ):
             result = run_bounded(args, cwd=dest, timeout=900)
             if result.returncode:
-                raise RuntimeError(redact_secrets(result.stdout[-3000:]))
+                raise RuntimeError(
+                    describe(
+                        "git fetch/checkout failed for the change",
+                        reason=redact_secrets(result.stdout[-3000:]),
+                        fix=(
+                            "verify the repo URL, the token's scope/permissions, and "
+                            "network access to the host."
+                        ),
+                    )
+                )
 
     def post_inline_comment(
         self,

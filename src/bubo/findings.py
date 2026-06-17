@@ -42,6 +42,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping
 
 from bubo.config_values import positive_int
+from bubo.errors import describe
 from bubo.hash_utils import stable_hash
 from bubo.types import JsonObject
 
@@ -458,7 +459,19 @@ def extract_findings(raw: str, max_findings: int | None = None) -> list[JsonObje
             if isinstance(candidate, list) and all(isinstance(item, dict) for item in candidate):
                 candidates.append((match.start(), candidate))
         if not candidates:
-            raise ValueError("review output is not JSON findings") from None
+            raise ValueError(
+                describe(
+                    "review output is not JSON findings",
+                    reason=(
+                        "the reviewer did not return the structured findings JSON the "
+                        "contract requires"
+                    ),
+                    fix=(
+                        "check the review prompt/model and the run transcript; the agent may "
+                        "have errored or returned prose instead of the findings array."
+                    ),
+                )
+            ) from None
         marker = _last_codex_assistant_marker_end(text)
         if marker is not None:
             final_candidates = [candidate for start, candidate in candidates if start >= marker]
@@ -480,7 +493,19 @@ def extract_findings(raw: str, max_findings: int | None = None) -> list[JsonObje
     if isinstance(data, dict):
         data = data.get("findings", [])
     if not isinstance(data, list):
-        raise ValueError("review JSON must be an array or an object with findings")
+        raise ValueError(
+            describe(
+                "review JSON must be an array or an object with findings",
+                reason=(
+                    "the reviewer did not return the structured findings JSON the contract "
+                    "requires"
+                ),
+                fix=(
+                    "check the review prompt/model and the run transcript; the agent may "
+                    "have errored or returned prose instead of the findings array."
+                ),
+            )
+        )
     findings = [item for item in data if isinstance(item, dict)]
     if max_findings is not None:
         return findings[: positive_int(max_findings, "max_findings")]

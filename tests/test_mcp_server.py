@@ -358,7 +358,7 @@ def test_resolve_provider_falls_back_to_default_when_auto() -> None:
 
 
 def test_resolve_provider_rejects_unknown_explicit_provider() -> None:
-    with pytest.raises(ValueError, match="provider must be one of"):
+    with pytest.raises(ValueError, match="invalid provider"):
         mcp_server._resolve_provider("bitbucket")
 
 
@@ -448,7 +448,7 @@ def test_review_change_dispatches_with_parsed_url() -> None:
 
 
 def test_review_change_requires_url_or_project_plus_number() -> None:
-    with pytest.raises(ValueError, match="either `url` or"):
+    with pytest.raises(ValueError, match="missing required review target"):
         mcp_server.review_change(number=42, provider="github")  # project missing
 
 

@@ -16,6 +16,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from bubo.errors import describe
+
 
 class ConfigError(ValueError):
     """Raised when a configuration value is missing, malformed, or out of range.
@@ -50,9 +52,21 @@ def positive_int(value: object, name: str) -> int:
     try:
         parsed = int(str(value))
     except ValueError:
-        raise ConfigError(f"{name} must be a positive integer") from None
+        raise ConfigError(
+            describe(
+                f"{name} must be a positive integer",
+                reason=f"the value {value!r} could not be parsed as an integer",
+                fix=f"set {name} in config/env.toml to a whole number >= 1.",
+            )
+        ) from None
     if parsed < 1:
-        raise ConfigError(f"{name} must be a positive integer")
+        raise ConfigError(
+            describe(
+                f"{name} must be a positive integer",
+                reason=f"the value {parsed} is less than 1",
+                fix=f"set {name} in config/env.toml to a whole number >= 1.",
+            )
+        )
     return parsed
 
 
@@ -67,9 +81,21 @@ def non_negative_float(value: object, name: str) -> float:
     try:
         parsed = float(str(value))
     except ValueError:
-        raise ConfigError(f"{name} must be a non-negative number") from None
+        raise ConfigError(
+            describe(
+                f"{name} must be a non-negative number",
+                reason=f"the value {value!r} could not be parsed as a number",
+                fix=f"set {name} in config/env.toml to a number >= 0.",
+            )
+        ) from None
     if parsed < 0:
-        raise ConfigError(f"{name} must be a non-negative number")
+        raise ConfigError(
+            describe(
+                f"{name} must be a non-negative number",
+                reason=f"the value {parsed} is negative",
+                fix=f"set {name} in config/env.toml to a number >= 0.",
+            )
+        )
     return parsed
 
 
@@ -86,9 +112,21 @@ def confidence_threshold(value: object, name: str) -> float:
     try:
         parsed = float(str(value))
     except ValueError:
-        raise ConfigError(f"{name} must be a number between 0.0 and 1.0") from None
+        raise ConfigError(
+            describe(
+                f"{name} must be a number between 0.0 and 1.0",
+                reason=f"the value {value!r} could not be parsed as a number",
+                fix=f"set {name} in config/env.toml to a number in [0.0, 1.0].",
+            )
+        ) from None
     if parsed < 0.0 or parsed > 1.0:
-        raise ConfigError(f"{name} must be a number between 0.0 and 1.0")
+        raise ConfigError(
+            describe(
+                f"{name} must be a number between 0.0 and 1.0",
+                reason=f"the value {parsed} is outside the inclusive range [0.0, 1.0]",
+                fix=f"set {name} in config/env.toml to a number in [0.0, 1.0].",
+            )
+        )
     return parsed
 
 
@@ -132,7 +170,13 @@ def one_of(value: object, name: str, choices: tuple[str, ...], *, default: str) 
         return default
     parsed = str(value).strip().lower()
     if parsed not in choices:
-        raise ConfigError(f"{name} must be one of {choices}, got {parsed!r}")
+        raise ConfigError(
+            describe(
+                f"{name} must be one of {choices}, got {parsed!r}",
+                reason="the configured value is not one of the allowed choices",
+                fix=f"set {name} in config/env.toml to one of {choices}.",
+            )
+        )
     return parsed
 
 
@@ -151,7 +195,16 @@ def bool_value(value: object, name: str, *, default: bool) -> bool:
     if value is None:
         return default
     if not isinstance(value, bool):
-        raise ConfigError(f"{name} must be a boolean (true/false, no quotes)")
+        raise ConfigError(
+            describe(
+                f"{name} must be a boolean (true/false, no quotes)",
+                reason=(
+                    f"the value {value!r} is not a TOML boolean "
+                    "(quoted strings like \"false\" and numbers are rejected)"
+                ),
+                fix=f"set {name} in config/env.toml to bare true or false (no quotes).",
+            )
+        )
     return value
 
 
@@ -172,7 +225,13 @@ def text_value(value: object, name: str, *, default: str) -> str:
     if value is None:
         return default
     if not isinstance(value, str):
-        raise ConfigError(f"{name} must be a string")
+        raise ConfigError(
+            describe(
+                f"{name} must be a string",
+                reason=f"the value {value!r} is a {type(value).__name__}, not a TOML string",
+                fix=f"set {name} in config/env.toml to a quoted string value.",
+            )
+        )
     return value
 
 
@@ -190,7 +249,13 @@ def string_list(value: object, name: str) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
-        raise ConfigError(f"{name} must be a list of strings")
+        raise ConfigError(
+            describe(
+                f"{name} must be a list of strings",
+                reason=f"the value {value!r} is not a TOML array (a bare string is not a list)",
+                fix=f'set {name} in config/env.toml to a TOML array, e.g. {name} = ["a", "b"].',
+            )
+        )
     out: list[str] = []
     for item in value:
         if item is None:
@@ -217,7 +282,13 @@ def lower_string_list(value: object, name: str) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
-        raise ConfigError(f"{name} must be a list of strings")
+        raise ConfigError(
+            describe(
+                f"{name} must be a list of strings",
+                reason=f"the value {value!r} is not a TOML array (a bare string is not a list)",
+                fix=f'set {name} in config/env.toml to a TOML array, e.g. {name} = ["a", "b"].',
+            )
+        )
     out: list[str] = []
     for item in value:
         if item is None:

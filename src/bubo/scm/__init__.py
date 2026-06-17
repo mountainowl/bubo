@@ -12,6 +12,7 @@ changes.
 
 from __future__ import annotations
 
+from bubo.errors import describe
 from bubo.review_config import ReviewConfig
 from bubo.scm.base import ScmProvider
 
@@ -31,7 +32,13 @@ def get_provider(cfg: ReviewConfig) -> ScmProvider:
         from bubo.scm.github import GitHubProvider
 
         return GitHubProvider()
-    raise ValueError(f"unknown provider: {cfg.provider!r}")
+    raise ValueError(
+        describe(
+            f"unknown provider: {cfg.provider!r}",
+            reason="the provider is not registered",
+            fix="set [scm].provider to 'gitlab' or 'github'.",
+        )
+    )
 
 
 __all__ = ["ScmProvider", "get_provider"]

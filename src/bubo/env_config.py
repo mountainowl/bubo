@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from bubo.config_values import ConfigError, section
+from bubo.errors import describe
 
 # Matches POSIX-style placeholders inside TOML string values:
 #   ${VAR}            — required; missing raises ConfigError
@@ -90,7 +91,16 @@ def read_config_file(path: Path) -> dict[str, Any]:
         unset (and no ``:-default`` was provided).
     """
     if not path.exists():
-        raise FileNotFoundError(f"missing config: {path}")
+        raise FileNotFoundError(
+            describe(
+                f"missing config: {path}",
+                reason="the TOML config file does not exist at this path",
+                fix=(
+                    "create config/env.toml (copy config/env.example.toml) or point bubo at the "
+                    "correct project root so this path resolves."
+                ),
+            )
+        )
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     expanded = _expand_placeholders_in_mapping(raw, env=os.environ)
     # Top-level TOML is always a table, so the recursive walk returns a dict.
@@ -115,7 +125,19 @@ def expand_env_placeholders(value: str, env: dict[str, str] | os._Environ[str]) 
         resolved = env.get(var_name, "")
         if not resolved:
             if default is None:
-                raise ConfigError(f"config references env var ${{{var_name}}} but it is unset")
+                raise ConfigError(
+                    describe(
+                        f"config references env var ${{{var_name}}} but it is unset",
+                        reason=(
+                            f"a required ${{{var_name}}} placeholder in config/env.toml has no "
+                            "matching environment variable and no :-default fallback"
+                        ),
+                        fix=(
+                            f"export {var_name} in the environment bubo runs in, or give the "
+                            f"placeholder a default via ${{{var_name}:-...}} in config/env.toml."
+                        ),
+                    )
+                )
             return default
         return resolved
 

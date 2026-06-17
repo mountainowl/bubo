@@ -71,6 +71,7 @@ from bubo.db import (
 )
 from bubo.db import record as _db_record
 from bubo.db import record_finding as _db_record_finding
+from bubo.errors import describe
 from bubo.events import log, now
 from bubo.findings import (
     calibrated_category_floors,
@@ -315,7 +316,13 @@ def write_rendered_meta_prompt(cfg: ReviewConfig) -> Path:
     """
     source = Path(os.environ.get("BUBO_PROMPT_SOURCE", paths.ROOT / "prompts" / "00-meta.md"))
     if not source.is_file():
-        raise RuntimeError(f"meta prompt is not readable: {source}")
+        raise RuntimeError(
+            describe(
+                f"meta prompt is not readable: {source}",
+                reason="the rendered meta-prompt file is missing/unreadable",
+                fix="ensure the prompt template renders and the path is readable.",
+            )
+        )
     return write_rendered_prompt_file(
         source, paths.RENDERED_PROMPTS, cfg.max_findings_per_merge_request
     )
@@ -361,7 +368,13 @@ def change_number_of(change: JsonObject) -> int:
     if value is None:
         value = change.get("number")
     if value is None:
-        raise KeyError("change payload has neither 'iid' nor 'number'")
+        raise KeyError(
+            describe(
+                "change payload has neither 'iid' nor 'number'",
+                reason="the SCM webhook/poll payload lacked an MR/PR id",
+                fix="verify the provider and payload shape.",
+            )
+        )
     return int(value)
 
 
@@ -1169,7 +1182,17 @@ def worker(job: Path) -> int:
                     exit_code=result.returncode,
                 )
                 if result.returncode:
-                    raise RuntimeError(f"review exited {result.returncode}")
+                    raise RuntimeError(
+                        describe(
+                            f"code review subprocess exited {result.returncode}",
+                            reason="the reviewer command returned a non-zero status",
+                            fix=(
+                                "inspect the agent transcript saved to the run's report "
+                                "file for the underlying error; ensure the reviewer command, "
+                                "model, and credentials are configured and reachable."
+                            ),
+                        )
+                    )
             with telemetry.span("llm_review.post", repo=project, dry_run=cfg.dry_run) as post_span:
                 posted, planned, skipped = post_or_plan_findings(
                     cfg=cfg,

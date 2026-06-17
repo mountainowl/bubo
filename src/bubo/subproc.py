@@ -23,6 +23,8 @@ import subprocess
 from contextlib import suppress
 from pathlib import Path
 
+from bubo.errors import describe
+
 DEFAULT_TIMEOUT_SECONDS = 600
 
 
@@ -45,16 +47,29 @@ def run_bounded(
     raised exception's ``output`` attribute — callers that want to record
     a failed transcript can pull it from there.
     """
-    proc = subprocess.Popen(
-        args,
-        cwd=cwd,
-        env=env,
-        stdin=subprocess.DEVNULL,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
+    try:
+        proc = subprocess.Popen(
+            args,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    except FileNotFoundError as exc:
+        program = args[0] if args else "<empty command>"
+        raise FileNotFoundError(
+            describe(
+                f"could not launch the command {program!r}",
+                reason="the executable was not found on PATH",
+                fix=(
+                    f"install {program!r} (the reviewer is 'codex' by default) or correct "
+                    "[agents].reviewer_command in config/env.toml to a runnable path."
+                ),
+            )
+        ) from exc
     try:
         stdout, _ = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:

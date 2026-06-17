@@ -23,6 +23,7 @@ from bubo.config_values import (
     section,
     string_list,
 )
+from bubo.errors import describe
 from bubo.governance_policy import POLICY_OFF, POLICY_REPORT_ONLY, POLICY_SOFT
 from bubo.provenance import BAND_COLLABORATIVE, BAND_LIKELY_AI, BAND_UNKNOWN
 
@@ -146,8 +147,15 @@ def governance_config_from_dict(raw: dict[str, Any]) -> GovernanceConfig:
         unknown_bands = [band for band in escalate_bands if band not in VALID_BANDS]
         if unknown_bands:
             raise ConfigError(
-                f"escalate_bands has unknown band(s) {unknown_bands}; "
-                f"allowed: {sorted(VALID_BANDS)}"
+                describe(
+                    f"escalate_bands has unknown band(s) {unknown_bands}; "
+                    f"allowed: {sorted(VALID_BANDS)}",
+                    reason="one or more configured provenance bands are not recognized",
+                    fix=(
+                        "set [governance].escalate_bands in config/env.toml to a subset of "
+                        f"{sorted(VALID_BANDS)}."
+                    ),
+                )
             )
     return GovernanceConfig(
         capture_provenance=bool_value(

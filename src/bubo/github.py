@@ -30,6 +30,7 @@ import urllib.parse
 from typing import Any, cast
 
 from bubo import _http
+from bubo.errors import describe
 from bubo.review_config import ReviewConfig
 from bubo.types import JsonObject
 
@@ -103,7 +104,19 @@ def api_pages(api_url: str, token: str, path: str) -> list[JsonObject]:
     while url:
         data, headers = _request(url, token, "GET")
         if not isinstance(data, list):
-            raise RuntimeError("GitHub API page did not return a list")
+            raise RuntimeError(
+                describe(
+                    "GitHub API page did not return a list",
+                    reason=(
+                        "the API returned an unexpected response shape (often an auth error "
+                        "page, a redirect, or an outage rendered as non-JSON)"
+                    ),
+                    fix=(
+                        "check the API URL, token validity/scope, and the host's status; "
+                        "inspect the raw response."
+                    ),
+                )
+            )
         out.extend(cast(JsonObject, item) for item in data if isinstance(item, dict))
         url = _next_link(headers)
     return out
@@ -126,7 +139,19 @@ def get_pr(cfg: ReviewConfig, token: str, project: str, number: int) -> JsonObje
     repo = _owner_repo(project)
     data, _ = api(cfg.github_api_url, token, "GET", f"/repos/{repo}/pulls/{number}")
     if not isinstance(data, dict):
-        raise RuntimeError("GitHub PR response was not an object")
+        raise RuntimeError(
+            describe(
+                "GitHub PR response was not an object",
+                reason=(
+                    "the API returned an unexpected response shape (often an auth error "
+                    "page, a redirect, or an outage rendered as non-JSON)"
+                ),
+                fix=(
+                    "check the API URL, token validity/scope, and the host's status; "
+                    "inspect the raw response."
+                ),
+            )
+        )
     return cast(JsonObject, data)
 
 
@@ -158,7 +183,19 @@ def get_pr_review_comment(
     encoded = urllib.parse.quote(comment_id, safe="")
     data, _ = api(cfg.github_api_url, token, "GET", f"/repos/{repo}/pulls/comments/{encoded}")
     if not isinstance(data, dict):
-        raise RuntimeError("GitHub review-comment response was not an object")
+        raise RuntimeError(
+            describe(
+                "GitHub review-comment response was not an object",
+                reason=(
+                    "the API returned an unexpected response shape (often an auth error "
+                    "page, a redirect, or an outage rendered as non-JSON)"
+                ),
+                fix=(
+                    "check the API URL, token validity/scope, and the host's status; "
+                    "inspect the raw response."
+                ),
+            )
+        )
     return cast(JsonObject, data)
 
 
@@ -273,12 +310,42 @@ def graphql(api_url: str, token: str, query: str, variables: JsonObject) -> Json
         _graphql_url(api_url), token, "POST", {"query": query, "variables": variables}
     )
     if not isinstance(data, dict):
-        raise RuntimeError("GitHub GraphQL response was not an object")
+        raise RuntimeError(
+            describe(
+                "GitHub GraphQL response was not an object",
+                reason=(
+                    "the API returned an unexpected response shape (often an auth error "
+                    "page, a redirect, or an outage rendered as non-JSON)"
+                ),
+                fix=(
+                    "check the API URL, token validity/scope, and the host's status; "
+                    "inspect the raw response."
+                ),
+            )
+        )
     if data.get("errors"):
-        raise RuntimeError(f"GitHub GraphQL errors: {json.dumps(data['errors'])}")
+        raise RuntimeError(
+            describe(
+                f"GitHub GraphQL errors: {json.dumps(data['errors'])}",
+                reason="the GitHub GraphQL API reported errors in the response body",
+                fix="check the token scope and the queried resource exists/is accessible.",
+            )
+        )
     result = data.get("data")
     if not isinstance(result, dict):
-        raise RuntimeError("GitHub GraphQL response missing data")
+        raise RuntimeError(
+            describe(
+                "GitHub GraphQL response missing data",
+                reason=(
+                    "the API returned an unexpected response shape (often an auth error "
+                    "page, a redirect, or an outage rendered as non-JSON)"
+                ),
+                fix=(
+                    "check the API URL, token validity/scope, and the host's status; "
+                    "inspect the raw response."
+                ),
+            )
+        )
     return cast(JsonObject, result)
 
 
@@ -436,7 +503,19 @@ def pulls_updated_after(
     while url:
         data, headers = _request(url, token, "GET")
         if not isinstance(data, list):
-            raise RuntimeError("GitHub API page did not return a list")
+            raise RuntimeError(
+                describe(
+                    "GitHub API page did not return a list",
+                    reason=(
+                        "the API returned an unexpected response shape (often an auth error "
+                        "page, a redirect, or an outage rendered as non-JSON)"
+                    ),
+                    fix=(
+                        "check the API URL, token validity/scope, and the host's status; "
+                        "inspect the raw response."
+                    ),
+                )
+            )
         for item in data:
             if not isinstance(item, dict):
                 continue

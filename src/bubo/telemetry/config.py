@@ -10,6 +10,7 @@ from bubo.config_values import (
     positive_int,
     text_value,
 )
+from bubo.errors import describe
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,10 +40,22 @@ class TelemetryConfig:
 def telemetry_config_from_dict(data: dict[str, Any]) -> TelemetryConfig:
     raw = data.get("telemetry") or {}
     if not isinstance(raw, dict):
-        raise ConfigError("telemetry must be a table")
+        raise ConfigError(
+            describe(
+                "telemetry must be a table",
+                reason=f"[telemetry] parsed as a {type(raw).__name__}, not a TOML table",
+                fix="declare telemetry as a [telemetry] table in config/env.toml.",
+            )
+        )
     protocol = text_value(raw.get("otlp_protocol"), "telemetry.otlp_protocol", default="grpc")
     if protocol != "grpc":
-        raise ConfigError("telemetry.otlp_protocol must be grpc")
+        raise ConfigError(
+            describe(
+                "telemetry.otlp_protocol must be grpc",
+                reason=f"the only supported OTLP protocol is 'grpc', got {protocol!r}",
+                fix="set [telemetry].otlp_protocol to 'grpc' in config/env.toml (or omit it).",
+            )
+        )
 
     pricing = {"default": _default_pricing_from_telemetry(raw)}
     return TelemetryConfig(

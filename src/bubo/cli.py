@@ -42,6 +42,7 @@ from pathlib import Path
 
 from bubo import paths
 from bubo.db import init_db
+from bubo.errors import describe
 from bubo.events import log
 
 # ---------------------------------------------------------------------------
@@ -104,7 +105,13 @@ def _asset(*parts: str) -> Traversable | Path:
         candidate = _repo_root() / fallback
         if candidate.exists():
             return candidate
-    raise FileNotFoundError(f"packaged asset not found: {'/'.join(parts)}")
+    raise FileNotFoundError(
+        describe(
+            f"packaged asset not found: {'/'.join(parts)}",
+            reason="a file bundled with the package is missing",
+            fix="reinstall bubo (the install may be corrupt).",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +359,13 @@ def _execute(action: Action, root: Path) -> None:
     if action.kind == "init_db":
         init_db()
         return
-    raise ValueError(f"unknown action kind: {action.kind!r}")
+    raise ValueError(
+        describe(
+            f"unknown action kind: {action.kind!r}",
+            reason="an internal action kind was not handled",
+            fix="this is a bug — report it (include the kind).",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

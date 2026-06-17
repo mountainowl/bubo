@@ -37,6 +37,7 @@ import io
 import json
 
 from bubo import db
+from bubo.errors import describe
 from bubo.events import now
 from bubo.types import JsonObject
 
@@ -355,7 +356,13 @@ def to_csv(report: JsonObject, section: str = "audit") -> str:
     """
     columns = _CSV_COLUMNS.get(section)
     if columns is None:
-        raise ValueError(f"section {section!r} is not CSV-renderable")
+        raise ValueError(
+            describe(
+                f"section {section!r} is not CSV-renderable",
+                reason="the requested report section has no flat CSV form",
+                fix="request a CSV-renderable section, or use JSON output.",
+            )
+        )
     rows = report[section]
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")

@@ -42,6 +42,7 @@ from mcp.server.fastmcp import FastMCP
 
 from bubo import db
 from bubo.config_values import ConfigError
+from bubo.errors import describe
 from bubo.events import log
 from bubo.paths import CONFIG as ENV_CONFIG
 from bubo.review_config import (
@@ -87,8 +88,15 @@ def _parse_change_url(url: str) -> tuple[str, str, int]:
         # URL from `[scm].gitlab_url` in env.toml.
         return "gitlab", match.group("project"), int(match.group("number"))
     raise ValueError(
-        f"unrecognized MR/PR URL: {url!r} "
-        "(expected github.com/.../pull/N or .../-/merge_requests/N)"
+        describe(
+            f"unrecognized MR/PR URL: {url!r}",
+            reason="the URL did not match a GitHub PR or GitLab MR shape",
+            fix=(
+                "pass a github.com/<owner>/<repo>/pull/N URL or a "
+                "<gitlab-host>/<group>/<proj>/-/merge_requests/N URL, or supply "
+                "(provider, project, number) instead."
+            ),
+        )
     )
 
 
@@ -112,7 +120,11 @@ def _resolve_provider(provider: str) -> str:
             return DEFAULT_PROVIDER
     if provider not in SUPPORTED_PROVIDERS:
         raise ValueError(
-            f"provider must be one of {SUPPORTED_PROVIDERS} or 'auto', got {provider!r}"
+            describe(
+                f"invalid provider: {provider!r}",
+                reason="the provider argument was not a supported value",
+                fix=f"pass one of {SUPPORTED_PROVIDERS} or 'auto'.",
+            )
         )
     return provider
 
@@ -430,8 +442,17 @@ def review_change(
         provider = _resolve_provider(provider)
     if not project or number is None:
         raise ValueError(
-            "must provide either `url` or (`project` and `number`); "
-            f"got provider={provider!r}, project={project!r}, number={number!r}"
+            describe(
+                "missing required review target",
+                reason=(
+                    "neither a `url` nor a complete (`project`, `number`) pair was given "
+                    f"(got provider={provider!r}, project={project!r}, number={number!r})"
+                ),
+                fix=(
+                    "pass a `url`, or pass both `project` and `number` (with `provider` "
+                    "set or left as 'auto')."
+                ),
+            )
         )
     # Build the same contract-carrying prompt the poller uses, then run the
     # operator's configured reviewer_command directly (no bundled wrapper).
@@ -514,7 +535,16 @@ def _http_settings() -> tuple[str, int, str]:
     try:
         port = int(port_raw)
     except ValueError as exc:
-        raise SystemExit(f"BUBO_MCP_PORT must be an integer, got {port_raw!r}") from exc
+        raise SystemExit(
+            describe(
+                f"BUBO_MCP_PORT must be an integer, got {port_raw!r}",
+                reason="the configured MCP HTTP port is not a valid integer",
+                fix=(
+                    "set BUBO_MCP_PORT (or [mcp_server].port in config/env.toml) to an "
+                    "integer port number such as 8765."
+                ),
+            )
+        ) from exc
     token = os.environ.get("BUBO_MCP_BEARER_TOKEN", "").strip()
     if not token:
         raise SystemExit(
@@ -577,7 +607,16 @@ def main() -> None:
     elif transport == "http":
         _run_http()
     else:
-        raise SystemExit(f"BUBO_MCP_TRANSPORT must be 'stdio' or 'http', got {transport!r}")
+        raise SystemExit(
+            describe(
+                f"BUBO_MCP_TRANSPORT must be 'stdio' or 'http', got {transport!r}",
+                reason="the configured MCP transport is not a recognized value",
+                fix=(
+                    "set BUBO_MCP_TRANSPORT (or [mcp_server].transport in config/env.toml) "
+                    "to 'stdio' or 'http'."
+                ),
+            )
+        )
 
 
 __all__ = [

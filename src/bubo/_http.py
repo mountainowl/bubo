@@ -26,6 +26,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from bubo.errors import describe
 from bubo.types import JsonObject
 
 # Total attempts (initial + retries) for a single REST call before giving up.
@@ -98,4 +99,12 @@ def request_json(
             if attempt == API_MAX_ATTEMPTS - 1:
                 raise
             time.sleep(retry_delay({}, attempt))
-    raise RuntimeError(f"{provider} API retry loop exhausted")
+    raise RuntimeError(
+        describe(
+            f"{provider} API retry loop exhausted",
+            reason="all retry attempts failed (rate limiting or a transient/network API error)",
+            fix=(
+                "check connectivity and rate limits; retry later, or raise the retry budget."
+            ),
+        )
+    )

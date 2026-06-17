@@ -36,6 +36,7 @@ from bubo.config_values import (
     text_value,
 )
 from bubo.env_config import apply_runtime_env, read_config_file
+from bubo.errors import describe
 from bubo.findings import CANONICAL_CATEGORIES
 from bubo.governance_config import GovernanceConfig, governance_config_from_dict
 from bubo.paths import ROOT
@@ -345,7 +346,16 @@ def load_review_config(
     range.
     """
     if not config_path.exists():
-        raise ConfigError(f"missing config: {config_path}")
+        raise ConfigError(
+            describe(
+                f"missing config: {config_path}",
+                reason="the review config file does not exist at this path",
+                fix=(
+                    "create config/env.toml (copy config/env.example.toml) or pass the correct "
+                    "config path so it resolves."
+                ),
+            )
+        )
     raw = read_config_file(config_path)
     apply_runtime_env(ROOT, raw)
     override = os.environ.get("BUBO_PROVIDER")
@@ -373,7 +383,16 @@ def review_config_from_dict(
 
     provider = str(scm.get("provider", DEFAULT_PROVIDER)).strip().lower()
     if provider not in SUPPORTED_PROVIDERS:
-        raise ConfigError(f"[scm].provider must be one of {SUPPORTED_PROVIDERS}, got {provider!r}")
+        raise ConfigError(
+            describe(
+                f"[scm].provider must be one of {SUPPORTED_PROVIDERS}, got {provider!r}",
+                reason="the configured SCM provider is not supported",
+                fix=(
+                    "set [scm].provider in config/env.toml (or the BUBO_PROVIDER env var) to "
+                    "'gitlab' or 'github'."
+                ),
+            )
+        )
 
     try:
         telemetry_config = telemetry_config_from_dict(raw)
