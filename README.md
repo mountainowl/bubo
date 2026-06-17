@@ -46,7 +46,6 @@ drives) and posts only the findings worth acting on as inline threads — no cha
 **Live documentation → [mountainowl.github.io/bubo](https://mountainowl.github.io/bubo/)**
 
 > 👉 New here? Try the quick copy/paste **[Recipes](https://mountainowl.github.io/bubo/recipes/)**
-([docs/recipes.md](https://github.com/mountainowl/bubo/blob/main/docs/recipes.md)).
 
 ## What a review looks like
 
