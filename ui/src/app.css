@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+ * Design tokens (CSS variables). Light is the default; dark overrides under
+ * [data-theme="dark"]. Everything the UI paints references a token, so an
+ * operator can re-theme the whole surface — or sync it to a host page over
+ * postMessage (?embed=1) — by overriding these variables alone.
+ * Brand accent is indigo by default.
+ * ------------------------------------------------------------------------- */
+:root {
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --brand: #4f46e5;
+  --brand-fg: #ffffff;
+  --ok: #16a34a;
+  --ok-bg: #dcfce7;
+  --warn: #d97706;
+  --warn-bg: #fef3c7;
+  --danger: #dc2626;
+  --danger-bg: #fee2e2;
+  --info: #0284c7;
+  --info-bg: #e0f2fe;
+  --radius: 0.625rem;
+}
+
+[data-theme="dark"] {
+  --bg: #0b1120;
+  --surface: #111827;
+  --surface-2: #1e293b;
+  --border: #334155;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --brand: #818cf8;
+  --brand-fg: #0b1120;
+  --ok: #4ade80;
+  --ok-bg: #14331f;
+  --warn: #fbbf24;
+  --warn-bg: #3a2c0a;
+  --danger: #f87171;
+  --danger-bg: #3a1414;
+  --info: #38bdf8;
+  --info-bg: #0c2a3a;
+}
+
+/* Map the tokens into Tailwind v4's theme so `bg-surface`, `text-muted`,
+ * `border-border`, `text-brand`, etc. resolve to the variables above. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-brand: var(--brand);
+  --color-brand-fg: var(--brand-fg);
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --radius-token: var(--radius);
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Embedded mode strips the page background so the host's surface shows
+ * through; the app root carries no chrome of its own beyond content. */
+body.embed {
+  background: transparent;
+}
+
+.mono {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+}
+
+/* Rendered finding bodies (Issue/Impact/Evidence/Fix markdown). */
+.prose-bubo code {
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 0.85em;
+}
+.prose-bubo a {
+  color: var(--brand);
+  text-decoration: underline;
+}
+.prose-bubo strong {
+  color: var(--text);
+}

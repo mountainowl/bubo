@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>bubo — operator</title>
+  </head>
+  <body>
+    <!-- file:// fallback: ui-export writes data.js next to index.html, which
+         sets window.__BUBO_DATA__. Loaded with onerror-silenced so a served
+         build (no data.js, fetch path) does not log a 404. -->
+    <script src="./data.js" onerror="void 0"></script>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

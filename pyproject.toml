@@ -114,6 +114,12 @@ packages = ["src/bubo"]
 "skills/code-reviewer/SKILL.md" = "bubo/_assets/skills/code-reviewer/SKILL.md"
 "plugins/superpowers/.codex-plugin/plugin.json" = "bubo/_assets/plugins/superpowers/.codex-plugin/plugin.json"
 "config/env.example.toml" = "bubo/_assets/env.example.toml"
+# Built operator-UI SPA (Svelte/Vite, see ui/). For v1 the build output is
+# COMMITTED so the wheel ships it without a Node build in CI; regenerate with
+# `npm --prefix ui install && npm --prefix ui run build`. `bubo ui-export`
+# resolves it via importlib.resources.files("bubo._assets")/ui (wheel) or the
+# ui/dist editable fallback in cli._EDITABLE_FALLBACKS.
+"ui/dist" = "bubo/_assets/ui"
 
 # Source distribution: ship the runtime assets at the natural repo-root
 # paths so a `pip install <sdist>` / `uv build` round-trips correctly and
@@ -128,6 +134,7 @@ include = [
   "prompts/",
   "skills/",
   "plugins/",
+  "ui/dist/",
   "config/env.example.toml",
   "README.md",
   "CHANGELOG.md",

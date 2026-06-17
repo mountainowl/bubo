@@ -67,6 +67,10 @@ _EDITABLE_FALLBACKS: dict[tuple[str, ...], str] = {
     ("prompts",): "prompts",
     ("skills",): "skills",
     ("plugins",): "plugins",
+    # Built operator-UI SPA assets. Force-included into the wheel under
+    # bubo/_assets/ui/ (see pyproject.toml); the editable/source install reads
+    # the committed Vite build output at ui/dist/ instead.
+    ("ui",): "ui/dist",
 }
 
 
@@ -533,6 +537,78 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui_export(args: argparse.Namespace) -> int:
+    """Write a self-contained static operator-UI bundle — read-only.
+
+    Builds ``data.json`` from :func:`bubo.ui_export.build_data` (report +
+    recent reviews + config schema + version) and copies the bundled static
+    SPA next to it, so ``--out`` is a directory you can open directly
+    (``file://``), host on GitHub Pages / S3, or drop in an iframe. No server,
+    no network, no posting.
+
+    Mirrors :func:`cmd_report`'s ``--root`` handling (``_retarget_paths`` so
+    the readers point at the right DB) and stays strictly non-mutating: it
+    never sets ``BUBO_ROOT`` or calls ``init_db``, and a missing DB yields a
+    valid empty ``data.json`` rather than an error. The SPA reads ``data.json``
+    via ``fetch`` when served, and falls back to an inlined
+    ``window.__BUBO_DATA__`` global on ``file://`` (where ``fetch`` is blocked).
+    """
+    from bubo import report, ui_export
+
+    root = Path(args.root) if args.root else paths.ROOT
+    _retarget_paths(root)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        data = ui_export.build_data()
+    except OSError as exc:
+        # An EXISTING DB file that cannot be READ (permission denied, unreadable
+        # mount) raises OSError from the read-only snapshot copy. Surfacing this
+        # is deliberate: silently writing an empty data.json would hide real
+        # data in an auditable tool.
+        print(
+            f"bubo ui-export: cannot read state DB at {paths.DB} ({exc}); "
+            "check permissions / mount — nothing was written",
+            file=sys.stderr,
+        )
+        return 1
+    data_json = report.to_json(data)
+    (out_dir / "data.json").write_text(data_json)
+    # file:// fallback: browsers block fetch() of a sibling file under the
+    # file: scheme, so also inline the same bytes as a global the SPA reads
+    # when fetch fails. Written as a JS assignment, not JSON.
+    (out_dir / "data.js").write_text(f"window.__BUBO_DATA__ = {data_json};\n")
+
+    try:
+        spa = _asset("ui")
+    except FileNotFoundError:
+        print(
+            "bubo ui-export: built UI assets not found — wrote data.json only. "
+            "Build the SPA with `npm --prefix ui install && npm --prefix ui run build` "
+            "and re-run, or install a release wheel (which ships the assets).",
+            file=sys.stderr,
+        )
+        print(f"bubo ui-export: wrote {out_dir / 'data.json'}", file=sys.stderr)
+        return 0
+
+    # Copy every built asset (index.html + assets/) next to data.json so the
+    # directory is self-contained and openable. Reuses the same Traversable
+    # copy the init runtime-copies use.
+    for entry in spa.iterdir():
+        dest = out_dir / entry.name
+        if entry.is_dir():
+            if dest.exists():
+                shutil.rmtree(dest)
+            _copy_traversable(entry, dest)
+        else:
+            dest.write_bytes(entry.read_bytes())
+
+    print(f"bubo ui-export: wrote static UI to {out_dir} — open {out_dir / 'index.html'}",
+          file=sys.stderr)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -626,6 +702,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="cap the audit trail to the N most recent runs (rollups still cover the full window)",
     )
     report_p.set_defaults(func=cmd_report)
+
+    ui_export_p = subparsers.add_parser(
+        "ui-export",
+        help="Write a self-contained static operator UI (data.json + SPA) — read-only.",
+    )
+    ui_export_p.add_argument("--root", type=Path, default=None)
+    ui_export_p.add_argument(
+        "--out",
+        type=Path,
+        default=Path("bubo-ui"),
+        help="output directory for the static bundle (default: ./bubo-ui)",
+    )
+    ui_export_p.set_defaults(func=cmd_ui_export)
 
     return parser
 

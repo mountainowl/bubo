@@ -1,0 +1,6 @@
+node_modules/
+# dist/ is intentionally NOT ignored — for v1 we commit the built SPA so the
+# wheel can ship it without a Node build in CI. Regenerate with:
+#   npm --prefix ui install && npm --prefix ui run build
+.vite/
+*.log
