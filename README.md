@@ -31,15 +31,15 @@ drives) and posts only the findings worth acting on as inline threads — no cha
 
 | | |
 |---|---|
-| 🧠 **Bring your own LLM** | Codex, Claude, or any model your CLI drives — no vendor lock-in. |
-| 🔒 **Self-hosted** | Code, diffs, and review data stay on your infrastructure. |
-| 🔀 **GitLab/GitHub** | MRs and PRs, one config, identical behavior on both. |
-| 🎯 **Signal over noise** | Only actionable inline findings; one "all good" ack on a clean change. |
-| 🎭 **Moods** | Pick the review voice — terse / collaborative / socratic / formal / casual. |
-| 📉 **Learns you** | Suppresses finding-classes you and your team repeatedly disputes. |
-| ✅ **Verify before posting** | Optional "is this real?" passes drop findings that don't hold up. |
-| 🛡️ **Compliance & Governance-ready** | AI-code provenance, rigor modulation, auditable on-prem report. |
-| 🔌 **MCP + CI** | Built-in `bubo-mcp` server + a GitHub Action to review PRs in CI. |
+| 🧠 *Bring your own LLM* | Codex, Claude, or any model your CLI drives — no vendor lock-in. |
+| 🔒 *Self-hosted* | Code, diffs, and review data stay on your infrastructure. |
+| 🔀 *GitLab/GitHub* | MRs and PRs, one config, identical behavior on both. |
+| 🎯 *Signal over noise* | Only actionable inline findings; one "all good" ack on a clean change. |
+| 🎭 *Moods* | Pick the review voice — terse / collaborative / socratic / formal / casual. |
+| 📉 *Learns you** | Suppresses finding-classes you and your team repeatedly disputes. |
+| ✅ *Verify before posting* | Optional "is this real?" passes drop findings that don't hold up. |
+| 🛡️ *Compliance & Governance-ready* | AI-code provenance, rigor modulation, auditable on-prem report. |
+| 🔌 *MCP + CI* | Built-in `bubo-mcp` server + a GitHub Action to review PRs in CI. |
 
 ## 📖 Documentation
 
