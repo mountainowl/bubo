@@ -7,7 +7,7 @@
     ".": {
       "release-type": "python",
       "package-name": "bubo",
-      "changelog-path": ".release-please-changelog.md",
+      "changelog-path": "CHANGELOG.md",
       "include-component-in-tag": false
     }
   }

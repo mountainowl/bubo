@@ -14,10 +14,10 @@ name: Release Please
 # Merging the release PR creates a `vX.Y.Z` tag, which fires `release.yml`
 # (build sdist+wheel, generate SBOM, cosign-sign, publish GitHub Release).
 #
-# CHANGELOG.md is intentionally NOT managed by release-please — entries are
-# hand-curated under `## [Unreleased]` and renamed at release time. The
-# `.release-please-changelog.md` sink absorbs release-please's
-# auto-generated changelog so the human one stays clean.
+# CHANGELOG.md is generated and maintained by release-please from the
+# Conventional Commits since the last tag — there is no manual changelog
+# step. Each release PR prepends the new version's section; released
+# sections are not hand-edited.
 #
 # Setup prerequisite: a `RELEASE_PAT` repository secret holding a Personal
 # Access Token (or GitHub App installation token) with `contents: write`

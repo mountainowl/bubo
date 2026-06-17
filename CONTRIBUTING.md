@@ -87,12 +87,11 @@ from Conventional Commits since the last tag:
 | `feat!:` / `BREAKING CHANGE:` footer | minor (pre-1.0 carve-out via `bump-minor-pre-major`) |
 | `chore:` / `docs:` / `test:` / `ci:` / `build:` / `style:` / `refactor:` | no bump |
 
-The release PR bumps `pyproject.toml` and updates
-`.release-please-manifest.json`. **Before merging, rename the
-`## [Unreleased]` block in `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`**
-and add an empty `## [Unreleased]` above it — release-please intentionally
-does not touch the hand-curated CHANGELOG (its own auto-generated changelog
-lives in `.release-please-changelog.md`, which exists only as a sink).
+The release PR bumps `pyproject.toml`, updates
+`.release-please-manifest.json`, and regenerates `CHANGELOG.md` from the
+Conventional Commits since the last tag. **There is no manual changelog
+step** — release-please owns `CHANGELOG.md`, so the changelog quality comes
+straight from your commit and PR titles. Write them well.
 
 Merging the release PR creates a `vX.Y.Z` tag, which fires
 `.github/workflows/release.yml` (build sdist + wheel, generate SBOM,
