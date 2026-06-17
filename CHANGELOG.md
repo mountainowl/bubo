@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.3](https://github.com/mountainowl/bubo/compare/v0.21.2...v0.21.3) (2026-06-17)
+
+
+### Documentation
+
+* complete the badge work — cosign + SLSA L3 badges, subtitle, docs mirror ([#114](https://github.com/mountainowl/bubo/issues/114)) ([5382e30](https://github.com/mountainowl/bubo/commit/5382e30d452f7c63a4cf137c558f9265b761bd71))
+
 ## [0.21.2](https://github.com/mountainowl/bubo/compare/v0.21.1...v0.21.2) (2026-06-17)
 
 
