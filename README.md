@@ -20,7 +20,7 @@
 - Governance, provenance & audit 
 - OpenTelemetry metrics
 
-[Bubo](https://en.wikipedia.org/wiki/Bubo_(genus)) is the genus of the `great
+> [Bubo](https://en.wikipedia.org/wiki/Bubo_(genus)) is the genus of the `great
 horned and eagle owls` — patient night hunters that sit silent, see in the dark,
 and strike only when sure. 
 
