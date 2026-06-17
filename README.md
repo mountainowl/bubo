@@ -43,13 +43,10 @@ drives) and posts only the findings worth acting on as inline threads — no cha
 
 ## 📖 Documentation
 
-**Rendered docs live at → [mountainowl.github.io/bubo](https://mountainowl.github.io/bubo/)**
-— the canonical reference. The `docs/*.md` files below are its source; this README
-is a teaser.
+**Live documentation → [mountainowl.github.io/bubo](https://mountainowl.github.io/bubo/)**
 
-👉 New here? The **[Recipes](https://mountainowl.github.io/bubo/recipes/)**
-([docs/recipes.md](https://github.com/mountainowl/bubo/blob/main/docs/recipes.md)) are copy-paste setups for GitLab and
-GitHub, using Codex (the bundled default) or Claude as the review agent.
+> 👉 New here? Try the quick copy/paste **[Recipes](https://mountainowl.github.io/bubo/recipes/)**
+([docs/recipes.md](https://github.com/mountainowl/bubo/blob/main/docs/recipes.md)).
 
 ## What a review looks like
 
