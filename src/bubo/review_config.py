@@ -26,6 +26,7 @@ from typing import Any
 from bubo.config_values import (
     ConfigError,
     bool_value,
+    confidence_map,
     confidence_threshold,
     lower_string_list,
     one_of,
@@ -35,6 +36,7 @@ from bubo.config_values import (
     text_value,
 )
 from bubo.env_config import apply_runtime_env, read_config_file
+from bubo.findings import CANONICAL_CATEGORIES
 from bubo.governance_config import GovernanceConfig, governance_config_from_dict
 from bubo.paths import ROOT
 from bubo.telemetry import TelemetryConfig, telemetry_config_from_dict
@@ -84,6 +86,25 @@ DEFAULT_NO_FINDINGS_COMMENT = "Automated review ran — no issues found."
 # dedup fingerprint) stay mood-neutral regardless of tone.
 DEFAULT_TONE = "terse"
 VALID_TONES = ("terse", "collaborative", "socratic", "formal", "casual")
+
+# Surface mode — *which* findings reach the poster, a precision/recall lever
+# distinct from ``tone`` (which only changes how a surfaced finding reads).
+# ``collaborate`` (the default) applies no surface filter: bubo's full typed
+# output, including the deliberate ``suggestion``/``question`` collaborative
+# modes, byte-identical to before this knob existed. ``gate`` is the opt-in
+# high-precision merge lane — only blocking-severity *defect* issues surface
+# (see :func:`bubo.findings.gate_surfaces`). The preset resolves to a surface
+# predicate consumed by ``filter_findings_by_policy``; the review prompt still
+# emits every type regardless of mode (the contract is never amputated).
+DEFAULT_MODE = "collaborate"
+VALID_MODES = ("collaborate", "gate")
+
+# Ceiling for an auto-calibrated per-category confidence floor. Calibration
+# interpolates between ``min_confidence`` (a category's dispute rate is 0) and
+# this value (dispute rate 1). Kept below 1.0 so even a heavily-disputed class
+# still admits a sufficiently confident finding rather than becoming an
+# impossible bar — calibration *raises* the bar, it never silences a category.
+DEFAULT_CALIBRATE_MAX_CONFIDENCE = 0.97
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +168,30 @@ class ReviewConfig:
         Confidence threshold (0.0-1.0). Findings with ``finding.confidence``
         below this value are dropped before posting/planning. Defaults to
         :data:`DEFAULT_MIN_CONFIDENCE`.
+    category_min_confidence:
+        Optional per-canonical-category confidence floors (the calibrated-
+        confidence lever). A mapping of canonical category (see
+        :data:`bubo.findings.CANONICAL_CATEGORIES`) → minimum confidence; a
+        finding in that category must clear ``max(min_confidence, floor)``.
+        Manual operator overrides, parsed from the ``[review.category_min_confidence]``
+        table. Empty by default — every category uses the global
+        ``min_confidence``, the pre-calibration behavior. A floor only ever
+        *raises* the bar for noise-prone classes; it never lowers it.
+    calibrate_confidence:
+        When ``True``, additionally **derive** per-category floors from this
+        repo's dispute history (the canonical-category fold of
+        :func:`bubo.db.disputed_class_stats` → :func:`bubo.findings.calibrated_category_floors`),
+        so a class the team disputes more must be more confident to surface.
+        **Off by default** — opt-in, and self-reinforcing like dispute
+        suppression (documented in ``docs/configuration.md``). Manual
+        ``category_min_confidence`` entries take precedence over a derived floor
+        for the same category. Uses ``dispute_suppress_min_samples`` as the
+        per-category sample gate.
+    calibrate_max_confidence:
+        Ceiling for a calibrated floor (0.0-1.0). Calibration interpolates from
+        ``min_confidence`` (dispute rate 0) to this value (dispute rate 1).
+        Defaults to :data:`DEFAULT_CALIBRATE_MAX_CONFIDENCE`. Only consulted
+        when ``calibrate_confidence`` is ``True``.
     allowed_kinds:
         Lowercase whitelist of finding kinds that are allowed through. A
         finding is kept if **any** of its ``severity``, ``category``, or
@@ -192,6 +237,17 @@ class ReviewConfig:
         directive into the review prompt and post the reviewer's in-voice
         ``comment`` field instead. Mood-neutral fields/fingerprint are
         unaffected.
+    mode:
+        Surface-mode preset, one of :data:`VALID_MODES`. ``collaborate``
+        (default) surfaces every finding that clears ``min_confidence`` /
+        ``allowed_kinds`` — bubo's full collaborative output. ``gate`` is the
+        opt-in high-precision merge lane: only blocking-severity *defect*
+        findings (canonical category in
+        :data:`bubo.findings.DEFECT_CATEGORIES`) survive, dropping the
+        suggestion/question modes and the docs/style/CI-nit categories. Resolves
+        to a surface predicate via
+        :func:`bubo.findings.surface_predicate_for_mode`. Independent of
+        ``allowed_kinds``: when both are set, a finding must satisfy both.
     verify_findings:
         When ``True``, each finding that is otherwise about to be posted/
         planned is first re-checked by independent verification lenses; a
@@ -249,6 +305,9 @@ class ReviewConfig:
     governance_config: GovernanceConfig = field(default_factory=GovernanceConfig)
     projects: list[str] = field(default_factory=list)
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
+    category_min_confidence: dict[str, float] = field(default_factory=dict)
+    calibrate_confidence: bool = False
+    calibrate_max_confidence: float = DEFAULT_CALIBRATE_MAX_CONFIDENCE
     allowed_kinds: list[str] = field(default_factory=list)
     suppress_disputed_classes: bool = False
     dispute_suppress_threshold: float = 0.5
@@ -256,6 +315,7 @@ class ReviewConfig:
     post_no_findings_comment: bool = True
     no_findings_comment_body: str = DEFAULT_NO_FINDINGS_COMMENT
     tone: str = DEFAULT_TONE
+    mode: str = DEFAULT_MODE
     verify_findings: bool = False
     verify_lenses: list[str] = field(default_factory=lambda: list(DEFAULT_VERIFY_LENSES))
     verify_min_votes: int = 2
@@ -355,6 +415,20 @@ def review_config_from_dict(
             review.get("min_confidence", DEFAULT_MIN_CONFIDENCE),
             "min_confidence",
         ),
+        category_min_confidence=confidence_map(
+            review.get("category_min_confidence"),
+            "review.category_min_confidence",
+            allowed=CANONICAL_CATEGORIES,
+        ),
+        calibrate_confidence=bool_value(
+            review.get("calibrate_confidence"),
+            "calibrate_confidence",
+            default=False,
+        ),
+        calibrate_max_confidence=confidence_threshold(
+            review.get("calibrate_max_confidence", DEFAULT_CALIBRATE_MAX_CONFIDENCE),
+            "calibrate_max_confidence",
+        ),
         allowed_kinds=lower_string_list(review.get("allowed_kinds", []), "allowed_kinds"),
         suppress_disputed_classes=bool_value(
             review.get("suppress_disputed_classes"),
@@ -380,6 +454,7 @@ def review_config_from_dict(
             default=DEFAULT_NO_FINDINGS_COMMENT,
         ),
         tone=one_of(review.get("tone"), "review.tone", VALID_TONES, default=DEFAULT_TONE),
+        mode=one_of(review.get("mode"), "review.mode", VALID_MODES, default=DEFAULT_MODE),
         verify_findings=bool_value(
             review.get("verify_findings"),
             "verify_findings",

@@ -92,6 +92,34 @@ def confidence_threshold(value: object, name: str) -> float:
     return parsed
 
 
+def confidence_map(value: object, name: str, *, allowed: Iterable[str]) -> dict[str, float]:
+    """Parse a ``{category = confidence}`` TOML table into a lowercase dict.
+
+    Each value is validated as a confidence in ``[0.0, 1.0]`` via
+    :func:`confidence_threshold`; each key is stripped/lowercased and must be
+    one of ``allowed`` (the canonical category taxonomy), so an operator typo
+    like ``performnce`` fails loudly instead of silently never matching a
+    finding. ``None`` (the key is absent) returns ``{}``.
+
+    Raises :class:`ConfigError` if ``value`` is not a table, a key is not in
+    ``allowed``, or a value is out of range.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError(f"{name} must be a table of category = confidence")
+    allowed_set = {str(item).strip().lower() for item in allowed}
+    out: dict[str, float] = {}
+    for key, raw in value.items():
+        category = str(key).strip().lower()
+        if category not in allowed_set:
+            raise ConfigError(
+                f"{name} has unknown category {key!r}; allowed: {sorted(allowed_set)}"
+            )
+        out[category] = confidence_threshold(raw, f"{name}.{category}")
+    return out
+
+
 def one_of(value: object, name: str, choices: tuple[str, ...], *, default: str) -> str:
     """Parse ``value`` as a string restricted to ``choices`` (case-insensitive).
 

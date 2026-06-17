@@ -53,6 +53,7 @@ from bubo.db import (
     already_seen,
     connect_db,
     count_inflight_workers,
+    disputed_class_stats,
     disputed_finding_classes,
     finding_seen,
     init_db,
@@ -72,11 +73,15 @@ from bubo.db import record as _db_record
 from bubo.db import record_finding as _db_record_finding
 from bubo.events import log, now
 from bubo.findings import (
+    calibrated_category_floors,
+    dispute_stats_by_canonical,
     extract_findings,
     filter_findings_by_policy,
     finding_body,
     finding_comment_body,
     finding_fingerprint,
+    normalize_finding_categories,
+    surface_predicate_for_mode,
 )
 from bubo.governance_policy import (
     POLICY_OFF,
@@ -765,6 +770,14 @@ def post_or_plan_findings(
     findings = extract_findings(raw_review, max_findings=cfg.max_findings_per_merge_request)
     if not findings:
         return (0, 0, 0)
+    # Map each free-form `category` onto the canonical taxonomy, stored in a
+    # separate `category_canonical` field; the original label is preserved for
+    # the body, fingerprint, and audit row. The surface-mode filter below reads
+    # the canonical field, so `gate` matches deterministically across the 30+
+    # free-form labels models actually emit. (The MCP `review` tool has its own
+    # parse path and returns raw findings to its client without the policy
+    # filter, so normalization is intentionally a poster-path concern only.)
+    findings = normalize_finding_categories(findings)
     # Opt-in, off by default: drop categories this repo has repeatedly
     # rejected, using the accept/dispute signal in finding_outcomes. The set
     # is empty (and the DB never queried) unless the operator enabled it.
@@ -777,10 +790,29 @@ def post_or_plan_findings(
                 threshold=cfg.dispute_suppress_threshold,
             )
         )
+    # Per-category confidence floors (the calibrated-confidence lever, off by
+    # default). Manual operator overrides always apply; when calibration is on,
+    # derive additional floors from this repo's dispute history aggregated onto
+    # the CANONICAL category (raw labels fragment the signal across synonyms).
+    # Manual entries win over a derived floor for the same category.
+    category_floors: dict[str, float] = dict(cfg.category_min_confidence)
+    if cfg.calibrate_confidence:
+        calibrated = calibrated_category_floors(
+            dispute_stats_by_canonical(disputed_class_stats(project, min_samples=1)),
+            base=cfg.min_confidence,
+            max_floor=cfg.calibrate_max_confidence,
+            min_samples=cfg.dispute_suppress_min_samples,
+        )
+        for category, floor in calibrated.items():
+            category_floors.setdefault(category, floor)
+        if calibrated:
+            log("confidence_calibrated", project=project, iid=number, floors=calibrated)
     findings, dropped = filter_findings_by_policy(
         findings,
         min_confidence=cfg.min_confidence,
         allowed_kinds=cfg.allowed_kinds,
+        category_floors=category_floors or None,
+        surface_predicate=surface_predicate_for_mode(cfg.mode),
         suppressed_categories=suppressed_categories,
     )
     for finding, reason in dropped:
@@ -794,6 +826,7 @@ def post_or_plan_findings(
             confidence=finding.get("confidence"),
             severity=finding.get("severity"),
             category=finding.get("category"),
+            category_canonical=finding.get("category_canonical"),
             type=finding.get("type"),
         )
     if not findings:

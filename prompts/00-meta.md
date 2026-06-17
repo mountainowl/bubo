@@ -9,6 +9,7 @@ Review the submitted code change. Return only actionable findings that are evide
 - Do not prove that you reviewed everything.
 - Ignore harmless style, formatting, naming preference, wording, and pre-existing debt unless this change depends on it or makes it worse.
 - Do not report grammar, naming, or consistency issues unless they affect behavior, API usage, data contracts, security, operations, or user-visible correctness.
+- Prioritize findings on the lines this change touches; treat CI, build, and config-file nitpicks as low priority unless this change breaks them. This is a priority prior, not a ban — a real issue on those files is still worth raising.
 </review_scope>
 
 <strong_uncertainty_rule>

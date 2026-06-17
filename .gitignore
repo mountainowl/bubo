@@ -23,3 +23,4 @@ site/
 # benchmark run output
 benchmarks/report.md
 benchmarks/report.json
+benchmarks/precision_lever/out/
