@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/mountainowl/bubo/compare/v0.21.3...v0.22.0) (2026-06-17)
+
+
+### Features
+
+* **ui:** read-only operator UI v1 (static Svelte export) ([#117](https://github.com/mountainowl/bubo/issues/117)) ([a519edc](https://github.com/mountainowl/bubo/commit/a519edcac6e4b9ebec3dffa0f98732783a50461c))
+
 ## [0.21.3](https://github.com/mountainowl/bubo/compare/v0.21.2...v0.21.3) (2026-06-17)
 
 
