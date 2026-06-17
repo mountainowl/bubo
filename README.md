@@ -13,19 +13,19 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827)](https://github.com/mountainowl/bubo/blob/main/LICENSE)
 
 ## Enterprise Grade Compliant Agentic AI code reviews**
-### Self-hosted
-### Bring-your-own-LLM
-### Supports GitLab & GitHub
-### Direct inline comments
-### Governance, provenance & audit 
-### OpenTelemetry metrics
+- Self-hosted
+- Bring-your-own-LLM
+- Supports GitLab & GitHub
+- Direct inline comments
+- Governance, provenance & audit 
+- OpenTelemetry metrics
 
-[Bubo](https://en.wikipedia.org/wiki/Bubo_(genus)) is the genus of the great
-horned and eagle owls — patient night hunters that sit silent, see in the dark,
-and strike only when sure. Code review, same idea: Bubo reviews your GitLab MRs
-and GitHub PRs with **the LLM you choose** (Codex, Claude, or any model your CLI
-drives) and posts only the findings worth acting on as inline threads — no
-chatbot noise, no praise, no summaries.
+[Bubo](https://en.wikipedia.org/wiki/Bubo_(genus)) is the genus of the `great
+horned and eagle owls` — patient night hunters that sit silent, see in the dark,
+and strike only when sure. 
+
+Code review is the exact same idea. Bubo reviews your code commits with **the LLM you choose** (Codex, Claude, or any model your CLI
+drives) and posts only the findings worth acting on as inline threads — no chatbot noise, no praise, no summaries.
 
 ## Features at a glance
 
@@ -33,12 +33,12 @@ chatbot noise, no praise, no summaries.
 |---|---|
 | 🧠 **Bring your own LLM** | Codex, Claude, or any model your CLI drives — no vendor lock-in. |
 | 🔒 **Self-hosted** | Code, diffs, and review data stay on your infrastructure. |
-| 🔀 **GitLab + GitHub** | MRs and PRs, one config, identical behavior on both. |
+| 🔀 **GitLab/GitHub** | MRs and PRs, one config, identical behavior on both. |
 | 🎯 **Signal over noise** | Only actionable inline findings; one "all good" ack on a clean change. |
 | 🎭 **Moods** | Pick the review voice — terse / collaborative / socratic / formal / casual. |
-| 📉 **Learns your taste** | Suppresses finding-classes your team repeatedly disputes. |
+| 📉 **Learns you** | Suppresses finding-classes you and your team repeatedly disputes. |
 | ✅ **Verify before posting** | Optional "is this real?" passes drop findings that don't hold up. |
-| 🛡️ **Governance-ready** | AI-code provenance, rigor modulation, auditable on-prem report. |
+| 🛡️ **Compliance & Governance-ready** | AI-code provenance, rigor modulation, auditable on-prem report. |
 | 🔌 **MCP + CI** | Built-in `bubo-mcp` server + a GitHub Action to review PRs in CI. |
 
 ## 📖 Documentation
