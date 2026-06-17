@@ -12,10 +12,13 @@
 [![Docs](https://img.shields.io/badge/docs-mountainowl.github.io%2Fbubo-4f62ad)](https://mountainowl.github.io/bubo/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827)](https://github.com/mountainowl/bubo/blob/main/LICENSE)
 
-> **Agentic AI code review — with the LLM of your choice.**
-
-*Self-hosted · bring-your-own-LLM · GitLab + GitHub · inline findings only ·
-governance, provenance & audit · OpenTelemetry metrics*
+## Enterprise Grade Compliant Agentic AI code reviews**
+### Self-hosted
+### Bring-your-own-LLM
+### Supports GitLab & GitHub
+### Direct inline comments
+### Governance, provenance & audit 
+### OpenTelemetry metrics
 
 [Bubo](https://en.wikipedia.org/wiki/Bubo_(genus)) is the genus of the great
 horned and eagle owls — patient night hunters that sit silent, see in the dark,
