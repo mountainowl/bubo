@@ -108,18 +108,82 @@ provider for a single run with `BUBO_PROVIDER=github bubo-poller`.
 
 ---
 
-## Another OpenAI-compatible model
+## Self-hosted / in-house model (OpenAI-compatible)
 
-Bubo doesn't hardcode providers — `llm_api_key_env` names the variable
-your CLI reads. To point Codex at a different model, change the model
-in your Codex profile (`~/.codex/config.toml`, `[profiles.bubo]`), then set:
+The strongest version of Bubo's compliance story: when your org runs its own
+OpenAI-compatible gateway — Azure OpenAI, vLLM/TGI, LiteLLM, or an internal
+proxy — code, diffs, review state, **and the model call** all stay on your
+infrastructure. Nothing leaves.
+
+**The one thing to know:** Bubo never calls the model directly. It shells out to
+an agent CLI (Codex by default), so the in-house endpoint is configured in the
+**agent's profile**, not Bubo's `env.toml`. A bare `bubo init` ships a
+stock-OpenAI profile (`model = "gpt-5.5"`, no provider block), so pointing at an
+internal endpoint is one explicit edit — `uv tool install bubo && bubo init`
+alone will *not* redirect it.
+
+### 1. Install Bubo (unchanged)
+
+```sh
+uv tool install bubo
+bubo init      # writes ~/.codex/config.toml [profiles.bubo], the env.toml seed, the DB
+bubo doctor
+```
+
+### 2. Point the Codex profile at your gateway (the load-bearing step)
+
+Edit `~/.codex/config.toml`. Add a model-provider block and reference it from the
+`[profiles.bubo]` profile `bubo init` created:
+
+```toml
+[profiles.bubo]
+model          = "<internal-model-name>"
+model_provider = "inhouse"          # references the block below
+sandbox_mode   = "read-only"
+
+[model_providers.inhouse]
+name     = "In-house gateway"
+base_url = "https://llm.corp.internal/v1"   # your OpenAI-compatible endpoint
+env_key  = "OPENAI_API_KEY"                 # env var Codex reads the key from
+wire_api = "chat"                           # "chat" or "responses" — match your gateway
+```
+
+These are **Codex's** config keys, not Bubo's — confirm the exact field names
+against your Codex version.
+
+### 3. Tell Bubo the label + key plumbing
+
+In `$BUBO_ROOT/config/env.toml`:
 
 ```toml
 [agents]
-llm_model = "<your-model>"
-llm_api_key = "<your-key>"
-llm_api_key_env = "<THE_ENV_VAR_YOUR_CLI_READS>"   # e.g. OPENAI_API_KEY
+llm_model       = "<internal-model-name>"   # must match the profile; used for the cost label only
+llm_api_key     = "${LLM_API_KEY}"          # Bubo exports this under llm_api_key_env
+llm_api_key_env = "OPENAI_API_KEY"          # the env var your gateway/CLI reads
+codex_profile   = "bubo"
 ```
+
+If you track cost, set the `[telemetry]` `*_per_1m` rows to your gateway's rates
+(see the [configuration reference](configuration.md#telemetry)).
+
+### 4. Pre-flight the sandbox (the enterprise Linux gotcha)
+
+On hardened Linux hosts — Ubuntu with the AppArmor unprivileged-user-namespace
+restriction — Codex's default `read-only` sandbox uses bubblewrap and can fail to
+initialize, and a failed sandbox can surface as a misleading clean "no findings"
+review. Enterprise hosts are exactly where this bites. Fix it once during
+bring-up: see [Troubleshooting](troubleshooting.md).
+
+### 5. Verify before going live
+
+Keep `[review].dry_run = true`, run `bubo-poller` once, and read a transcript
+under `var/reports/` to confirm findings come through your in-house model. Then
+flip `dry_run = false`.
+
+!!! note "Not OpenAI-compatible?"
+    The escape hatch is `[agents].reviewer_command` — override the whole command
+    with any CLI that takes the prompt and returns Bubo's JSON findings contract.
+    You're locked to neither Codex nor OpenAI.
 
 ---
 

@@ -53,20 +53,22 @@ leaves your infrastructure — no chatbot chatter, no praise, no summaries.
 
 ---
 
-## Features at a glance
+## Highlighted features
 
 | | |
 |---|---|
-| 🧠 **Bring your own LLM** | Codex, Claude, or any model your CLI drives — no vendor lock-in. |
-| 🔒 **Self-hosted** | Code, diffs, and review data stay on your infrastructure. |
-| 🔀 **GitLab + GitHub** | MRs and PRs, one config, identical behavior on both. |
-| 🎯 **Signal over noise** | Only actionable inline findings (Issue / Impact / Evidence / Fix / Confidence); one "all good" ack on a clean change. |
-| 🎭 **Moods** | Pick the review voice — `terse` / `collaborative` / `socratic` / `formal` / `casual` — without touching the data. |
-| 📉 **Learns your taste** | Suppresses finding-classes your team repeatedly disputes. |
-| ✅ **Verify before posting** | Optional "is this real?" passes drop findings that don't hold up — point them at a second model for real diversity. |
-| 🛡️ **Governance-ready** | AI-code provenance, review-rigor modulation, and an auditable on-prem report (accept rate, ROI, noise trend, latency, policy decisions). |
-| 📊 **Observability** | OpenTelemetry metrics; cosign-signed releases with SBOMs. |
-| 🔌 **MCP + CI** | Built-in `bubo-mcp` server, and a GitHub Action to review PRs in CI. |
+| **Bring your own LLM** | Codex, Claude, or any model your CLI drives — no vendor lock-in. |
+| **Self-hosted** | Code, diffs, and review data stay on your infrastructure. |
+| **GitLab + GitHub** | MRs and PRs, one config, identical behavior on both. |
+| **Signal over noise** | Only actionable inline findings (Issue / Impact / Evidence / Fix / Confidence); one "all good" ack on a clean change. |
+| **Moods** | Pick the review voice — `terse` / `collaborative` / `socratic` / `formal` / `casual` — without touching the data. |
+| **Learns your taste** | Suppresses finding-classes your team repeatedly disputes. |
+| **Verify before posting** | Optional "is this real?" passes drop findings that don't hold up — point them at a second model for real diversity. |
+| **Governance-ready** | AI-code provenance, review-rigor modulation, and an auditable on-prem report (accept rate, ROI, noise trend, latency, policy decisions). |
+| **Observability** | OpenTelemetry metrics; cosign-signed releases with SBOMs. |
+| **MCP + CI** | Built-in `bubo-mcp` server, and a GitHub Action to review PRs in CI. |
+
+**[View full list of features →](features.md)**
 
 ## What it does
 

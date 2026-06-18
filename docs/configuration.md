@@ -1,309 +1,252 @@
 # Configuration reference
 
-Public defaults live in [`config/env.example.toml`](https://github.com/mountainowl/bubo/blob/main/config/env.example.toml).
-Copy it to the gitignored `config/env.toml` before running. Runtime config and
-credentials live in that one TOML file.
+All runtime config and credentials live in one TOML file. Copy the template
+[`config/env.example.toml`](https://github.com/mountainowl/bubo/blob/main/config/env.example.toml)
+to the gitignored `config/env.toml` and edit there:
 
-<table>
-  <thead>
-    <tr>
-      <th>Setting</th>
-      <th>Default</th>
-      <th>Purpose / impact</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr><th colspan="3"><code>[scm]</code></th></tr>
-    <tr>
-      <td><code>provider</code></td>
-      <td><code>gitlab</code></td>
-      <td>Source-control backend: <code>gitlab</code> or <code>github</code>. Selects which provider the poller drives. <code>BUBO_PROVIDER=github</code> overrides it for a single run.</td>
-    </tr>
-    <tr><th colspan="3"><code>[gitlab]</code></th></tr>
-    <tr>
-      <td><code>url</code></td>
-      <td><code>https://gitlab.com</code></td>
-      <td>Web host the poller reads MRs from. For self-hosted GitLab, keep <code>api_url</code> on the same host.</td>
-    </tr>
-    <tr>
-      <td><code>api_url</code></td>
-      <td><code>https://gitlab.com/api/v4</code></td>
-      <td>API endpoint used by MCP tools inside the review agent.</td>
-    </tr>
-    <tr>
-      <td><code>bot_username</code></td>
-      <td><code>bubo</code></td>
-      <td>Lets outcome sync separate bot comments from developer replies.</td>
-    </tr>
-    <tr>
-      <td><code>denied_tools_regex</code></td>
-      <td><code>^(delete_.*|merge_merge_request|push_files)$</code></td>
-      <td>Blocks dangerous GitLab MCP tools even if the agent can see them.</td>
-    </tr>
-    <tr>
-      <td><code>token</code></td>
-      <td>unset</td>
-      <td>GitLab token with <code>api</code> scope. Exported as <code>GITLAB_TOKEN</code>, <code>GITLAB_PERSONAL_ACCESS_TOKEN</code>, and <code>GLAB_TOKEN</code>.</td>
-    </tr>
-    <tr><th colspan="3"><code>[github]</code></th></tr>
-    <tr>
-      <td><code>api_url</code></td>
-      <td><code>https://api.github.com</code></td>
-      <td>REST API base. Use <code>https://&lt;host&gt;/api/v3</code> for GitHub Enterprise Server.</td>
-    </tr>
-    <tr>
-      <td><code>bot_username</code></td>
-      <td><code>bubo</code></td>
-      <td>Lets outcome sync separate bot comments from developer replies.</td>
-    </tr>
-    <tr>
-      <td><code>token</code></td>
-      <td>unset</td>
-      <td>GitHub token with pull-request read+write. Exported as <code>GITHUB_TOKEN</code>, <code>GITHUB_PERSONAL_ACCESS_TOKEN</code>, and <code>GH_TOKEN</code>.</td>
-    </tr>
-    <tr><th colspan="3"><code>[review]</code></th></tr>
-    <tr>
-      <td><code>dry_run</code></td>
-      <td><code>true</code></td>
-      <td>Stores planned findings without posting comments. Set <code>false</code> after test reviews look right.</td>
-    </tr>
-    <tr>
-      <td><code>max_merge_requests_per_poll</code></td>
-      <td><code>8</code></td>
-      <td>Caps how many MRs one poll cycle queues. Higher values can fork more workers at once.</td>
-    </tr>
-    <tr>
-      <td><code>max_findings_per_merge_request</code></td>
-      <td><code>8</code></td>
-      <td>Caps findings per MR and fills <code>{{MAX_FINDINGS_PER_REVIEW}}</code> in the prompt.</td>
-    </tr>
-    <tr>
-      <td><code>timeout_seconds</code></td>
-      <td><code>1800</code></td>
-      <td>Kills a review worker that runs too long.</td>
-    </tr>
-    <tr>
-      <td><code>min_confidence</code></td>
-      <td><code>0.85</code></td>
-      <td>Floor for the LLM's per-finding confidence (0.0–1.0). Findings below this score are dropped before posting or planning. Inclusive on the high side.</td>
-    </tr>
-    <tr>
-      <td><code>category_min_confidence</code></td>
-      <td><code>{}</code></td>
-      <td>Per-canonical-category confidence floors — a <code>[review.category_min_confidence]</code> table mapping a canonical category (e.g. <code>style</code>, <code>performance</code>) to a minimum confidence. A finding in that category must clear <code>max(min_confidence, floor)</code>; failing it is logged as <code>confidence_below_category_floor</code>. A floor only ever <em>raises</em> the bar. Empty = global <code>min_confidence</code> for every category. See <a href="#calibrated-per-class-confidence">Calibrated per-class confidence</a>.</td>
-    </tr>
-    <tr>
-      <td><code>calibrate_confidence</code></td>
-      <td><code>false</code></td>
-      <td>When <code>true</code>, additionally <em>derive</em> per-category floors from this repo's dispute history (folded onto the canonical category), so a class the team disputes more must be more confident to surface. Off by default; self-reinforcing like dispute suppression. Manual <code>category_min_confidence</code> entries win over a derived floor.</td>
-    </tr>
-    <tr>
-      <td><code>calibrate_max_confidence</code></td>
-      <td><code>0.97</code></td>
-      <td>Ceiling for a calibrated floor. Calibration interpolates from <code>min_confidence</code> (0% dispute) to this value (100% dispute) — kept below 1.0 so even a heavily-disputed class still admits a sufficiently confident finding. Only used when <code>calibrate_confidence</code> is on.</td>
-    </tr>
-    <tr>
-      <td><code>allowed_kinds</code></td>
-      <td><code>[]</code></td>
-      <td>Whitelist of finding kinds to post. A finding is kept if its <code>severity</code>, <code>category</code>, or <code>type</code> appears here (case-insensitive). Empty list = no kind filter — post everything that clears <code>min_confidence</code>. Common values: <code>"blocking"</code>, <code>"non-blocking"</code>, <code>"security"</code>, <code>"correctness"</code>, <code>"performance"</code>, <code>"issue"</code>, <code>"suggestion"</code>.</td>
-    </tr>
-    <tr>
-      <td><code>tone</code></td>
-      <td><code>"terse"</code></td>
-      <td>Review-comment voice ("mood"): <code>terse</code> (default) / <code>collaborative</code> / <code>socratic</code> / <code>formal</code> / <code>casual</code>. Affects ONLY how a posted finding reads. <code>terse</code> posts the structured Impact/Evidence/Fix render unchanged; other tones ask the reviewer for an in-voice <code>comment</code> field and post that instead. The structured fields and the dedup fingerprint are identical across tones, so switching never re-posts a finding or splits its outcome history. See <a href="#review-comment-tone-moods">Review-comment tone</a> below.</td>
-    </tr>
-    <tr>
-      <td><code>mode</code></td>
-      <td><code>"collaborate"</code></td>
-      <td>Surface mode — <em>which</em> findings reach the poster (distinct from <code>tone</code>, which only changes how they read). <code>collaborate</code> (default) surfaces bubo's full typed output incl. <code>suggestion</code>/<code>question</code>. <code>gate</code> is the opt-in high-precision merge lane: only blocking-severity <em>defect</em> findings survive (drops suggestions/questions and docs/style/CI-nit categories). Independent of <code>allowed_kinds</code> — both apply if set. See <a href="#surface-mode-gate-vs-collaborate">Surface mode</a> below.</td>
-    </tr>
-    <tr>
-      <td><code>suppress_disputed_classes</code></td>
-      <td><code>false</code></td>
-      <td>Opt-in. When <code>true</code>, drop finding <code>category</code> classes this repo has repeatedly rejected, using the accept/dispute outcome history. Off by default. See <a href="#dispute-driven-suppression">Dispute-driven suppression</a> below.</td>
-    </tr>
-    <tr>
-      <td><code>dispute_suppress_threshold</code></td>
-      <td><code>0.5</code></td>
-      <td>Dispute rate (0.0–1.0) at or above which a category is suppressed. Only consulted when <code>suppress_disputed_classes = true</code>.</td>
-    </tr>
-    <tr>
-      <td><code>dispute_suppress_min_samples</code></td>
-      <td><code>5</code></td>
-      <td>Minimum recorded outcomes in a category before its dispute rate is acted on. Only consulted when <code>suppress_disputed_classes = true</code>.</td>
-    </tr>
-    <tr><th colspan="3"><code>[governance]</code></th></tr>
-    <tr>
-      <td><code>capture_provenance</code></td>
-      <td><code>false</code></td>
-      <td>Opt-in. When <code>true</code>, record a banded AI-provenance signal per change for audit. Captures only — no review-behavior change. See <a href="#governance-provenance">Governance &amp; provenance</a> below.</td>
-    </tr>
-    <tr>
-      <td><code>ai_trailer_patterns</code></td>
-      <td>built-in</td>
-      <td>Case-insensitive regexes matched against commit-message lines to detect <em>declared</em> AI assistance. Defaults match <code>Generated-by</code>/<code>AI-assisted</code> trailers and <code>Co-authored-by</code> naming a known agent. Only consulted when <code>capture_provenance = true</code>.</td>
-    </tr>
-    <tr>
-      <td><code>sensitive_path_globs</code></td>
-      <td><code>[]</code></td>
-      <td><code>fnmatch</code> globs (case-preserving) flagged when a change touches sensitive paths, e.g. <code>payments/**</code>, <code>*.pem</code>. Recorded for audit and used as the sensitive-path half of the escalation predicate.</td>
-    </tr>
-    <tr>
-      <td><code>rigor_modulation</code></td>
-      <td><code>false</code></td>
-      <td>Opt-in (Phase 2). When <code>true</code>, an escalated change injects a heightened-scrutiny directive into its review prompt. Advisory — adds prompt context, never a verdict or merge block. Auto-implies the provenance fetch.</td>
-    </tr>
-    <tr>
-      <td><code>escalate_bands</code></td>
-      <td><code>["likely_ai","collaborative"]</code></td>
-      <td>Provenance bands that escalate (shared by rigor modulation and the policy gate). <code>unknown</code> never escalates.</td>
-    </tr>
-    <tr>
-      <td><code>rigor_require_sensitive</code></td>
-      <td><code>true</code></td>
-      <td>When <code>true</code>, a change escalates only if it also touches a <code>sensitive_path_globs</code> path; <code>false</code> escalates on band alone.</td>
-    </tr>
-    <tr>
-      <td><code>policy_mode</code></td>
-      <td><code>off</code></td>
-      <td><code>off</code> / <code>report-only</code> / <code>soft</code>. When not <code>off</code>, an auditable governance decision is recorded per change. All modes advisory — no <code>enforce</code> (bubo does not own CI/branch protection).</td>
-    </tr>
-    <tr><th colspan="3"><code>[poller]</code></th></tr>
-    <tr>
-      <td><code>state_dir</code></td>
-      <td><code>var</code></td>
-      <td>Stores SQLite state, logs, reports, worktrees, and rendered prompts.</td>
-    </tr>
-    <tr>
-      <td><code>interval_seconds</code></td>
-      <td><code>900</code></td>
-      <td>Suggested wait for long-running poll loops. Cron/systemd can use another interval.</td>
-    </tr>
-    <tr>
-      <td><code>target_merge_request_iid</code></td>
-      <td>unset</td>
-      <td>Temporary single-MR filter. Leave unset in production.</td>
-    </tr>
-    <tr><th colspan="3"><code>[agents]</code></th></tr>
-    <tr>
-      <td><code>prompt_file</code></td>
-      <td><code>prompts/00-meta.md</code></td>
-      <td>Meta prompt rendered before each review.</td>
-    </tr>
-    <tr>
-      <td><code>llm_model</code></td>
-      <td><code>gpt-5.5</code></td>
-      <td>Model passed to the review wrapper. Keep telemetry pricing aligned for cost metrics.</td>
-    </tr>
-    <tr>
-      <td><code>llm_api_key</code></td>
-      <td>unset</td>
-      <td>API key for whatever LLM you review with. Exported as the generic <code>LLM_API_KEY</code> plus the operator-named variable in <code>llm_api_key_env</code>.</td>
-    </tr>
-    <tr>
-      <td><code>llm_api_key_env</code></td>
-      <td><code>OPENAI_API_KEY</code></td>
-      <td>The env-var name your LLM CLI/SDK reads the key from — Bubo is model-agnostic and does not guess it. Set to <code>OPENAI_API_KEY</code> (OpenAI/Codex), <code>ANTHROPIC_API_KEY</code> (Claude), <code>GEMINI_API_KEY</code> (Gemini), or whatever your CLI expects. Blank exports only <code>LLM_API_KEY</code>.</td>
-    </tr>
-    <tr>
-      <td><code>reasoning_effort</code></td>
-      <td><code>medium</code></td>
-      <td>Review reasoning level. Higher values can cost more and run longer.</td>
-    </tr>
-    <tr>
-      <td><code>dry_run</code></td>
-      <td><code>true</code></td>
-      <td>Dry-run hint exported to the review agent as <code>REVIEW_DRY_RUN</code>, separate from <code>[review].dry_run</code> which controls poller posting.</td>
-    </tr>
-    <tr>
-      <td><code>codex_profile</code></td>
-      <td><code>bubo</code></td>
-      <td>Codex profile used by the Codex wrapper.</td>
-    </tr>
-    <tr>
-      <td><code>codex_sandbox</code></td>
-      <td><code>read-only</code></td>
-      <td>Filesystem access passed to Codex review runs.</td>
-    </tr>
-    <tr>
-      <td><code>post_no_findings_comment</code></td>
-      <td><code>true</code></td>
-      <td>When a review finishes with zero findings, post a single change-level acknowledgement so authors and approvers can tell <em>reviewer ran and passed</em> from <em>reviewer never ran</em>. Dedup'd by bot author + exact body; honors <code>[review].dry_run</code>; a post failure is a soft error that does NOT flip the review to <code>FAILED</code>. Set <code>false</code> to restore the previous silent-on-clean behavior.</td>
-    </tr>
-    <tr>
-      <td><code>no_findings_comment_body</code></td>
-      <td><code>"Automated review ran — no issues found."</code></td>
-      <td>Body of the acknowledgement, posted verbatim. Customize for localization or branding. Do NOT embed per-run values (URLs, timestamps) — the body must be byte-identical across re-reviews for dedup to work. Empty/whitespace-only disables posting.</td>
-    </tr>
-    <tr><th colspan="3"><code>[telemetry]</code></th></tr>
-    <tr>
-      <td><code>enabled</code></td>
-      <td><code>false</code></td>
-      <td>Sends OTel metrics and spans when enabled. SQLite state is still written either way.</td>
-    </tr>
-    <tr>
-      <td><code>service_name</code></td>
-      <td><code>bubo</code></td>
-      <td>Service name shown in the OTel backend.</td>
-    </tr>
-    <tr>
-      <td><code>environment</code></td>
-      <td><code>prod</code></td>
-      <td>Environment label for dashboards, such as <code>dev</code>, <code>staging</code>, or <code>prod</code>.</td>
-    </tr>
-    <tr>
-      <td><code>otlp_endpoint</code></td>
-      <td><code>http://127.0.0.1:4317</code></td>
-      <td>Collector endpoint for metrics and traces.</td>
-    </tr>
-    <tr>
-      <td><code>otlp_protocol</code></td>
-      <td><code>grpc</code></td>
-      <td>OTLP transport. Only <code>grpc</code> is supported today.</td>
-    </tr>
-    <tr>
-      <td><code>export_interval_seconds</code></td>
-      <td><code>30</code></td>
-      <td>Metric export interval. Lower values make dashboards fresher.</td>
-    </tr>
-    <tr>
-      <td><code>emit_finding_events</code></td>
-      <td><code>true</code></td>
-      <td>Emits finding lifecycle metrics like planned, posted, skipped, and resolved.</td>
-    </tr>
-    <tr>
-      <td><code>emit_outcome_sync</code></td>
-      <td><code>true</code></td>
-      <td>Emits metrics when outcome sync checks posted finding status.</td>
-    </tr>
-    <tr>
-      <td><code>input_per_1m</code></td>
-      <td><code>5.0</code></td>
-      <td>Estimated input-token price per million tokens for cost metrics.</td>
-    </tr>
-    <tr>
-      <td><code>output_per_1m</code></td>
-      <td><code>30.0</code></td>
-      <td>Estimated output-token price per million tokens for cost metrics.</td>
-    </tr>
-    <tr>
-      <td><code>cached_input_per_1m</code></td>
-      <td><code>0.5</code></td>
-      <td>Estimated cached-input price per million tokens for cost metrics.</td>
-    </tr>
-    <tr><th colspan="3"><code>[[projects]]</code></th></tr>
-    <tr>
-      <td><code>path</code></td>
-      <td>sample repos</td>
-      <td>GitLab project path to poll, for example <code>group/repo</code>.</td>
-    </tr>
-    <tr>
-      <td><code>enabled</code></td>
-      <td><code>true</code></td>
-      <td>Turns polling for that project on or off.</td>
-    </tr>
-  </tbody>
-</table>
+```sh
+cp config/env.example.toml config/env.toml
+```
+
+Every default shown below is the value bubo falls back to when a key is omitted —
+leaving a key out is the same as setting it to its default. Any string value can
+reference environment variables (`token = "${GITLAB_TOKEN}"`,
+`url = "${GITLAB_URL:-https://gitlab.com}"`), so secrets never have to sit on
+disk. Each section has its own table and a minimal example; a full copy-paste
+**[quick-start config](#quick-start-config)** is at the end.
+
+## `[scm]`
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `provider` | `gitlab` | Source-control backend — `gitlab` or `github`. Selects which provider the poller drives. `BUBO_PROVIDER=github` overrides it for a single run. |
+
+```toml
+[scm]
+provider = "gitlab"   # or "github"
+```
+
+## `[gitlab]`
+
+Used when `provider = "gitlab"`.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `url` | `https://gitlab.com` | Web host the poller reads MRs from. For self-hosted GitLab, keep `api_url` on the same host. |
+| `api_url` | `https://gitlab.com/api/v4` | REST API endpoint used by the GitLab MCP tools inside the review agent. |
+| `bot_username` | `bubo` | Bot account name on posted threads; lets outcome sync tell bot comments from developer replies. |
+| `denied_tools_regex` | `^(delete_.*\|merge_merge_request\|push_files)$` | Blocks dangerous GitLab MCP tools even if the agent can see them. |
+| `token` | unset | GitLab token with `api` scope. Exported as `GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, and `GLAB_TOKEN`. |
+
+```toml
+[gitlab]
+url          = "https://gitlab.com"
+api_url      = "https://gitlab.com/api/v4"
+bot_username = "bubo"
+token        = "${GITLAB_TOKEN}"   # api scope; keep the real value in the environment
+```
+
+## `[github]`
+
+Used when `provider = "github"`. Needs the `gh` CLI (checkout) and a GitHub MCP
+server on `PATH` (inline comments; falls back to REST otherwise).
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `api_url` | `https://api.github.com` | REST API base. Use `https://<host>/api/v3` for GitHub Enterprise Server. |
+| `bot_username` | `bubo` | Bot account name on review comments; lets outcome sync separate bot comments from replies. |
+| `token` | unset | GitHub token with pull-request read+write. Exported as `GITHUB_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, and `GH_TOKEN`. |
+
+```toml
+[github]
+api_url      = "https://api.github.com"   # https://<host>/api/v3 for GHES
+bot_username = "bubo"
+token        = "${GITHUB_TOKEN}"           # pull-request read + write
+```
+
+## `[review]`
+
+How the poller picks, paces, and filters reviews.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `dry_run` | `true` | Plan findings into SQLite without posting comments. Flip to `false` once test reviews look right. |
+| `max_merge_requests_per_poll` | `8` | Caps how many MRs one poll cycle queues. Higher values fork more workers at once. |
+| `max_findings_per_merge_request` | `8` | Caps findings per MR and fills `{{MAX_FINDINGS_PER_REVIEW}}` in the prompt. |
+| `timeout_seconds` | `1800` | Kills a review worker that runs too long. |
+| `min_confidence` | `0.85` | Floor for the LLM's per-finding confidence (0.0–1.0); lower-scored findings are dropped. Inclusive on the high side. |
+| `category_min_confidence` | `{}` | Per-canonical-category confidence floors — a finding must clear `max(min_confidence, floor)`. Only ever raises the bar. See [Calibrated per-class confidence](#calibrated-per-class-confidence). |
+| `calibrate_confidence` | `false` | Derive per-category floors from this repo's dispute history. Manual floors win. See [Calibrated per-class confidence](#calibrated-per-class-confidence). |
+| `calibrate_max_confidence` | `0.97` | Ceiling for a calibrated floor (kept below 1.0). Only used when `calibrate_confidence` is on. |
+| `allowed_kinds` | `[]` | Whitelist of finding kinds to post — kept if its `severity`, `category`, or `type` matches (case-insensitive). `[]` = no kind filter. |
+| `tone` | `"terse"` | Comment voice — `terse` / `collaborative` / `socratic` / `formal` / `casual`. Changes only how a finding reads. See [Review-comment tone](#review-comment-tone-moods). |
+| `mode` | `"collaborate"` | Surface mode — which findings reach the poster. `collaborate` (all types) or `gate` (blocking defects only). See [Surface mode](#surface-mode-gate-vs-collaborate). |
+| `suppress_disputed_classes` | `false` | Drop `category` classes this repo repeatedly rejects, using outcome history. See [Dispute-driven suppression](#dispute-driven-suppression). |
+| `dispute_suppress_threshold` | `0.5` | Dispute rate (0.0–1.0) at or above which a category is suppressed. Only when suppression is on. |
+| `dispute_suppress_min_samples` | `5` | Minimum recorded outcomes before a category's dispute rate is acted on. Only when suppression is on. |
+| `verify_findings` | `false` | Master switch for pre-post verification. See [Verification before posting](#verification-before-posting). |
+| `verify_lenses` | `["correctness", "in_diff", "reproduce"]` | Lenses run per finding (one LLM call each). |
+| `verify_min_votes` | `2` | Lenses that must vote "real" (≥ floor) for a finding to survive. |
+| `verify_confidence_floor` | `0.6` | Minimum verifier confidence (inclusive) for a real vote to count. |
+| `verify_max_findings` | `5` | Cap on findings verified per change; the rest post unverified. |
+| `verify_timeout_seconds` | `300` | Per-check wall-clock budget. |
+| `verify_command` | `[]` | Verifier argv. Empty reuses `reviewer_command`; set a different model for real diversity. |
+
+```toml
+[review]
+dry_run                        = true   # plan only; flip to false to start posting
+max_merge_requests_per_poll    = 8
+max_findings_per_merge_request = 8
+timeout_seconds                = 1800
+min_confidence                 = 0.85
+allowed_kinds                  = []     # [] = post everything above min_confidence
+tone                           = "terse"        # terse · collaborative · socratic · formal · casual
+mode                           = "collaborate"  # or "gate" for a merge-blocking lane
+
+# Opt-in precision levers (all off by default — see the subsections below):
+# category_min_confidence   = { style = 0.95, design = 0.95, performance = 0.92 }
+# calibrate_confidence      = false
+# suppress_disputed_classes = false
+# verify_findings           = false
+```
+
+## `[governance]`
+
+AI-code provenance capture (opt-in; off by default).
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `capture_provenance` | `false` | Record a banded AI-provenance signal per change for audit. Capture only — no review-behavior change. See [Governance & provenance](#governance-provenance). |
+| `ai_trailer_patterns` | built-in | Case-insensitive regexes matched against commit-message lines to detect *declared* AI assistance. Only when `capture_provenance` is on. |
+| `sensitive_path_globs` | `[]` | `fnmatch` globs flagged when a change touches sensitive paths, e.g. `payments/**`, `*.pem`. |
+| `rigor_modulation` | `false` | Phase 2. An escalated change gets a heightened-scrutiny prompt directive. Advisory; auto-implies the provenance fetch. |
+| `escalate_bands` | `["likely_ai", "collaborative"]` | Provenance bands that escalate. `unknown` never escalates. |
+| `rigor_require_sensitive` | `true` | Escalate only if the change also touches a `sensitive_path_globs` path; `false` escalates on band alone. |
+| `policy_mode` | `off` | `off` / `report-only` / `soft`. When not `off`, an auditable decision is recorded per change. All modes advisory. |
+
+```toml
+[governance]
+capture_provenance = false   # opt-in; capture only, never blocks a merge
+# sensitive_path_globs = ["payments/**", "**/auth/**", "*.pem"]
+# rigor_modulation     = false        # Phase 2 (advisory)
+# policy_mode          = "off"        # off · report-only · soft
+```
+
+## `[poller]`
+
+Filesystem layout and scheduling hints.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `state_dir` | `var` | Holds SQLite state, logs, reports, worktrees, and rendered prompts. |
+| `interval_seconds` | `900` | Suggested wait for long-running poll loops. Cron/systemd can use another interval. |
+| `target_merge_request_iid` | unset | Single-MR debug filter. **Leave unset in production.** |
+
+```toml
+[poller]
+state_dir        = "var"
+interval_seconds = 900
+# target_merge_request_iid = 123   # debug only; unset in production
+```
+
+## `[agents]`
+
+Review-agent CLI configuration.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `prompt_file` | `prompts/00-meta.md` | Meta prompt rendered before each review. |
+| `llm_model` | `gpt-5.5` | Model passed to the review wrapper. Keep `[telemetry]` pricing aligned for cost metrics. |
+| `llm_api_key` | unset | API key for whatever LLM you review with. Exported as `LLM_API_KEY` plus the name in `llm_api_key_env`. |
+| `llm_api_key_env` | `OPENAI_API_KEY` | The env-var name your LLM CLI reads the key from — `ANTHROPIC_API_KEY` (Claude), `GEMINI_API_KEY` (Gemini), etc. Bubo is model-agnostic and does not guess it. |
+| `reasoning_effort` | `medium` | `low` / `medium` / `high`. Higher is more thorough but costs more and runs longer. |
+| `dry_run` | `true` | Dry-run hint exported to the agent as `REVIEW_DRY_RUN`, separate from `[review].dry_run` (which controls poster posting). |
+| `codex_profile` | `bubo` | Codex profile used by the Codex wrapper. |
+| `codex_sandbox` | `read-only` | Filesystem access for Codex review runs. See [Troubleshooting](troubleshooting.md) for the bubblewrap/AppArmor caveat. |
+| `post_no_findings_comment` | `true` | Post one change-level "no issues found" ack on a clean review. Dedup'd by bot author + body; honors `[review].dry_run`. |
+| `no_findings_comment_body` | `"Automated review ran — no issues found."` | Body of that ack, posted verbatim. Must be byte-identical across re-reviews for dedup. Empty/whitespace disables it. |
+
+```toml
+[agents]
+prompt_file      = "prompts/00-meta.md"
+llm_model        = "gpt-5.5"
+llm_api_key      = "${LLM_API_KEY}"
+llm_api_key_env  = "OPENAI_API_KEY"   # ANTHROPIC_API_KEY for Claude, etc.
+reasoning_effort = "medium"
+codex_profile    = "bubo"
+codex_sandbox    = "read-only"
+post_no_findings_comment = true
+```
+
+## `[telemetry]`
+
+OpenTelemetry metrics, spans, and cost estimation.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `enabled` | `false` | Send OTel metrics and spans. SQLite state is written either way. |
+| `service_name` | `bubo` | Service name shown in the OTel backend. Use the same value across a fleet. |
+| `environment` | `prod` | Environment label for dashboards, e.g. `dev` / `staging` / `prod`. |
+| `otlp_endpoint` | `http://127.0.0.1:4317` | OTLP/gRPC collector endpoint for metrics and traces. |
+| `otlp_protocol` | `grpc` | OTLP transport. Only `grpc` is supported today (validated at startup). |
+| `export_interval_seconds` | `30` | Metric export interval. Lower is fresher, at more exporter overhead. |
+| `emit_finding_events` | `true` | Emit per-finding lifecycle metrics (planned, posted, skipped, resolved). |
+| `emit_outcome_sync` | `true` | Emit metrics when outcome sync checks posted-finding status. |
+| `input_per_1m` | `5.0` | Estimated input-token price per million tokens (cost metrics only). |
+| `output_per_1m` | `30.0` | Estimated output-token price per million tokens. |
+| `cached_input_per_1m` | `0.5` | Estimated cached-input price per million tokens. |
+
+```toml
+[telemetry]
+enabled                 = false   # turn on once an OTLP collector is running
+service_name            = "bubo"
+environment             = "prod"
+otlp_endpoint           = "http://127.0.0.1:4317"
+otlp_protocol           = "grpc"
+export_interval_seconds = 30
+input_per_1m            = 5.0     # keep these aligned with [agents].llm_model
+output_per_1m           = 30.0
+cached_input_per_1m     = 0.5
+```
+
+## `[mcp_server]`
+
+How `bubo-mcp` exposes itself. See [MCP server](mcp.md) for client setup.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `transport` | `stdio` | `stdio` (client spawns the process per session, no network, no auth) or `http` (long-lived daemon, bearer-token auth required). |
+| `host` | `127.0.0.1` | Bind address for `http`. `0.0.0.0` exposes it externally — put TLS in front. |
+| `port` | `8765` | Bind port for `http`. Pick anything free. |
+| `bearer_token` | unset | Required for `http`; clients must send `Authorization: Bearer <token>`. Prefer `${VAR}` interpolation so it never lands on disk. |
+
+```toml
+[mcp_server]
+transport = "stdio"   # or "http" for a long-lived daemon
+# host         = "127.0.0.1"
+# port         = 8765
+# bearer_token = "${BUBO_MCP_TOKEN}"   # required when transport = "http"
+```
+
+## `[[projects]]`
+
+One array-of-tables block per repository to review. Add as many as you want; the
+poller iterates them in order each cycle.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `path` | — | Project path to poll, e.g. `group/repo`. Sub-groups (`group/sub/repo`) are supported; do not pre-encode it. |
+| `enabled` | `true` | Turns polling for that project on or off without removing the block. |
+
+```toml
+[[projects]]
+path    = "group/repo"
+enabled = true
+
+[[projects]]
+path    = "group/another-repo"
+enabled = false   # kept in config but skipped
+```
 
 ## Review-comment tone (moods)
 
@@ -569,17 +512,10 @@ default and why it's fenced in:
   you re-pay the cost each interval until the change moves on. This mirrors
   how dry-run already re-plans findings every cycle.
 
-### Config keys
-
-| Key | Default | Meaning |
-|---|---|---|
-| `verify_findings` | `false` | Master switch. Off → the post path is byte-identical to today and no verifier is ever spawned. |
-| `verify_lenses` | `["correctness", "in_diff", "reproduce"]` | Lenses to run per finding (each is one LLM call). |
-| `verify_min_votes` | `2` | Lenses that must vote real (≥ floor) for the finding to survive. |
-| `verify_confidence_floor` | `0.6` | Minimum verifier confidence (inclusive) for a real vote to count. |
-| `verify_max_findings` | `5` | Cap on findings verified per change; the rest post unverified. |
-| `verify_timeout_seconds` | `300` | Per-check wall-clock budget. |
-| `verify_command` | `[]` | Verifier argv. Empty reuses `reviewer_command` (weaker, correlated); set a different model for real diversity. |
+The verifier keys (`verify_findings`, `verify_lenses`, `verify_min_votes`,
+`verify_confidence_floor`, `verify_max_findings`, `verify_timeout_seconds`,
+`verify_command`) and their defaults are listed in the [`[review]`](#review)
+table above.
 
 ## Governance & provenance
 
@@ -687,3 +623,30 @@ agree.
 Turning on either capability auto-implies the provenance fetch even if
 `capture_provenance = false` — the per-change commit read is what all three
 share.
+
+## Quick-start config
+
+A minimal `config/env.toml` to get a first review running — GitLab, dry-run on,
+one project. Copy it, fill in the two tokens, then `bubo doctor` and
+`bubo-poller`. Every key not shown falls back to the defaults documented above.
+
+```toml
+# config/env.toml — minimal GitLab setup. Secrets via ${ENV}; nothing real on disk.
+[scm]
+provider = "gitlab"            # set "github" and use a [github] block instead for PRs
+
+[gitlab]
+token = "${GITLAB_TOKEN}"      # personal-access token, api scope
+
+[review]
+dry_run = true                 # plan only; flip to false once a real review looks right
+
+[agents]
+llm_model       = "gpt-5.5"
+llm_api_key     = "${LLM_API_KEY}"
+llm_api_key_env = "OPENAI_API_KEY"   # ANTHROPIC_API_KEY for Claude, etc.
+
+[[projects]]
+path    = "group/repo"
+enabled = true
+```

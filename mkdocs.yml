@@ -25,6 +25,14 @@ edit_uri: edit/main/docs/
 # never drifts from what operators see when they browse the repo.
 docs_dir: docs
 
+# Pages excluded from the published site (source kept in-repo):
+#   examples/      — hidden until it has screenshots (the prose alone wasn't useful)
+#   references.md  — maintainer-facing design/citation notes, not user documentation
+# To restore one: drop its line here and add its nav entry back.
+exclude_docs: |
+  examples/
+  references.md
+
 theme:
   name: material
   # Toggleable dark / light mode driven by the user's system preference.
@@ -47,6 +55,7 @@ theme:
     - navigation.instant         # SPA-style page swaps (faster perceived load)
     - navigation.tracking        # URL fragment follows scroll position
     - navigation.sections        # Render top-level groups as sections in sidebar
+    - navigation.indexes         # Section label links to its own landing page
     - navigation.top             # "Back to top" button
     - search.suggest             # Inline search-as-you-type
     - search.highlight           # Highlight the query in result pages
@@ -61,18 +70,19 @@ theme:
 # from external posts keeps a working URL.
 nav:
   - Overview: index.md
+  - Features: features.md
   - How it works: how-it-works.md
   - Recipes: recipes.md
   - Prerequisites: prerequisites.md
-  - Install and configure: install-and-configure.md
-  - Run: run.md
-  - MCP server: mcp.md
-  - GitHub Action (CI review): github-action.md
+  - Install and configure:
+      - install-and-configure.md
+      - Run: run.md
+      - MCP server: mcp.md
+      - GitHub Action (CI review): github-action.md
   - Configuration reference: configuration.md
   - Operate: operate.md
+  - Troubleshooting: troubleshooting.md
   - Metrics & telemetry: telemetry.md
-  - Examples: examples/README.md
-  - References: references.md
 
 markdown_extensions:
   - admonition                   # !!! note / !!! warning blocks
