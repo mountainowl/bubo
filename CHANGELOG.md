@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/mountainowl/bubo/compare/v0.23.0...v0.24.0) (2026-06-17)
+
+
+### Features
+
+* descriptive runtime errors and sandbox troubleshooting docs ([#121](https://github.com/mountainowl/bubo/issues/121)) ([8aac5e1](https://github.com/mountainowl/bubo/commit/8aac5e11de1e5e10fdb5fe9760e36f94e3798a14))
+
 ## [0.23.0](https://github.com/mountainowl/bubo/compare/v0.22.0...v0.23.0) (2026-06-17)
 
 
