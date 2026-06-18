@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.1](https://github.com/mountainowl/bubo/compare/v0.24.0...v0.24.1) (2026-06-18)
+
+
+### Documentation
+
+* move "How it works" to its own page with a hand-drawn architecture diagram ([#123](https://github.com/mountainowl/bubo/issues/123)) ([1177a61](https://github.com/mountainowl/bubo/commit/1177a615a7d747af3c6008a5f2e60e1fd87ae1d4))
+
 ## [0.24.0](https://github.com/mountainowl/bubo/compare/v0.23.0...v0.24.0) (2026-06-17)
 
 
