@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.2](https://github.com/mountainowl/bubo/compare/v0.24.1...v0.24.2) (2026-06-18)
+
+
+### Documentation
+
+* site polish — Features, Troubleshooting, config restructure, slim README ([#125](https://github.com/mountainowl/bubo/issues/125)) ([b4e34c5](https://github.com/mountainowl/bubo/commit/b4e34c5bbff67354a549eec0a7da1286cadde7e4))
+
 ## [0.24.1](https://github.com/mountainowl/bubo/compare/v0.24.0...v0.24.1) (2026-06-18)
 
 
