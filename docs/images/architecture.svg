@@ -1,0 +1,119 @@
+<svg id="bubo-arch" viewBox="0 0 720 1000" width="720" height="1000" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bubo architecture: GitLab/GitHub changes flow into the poller, a forked review worker, the precision pipeline, then posting — with SQLite state and outcome-sync feedback loops. Solid arrows are synchronous (the per-change review path); dotted arrows are asynchronous (polling, fork-out, telemetry, deferred outcome sync, and the feedback loops)." font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <filter id="ba-soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="ba-ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="ba-arg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker>
+    <marker id="ba-arfb" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f59e0b"/></marker>
+  </defs>
+
+  <style>
+    #bubo-arch .ba-card  { fill:#ffffff; stroke:#e2e8f0; stroke-width:1; filter:url(#ba-soft); }
+    #bubo-arch .ba-src   { fill:#eef2ff; stroke:#c7d2fe; stroke-width:1; }
+    #bubo-arch .ba-gate  { fill:#eef2ff; stroke:#c7d2fe; stroke-width:1; }
+    #bubo-arch .ba-tag   { fill:#f8fafc; stroke:#e8edf3; stroke-width:1; }
+    #bubo-arch .ba-band  { fill:#f8fafc; fill-opacity:0.7; stroke:#e7ecf3; stroke-width:1; stroke-dasharray:4 4; }
+    #bubo-arch .ba-title { fill:#0f172a; font-size:14px; font-weight:600; }
+    #bubo-arch .ba-sub   { fill:#64748b; font-size:11.5px; }
+    #bubo-arch .ba-blab  { fill:#94a3b8; font-size:9.5px; font-weight:700; letter-spacing:1.4px; }
+    #bubo-arch .ba-tlab  { fill:#475569; font-size:11px; font-weight:500; }
+    #bubo-arch .ba-elab  { fill:#6366f1; font-size:10.5px; font-weight:600; }
+    #bubo-arch .ba-fblab { fill:#b45309; font-size:10.5px; font-weight:600; }
+    #bubo-arch .ba-leglab{ fill:#64748b; font-size:10.5px; font-weight:500; }
+    /* solid = synchronous */
+    #bubo-arch .ba-edge  { stroke:#cbd5e1; stroke-width:1.6; fill:none; }
+    #bubo-arch .ba-flow  { stroke:#6366f1; stroke-width:2;   fill:none; }
+    /* dotted = asynchronous */
+    #bubo-arch .ba-edged { stroke:#cbd5e1; stroke-width:1.6; fill:none; stroke-dasharray:5 4; }
+    #bubo-arch .ba-flowd { stroke:#6366f1; stroke-width:2;   fill:none; stroke-dasharray:5 4; }
+    #bubo-arch .ba-fb    { stroke:#f59e0b; stroke-width:1.6; fill:none; stroke-dasharray:5 4; }
+    @media (prefers-color-scheme: dark) {
+      #bubo-arch .ba-card { fill:#1e293b; stroke:#334155; }
+      #bubo-arch .ba-src, #bubo-arch .ba-gate { fill:#312e81; stroke:#4338ca; }
+      #bubo-arch .ba-tag { fill:#1e293b; stroke:#334155; }
+      #bubo-arch .ba-band { fill:#1e293b; fill-opacity:0.35; stroke:#334155; }
+      #bubo-arch .ba-title { fill:#f1f5f9; } #bubo-arch .ba-sub { fill:#94a3b8; }
+      #bubo-arch .ba-tlab { fill:#cbd5e1; } #bubo-arch .ba-leglab { fill:#94a3b8; }
+      #bubo-arch .ba-edge, #bubo-arch .ba-edged { stroke:#475569; }
+    }
+  </style>
+
+  <rect class="ba-band" x="120" y="232" width="360" height="104" rx="16"/>
+  <text class="ba-blab" x="138" y="252">REVIEW WORKER</text>
+  <rect class="ba-band" x="120" y="372" width="360" height="186" rx="16"/>
+  <text class="ba-blab" x="138" y="392">PRECISION PIPELINE</text>
+
+  <!-- async: poll the SCM; fork a worker per change -->
+  <path class="ba-edged" d="M190,78 C190,108 300,104 300,126" marker-end="url(#ba-arg)"/>
+  <path class="ba-edged" d="M410,78 C410,108 300,104 300,126" marker-end="url(#ba-arg)"/>
+  <path class="ba-flowd" d="M300,192 L300,260" marker-end="url(#ba-ar)"/>
+  <text class="ba-elab" x="311" y="228">fork per change</text>
+  <!-- sync: the per-change worker pipeline -->
+  <path class="ba-flow" d="M300,322 L300,402" marker-end="url(#ba-ar)"/>
+  <path class="ba-flow" d="M300,476 L300,500" marker-end="url(#ba-ar)"/>
+  <path class="ba-flow" d="M300,540 L300,596" marker-end="url(#ba-ar)"/>
+  <text class="ba-elab" x="311" y="572">survives</text>
+  <path class="ba-edge" d="M386,520 L500,520" marker-end="url(#ba-arg)"/>
+  <text class="ba-tlab" x="404" y="512" font-size="10px" fill="#94a3b8">refuted</text>
+  <path class="ba-edge" d="M300,660 L300,818" marker-end="url(#ba-arg)"/>
+  <!-- async: telemetry export; deferred outcome grading -->
+  <path class="ba-edged" d="M170,628 L152,628" marker-end="url(#ba-arg)"/>
+  <path class="ba-edged" d="M430,628 H533 Q545,628 545,640 V710" marker-end="url(#ba-arg)"/>
+  <text class="ba-tlab" x="552" y="686" font-size="10px">grade</text>
+  <path class="ba-edged" d="M430,749 H382 Q370,749 370,761 V815" marker-end="url(#ba-arg)"/>
+
+  <!-- async feedback loops -->
+  <path class="ba-fb" d="M410,840 H692 Q704,840 704,828 V173 Q704,161 692,161 H434" marker-end="url(#ba-arfb)"/>
+  <text class="ba-fblab" x="556" y="150">dedup · no double-post</text>
+  <path class="ba-fb" d="M660,749 H672 Q684,749 684,737 V452 Q684,440 672,440 H434" marker-end="url(#ba-arfb)"/>
+  <text class="ba-fblab" x="490" y="432">dispute rates feed calibration</text>
+
+  <rect class="ba-src" x="110" y="32" width="160" height="46" rx="23"/>
+  <text class="ba-title" x="190" y="60" text-anchor="middle" font-size="13px">GitLab MRs</text>
+  <rect class="ba-src" x="330" y="32" width="160" height="46" rx="23"/>
+  <text class="ba-title" x="410" y="60" text-anchor="middle" font-size="13px">GitHub PRs</text>
+
+  <rect class="ba-card" x="170" y="126" width="260" height="64" rx="14"/>
+  <text class="ba-title" x="300" y="151" text-anchor="middle">Poller</text>
+  <text class="ba-sub"   x="300" y="170" text-anchor="middle">discover changes · skip seen SHAs</text>
+
+  <rect class="ba-card" x="170" y="262" width="260" height="60" rx="13"/>
+  <text class="ba-title" x="300" y="286" text-anchor="middle" font-size="13.5px">Review worker</text>
+  <text class="ba-sub"   x="300" y="305" text-anchor="middle" font-size="11px">checkout · provenance · agent skill · normalize</text>
+
+  <rect class="ba-card" x="170" y="404" width="260" height="72" rx="13"/>
+  <text class="ba-title" x="300" y="428" text-anchor="middle" font-size="13.5px">Policy filter</text>
+  <text class="ba-sub"   x="300" y="447" text-anchor="middle">confidence + per-class calibration</text>
+  <text class="ba-sub"   x="300" y="463" text-anchor="middle" font-size="11px">mode: gate / collaborate · suppression</text>
+
+  <rect class="ba-gate" x="214" y="500" width="172" height="40" rx="20"/>
+  <text class="ba-title" x="300" y="525" text-anchor="middle" font-size="12.5px">Verify? · opt-in lenses</text>
+
+  <rect class="ba-tag" x="500" y="500" width="180" height="40" rx="12"/>
+  <text class="ba-tlab" x="590" y="524" text-anchor="middle">recorded as refuted</text>
+
+  <rect class="ba-card" x="170" y="596" width="260" height="64" rx="14"/>
+  <text class="ba-title" x="300" y="621" text-anchor="middle">Post</text>
+  <text class="ba-sub"   x="300" y="640" text-anchor="middle" font-size="11px">inline · or PLANNED (dry-run) · 'all good'</text>
+
+  <rect class="ba-tag" x="20" y="606" width="132" height="44" rx="12"/>
+  <text class="ba-tlab" x="86" y="624" text-anchor="middle" font-size="10.5px">OpenTelemetry</text>
+  <text class="ba-tlab" x="86" y="639" text-anchor="middle" font-size="10px" fill="#94a3b8">per-stage spans</text>
+
+  <rect class="ba-card" x="430" y="714" width="230" height="70" rx="13"/>
+  <text class="ba-title" x="545" y="738" text-anchor="middle" font-size="13px">Outcome sync</text>
+  <text class="ba-sub"   x="545" y="756" text-anchor="middle" font-size="11px">--sync-outcomes, later</text>
+  <text class="ba-sub"   x="545" y="771" text-anchor="middle" font-size="10px">resolved · disputed · merged</text>
+
+  <path class="ba-card" d="M190,832 v46 a110,13 0 0 0 220,0 v-46" filter="none"/>
+  <ellipse cx="300" cy="832" rx="110" ry="13" fill="#ffffff" stroke="#e2e8f0"/>
+  <text class="ba-title" x="300" y="858" text-anchor="middle" font-size="13px">SQLite state</text>
+  <text class="ba-sub"   x="300" y="875" text-anchor="middle" font-size="10.5px">SHAs · fingerprints · outcomes</text>
+
+  <!-- legend -->
+  <line class="ba-edge"  x1="28" y1="930" x2="60" y2="930" marker-end="url(#ba-arg)"/>
+  <text class="ba-leglab" x="68" y="934">sync</text>
+  <line class="ba-edged" x1="28" y1="954" x2="60" y2="954" marker-end="url(#ba-arg)"/>
+  <text class="ba-leglab" x="68" y="958">async</text>
+</svg>

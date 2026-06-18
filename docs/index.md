@@ -94,31 +94,10 @@ repeated polls reuse it instead of stacking duplicates.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A["Open<br/>MRs / PRs"]
-    B["Poller<br/>+ SQLite state"]
-    C["Forked<br/>review worker"]
-    D["Agent skill<br/>(Codex / Claude)"]
-    E["Inline review<br/>discussions"]
-    F["OpenTelemetry<br/>+ outcome sync"]
-    A --> B --> C --> D --> E --> F
-```
-
-1. **Discover.** List open MRs/PRs per project, skipping any already reviewed at
-   the current head SHA.
-2. **Review.** Fork a worker, check out the diff, run the agent skill, parse the
-   findings.
-3. **Post.** Map each finding to a changed line and post it inline — or store it
-   as "planned" when `dry_run` is on.
-4. **Acknowledge.** Zero findings → one change-level "all good" comment.
-5. **Persist.** SQLite remembers reviewed SHAs and finding fingerprints, so Bubo
-   never spams or double-posts.
-6. **Grade.** `--sync-outcomes` later checks which findings were resolved,
-   replied to, disputed, deleted, or merged unresolved.
-
-Bubo isn't trying to be the code-review brain — it orchestrates SCM access,
-state, prompting, posting, and metrics. The review smarts live in your CLI skill.
+Bubo orchestrates SCM access, state, prompting, filtering, posting, and metrics —
+the review smarts live in your CLI skill. **[How it works](how-it-works.md)**
+walks the full pipeline and architecture, including the precision filter and the
+outcome-driven learning loop.
 
 ## Install
 
@@ -137,6 +116,7 @@ review-agent CLI is BYO). Full walkthrough in
 
 | Doc | What's in it |
 |---|---|
+| [How it works](how-it-works.md) | The full pipeline + architecture diagram, the precision filter, and the outcome-driven learning loop |
 | [Prerequisites](prerequisites.md) | macOS / Linux runtime, per-provider tools, credentials, install verification |
 | [Install and configure](install-and-configure.md) | `uv tool install`, `bubo init`, minimum `env.toml`, GitLab and GitHub bot setup |
 | [Run](run.md) | One-off review, the poller, the bundled `bubo-mcp` MCP server (three deployment patterns) |

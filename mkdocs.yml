@@ -61,6 +61,7 @@ theme:
 # from external posts keeps a working URL.
 nav:
   - Overview: index.md
+  - How it works: how-it-works.md
   - Recipes: recipes.md
   - Prerequisites: prerequisites.md
   - Install and configure: install-and-configure.md
