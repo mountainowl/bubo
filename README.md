@@ -16,14 +16,14 @@
 MRs and GitHub PRs with the model *you* run, and posts only the findings worth
 acting on as inline threads — no chatbot noise, no praise, no summaries.
 
-- 🔒 **Self-hosted** — code, diffs, and review data stay on your infrastructure
-- 🧠 **Bring-your-own-LLM** — Codex, Claude, or any model your CLI drives
-- 🔀 **GitLab & GitHub** — one config, identical behavior on both
-- 🎯 **Inline findings only** — with one "all good" ack on a clean change
-- 🛡️ **Governance, provenance & an auditable on-prem report**
-- 📊 **OpenTelemetry metrics** — cosign-signed releases with SBOMs
+-  **Self-hosted** — code, diffs, and review data stay on your infrastructure
+-  **Bring-your-own-LLM** — Codex, Claude, or any model your CLI drives
+-  **SCM** — Currently supports Gitlab and Github 
+-  **findings** — Inline or "all good" if clean
+-  **Governance, provenance & an auditable on-prem report** - cosign-signed releases with SBOMs
+-  **Metrics** — Opentelemetry 
 
-📖 **Full documentation → [mountainowl.github.io/bubo](https://mountainowl.github.io/bubo/)**
+**Full documentation → [mountainowl.github.io/bubo](https://mountainowl.github.io/bubo/)**
 
 ## Install
 
