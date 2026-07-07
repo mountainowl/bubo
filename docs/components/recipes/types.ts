@@ -30,6 +30,12 @@ export type Ctx = {
   agentCliName: string
   os: OsFragment
   toml: string
+  // Agent auth: the poller strips the LLM key from the review agent's env, so the
+  // agent carries its own login. Codex logs in from the key; Claude brings its own
+  // login; a base_url gateway reads the key from the env. `agentAuth` is the local
+  // shell line; `agentAuthDocker` is the in-container form.
+  agentAuth: string
+  agentAuthDocker: (home: string, image: string) => string
 }
 
 export type ScmFragment = {

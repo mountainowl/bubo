@@ -34,6 +34,23 @@ ${af.configBlock}
 path = "${sf.projectPath}"
 enabled = true`
 
+  const keyEnv = af.keyEnv
+  const shellIsPwsh = OS_FRAG[os].shell === 'powershell'
+  const noLoginNote =
+    agent === 'claude'
+      ? '# Claude brings its own login — run `claude` once to sign in before the first review.'
+      : '# The gateway key reaches the agent via LLM_API_KEY (base_url mode) — no separate login.'
+  const agentAuth =
+    agent === 'codex'
+      ? shellIsPwsh
+        ? `$env:${keyEnv} | codex login --with-api-key`
+        : `printf '%s' "$${keyEnv}" | codex login --with-api-key`
+      : noLoginNote
+  const agentAuthDocker = (home: string, image: string) =>
+    agent === 'codex'
+      ? `docker run --rm -v "${home}:/home/bubo" -e ${keyEnv} ${image} sh -c 'printf "%s" "$${keyEnv}" | codex login --with-api-key'`
+      : noLoginNote
+
   const ctx: Ctx = {
     scmEnv: SCM[scm].env,
     scmPrefix: SCM[scm].prefix,
@@ -43,6 +60,8 @@ enabled = true`
     agentCliName: af.cliName,
     os: OS_FRAG[os],
     toml,
+    agentAuth,
+    agentAuthDocker,
   }
 
   const gatewayLine =
@@ -125,9 +144,10 @@ On the target machine, in order:
 1. **Validate** — parse the context, probe \`remote_host\` if remote, change nothing; then wait for the gate phrase \`install bubo\`.
 2. **Prerequisites** — install for the target OS: \`uv\` + \`git\` + the agent CLI, or Docker.
 3. **Bubo** — install via the chosen method from \`source\` at \`version\`.
-4. **Configure** — run \`bubo init\`, then write \`env.toml\` from the context (scm + token, agent + key, repository, \`dry_run\`).
-5. **Verify** — run \`bubo doctor\`; resolve any failure.
-6. **Schedule** — unless \`poll\` is \`off\`, run ${tick} every \`poll\` via ${sched} (one cycle per run).
+4. **Configure** — run \`bubo init --no-agent-config\`, write \`env.toml\` from the context (scm + token, agent + key, repository, \`dry_run\`), then run \`bubo init\` to template the agent profile from it.
+5. **Authenticate the agent** — the default Codex agent logs in from the key (\`codex login --with-api-key\`, key on stdin); a custom \`reviewer_command\` (e.g. Claude) brings its own login; a \`llm_base_url\` gateway needs none. Skip if the target already authenticates the agent.
+6. **Verify** — run \`bubo doctor\`; resolve any failure.
+7. **Schedule** — unless \`poll\` is \`off\`, run ${tick} every \`poll\` via ${sched} (one cycle per run).
 </install>
 
 <report>

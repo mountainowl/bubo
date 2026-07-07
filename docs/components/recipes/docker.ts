@@ -42,13 +42,13 @@ docker build -t bubo-local .`
   configCode: (ctx) => {
     if (ctx.os.shell === 'powershell') {
       return `New-Item -ItemType Directory -Force -Path "${HOME_PWSH}" | Out-Null
-docker run --rm -v "${HOME_PWSH}:/home/bubo" bubo-local bubo init
+docker run --rm -v "${HOME_PWSH}:/home/bubo" bubo-local bubo init --no-agent-config
 @"
 ${ctx.toml}
 "@ | Set-Content -Path "${HOME_PWSH}\\.local\\share\\bubo\\config\\env.toml" -Encoding utf8`
     }
     return `mkdir -p "${HOME_BASH}"
-docker run --rm -v "${HOME_BASH}:/home/bubo" bubo-local bubo init
+docker run --rm -v "${HOME_BASH}:/home/bubo" bubo-local bubo init --no-agent-config
 
 cat > "${HOME_BASH}/.local/share/bubo/config/env.toml" <<'EOF'
 ${ctx.toml}
@@ -59,6 +59,8 @@ EOF`
     return `${ctx.os.exportLine(ctx.scmEnv, `<${ctx.scmPrefix}>`)}
 ${ctx.os.exportLine(ctx.agentKeyEnv, `<your-${ctx.agentKeyName.toLowerCase()} key>`)}
 
+docker run --rm -v "${home}:/home/bubo" bubo-local bubo init   # template the agent profile from the config
+${ctx.agentAuthDocker(home, 'bubo-local')}
 docker run --rm -v "${home}:/home/bubo" -e ${ctx.scmEnv} -e ${ctx.agentKeyEnv} bubo-local bubo-poller`
   },
 }

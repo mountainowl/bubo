@@ -192,6 +192,21 @@ export function buildScript(agent: Agent, os: OS, scm: Scm, install: Method): st
   const a = AGENT[agent]
   const s = SCM[scm]
 
+  // Agent auth: the poller strips the LLM key from the review agent's env, so the
+  // agent must carry its own login. Codex logs in from the key (writes auth.json,
+  // read back via the allowlisted CODEX_HOME); Claude is a custom reviewer_command
+  // that brings its own login.
+  const isCodex = agent === 'codex'
+  const claudeNote =
+    '# Claude brings its own login — run `claude` once to sign in before the first review.'
+  const authBash = isCodex
+    ? `printf '%s' "$${a.keyEnv}" | codex login --with-api-key`
+    : claudeNote
+  const authPwsh = isCodex ? `$env:${a.keyEnv} | codex login --with-api-key` : claudeNote
+  const authDocker = isCodex
+    ? `brun sh -c 'printf "%s" "$${a.keyEnv}" | codex login --with-api-key'`
+    : '# Claude brings its own login — `brun claude` (or exec into the container) to sign in first.'
+
   // Docker → bubo's image is BYO-agent, so derive one with the CLI baked in and
   // persist /home/bubo (config + agent profile + SQLite) via one bind mount.
   if (install === 'docker') {
@@ -225,8 +240,8 @@ docker build -t bubo-local .
 # 2) run bubo in the container, persisting its home
 function brun { docker run --rm -v "$WORKDIR\\home:/home/bubo" -e ${a.keyEnv} -e ${s.env} bubo-local @args }
 
-# 3) initialise, then write config
-brun bubo init
+# 3) create the workspace, write config, then template the agent profile from it
+brun bubo init --no-agent-config
 @"
 [scm]
 provider = "${scm}"
@@ -242,8 +257,12 @@ llm_api_key = "$env:${a.keyEnv}"${reviewerPwsh}
 path = "$PROJECT"
 enabled = true
 "@ | Set-Content -Path "$WORKDIR\\home\\.local\\share\\bubo\\config\\env.toml" -Encoding utf8
+brun bubo init
 
-# 4) verify + first (dry-run) review
+# 4) authenticate the review agent (logs in here — the key never enters the agent's env)
+${authDocker}
+
+# 5) verify + first (dry-run) review
 brun bubo doctor
 brun bubo-poller`
     }
@@ -280,8 +299,8 @@ brun() {
     -e ${a.keyEnv} -e ${s.env} bubo-local "$@"
 }
 
-# 3) initialise, then write config
-brun bubo init
+# 3) create the workspace, write config, then template the agent profile from it
+brun bubo init --no-agent-config
 cat > "$WORKDIR/home/.local/share/bubo/config/env.toml" <<EOF
 [scm]
 provider = "${scm}"
@@ -297,8 +316,12 @@ llm_api_key = "\${${a.keyEnv}}"${reviewer}
 path = "\${PROJECT}"
 enabled = true
 EOF
+brun bubo init
 
-# 4) verify + first (dry-run) review
+# 4) authenticate the review agent (logs in here — the key never enters the agent's env)
+${authDocker}
+
+# 5) verify + first (dry-run) review
 brun bubo doctor
 brun bubo-poller`
   }
@@ -323,8 +346,8 @@ ${a.cli}
 # 2) install bubo
 ${installPwsh}
 
-# 3) initialise + write config
-bubo init
+# 3) create the workspace, write config, then template the agent profile
+bubo init --no-agent-config
 $root = if ($env:BUBO_ROOT) { $env:BUBO_ROOT } else { "$env:USERPROFILE\\.local\\share\\bubo" }
 @"
 [scm]
@@ -341,8 +364,12 @@ llm_api_key = "$env:${a.keyEnv}"${reviewerPwsh}
 path = "$PROJECT"
 enabled = true
 "@ | Set-Content -Path "$root\\config\\env.toml" -Encoding utf8
+bubo init
 
-# 4) verify + run the first (dry-run) review
+# 4) authenticate the review agent (logs in here — the key never enters the agent's env)
+${authPwsh}
+
+# 5) verify + run the first (dry-run) review
 bubo doctor
 bubo-poller`
   }
@@ -368,8 +395,8 @@ ${a.cli}
 # 2) install bubo
 ${INSTALL_LINE[install]}
 
-# 3) initialise + write config
-bubo init
+# 3) create the workspace, write config, then template the agent profile from it
+bubo init --no-agent-config
 CFG="\${BUBO_ROOT:-$HOME/.local/share/bubo}/config/env.toml"
 cat > "$CFG" <<EOF
 [scm]
@@ -386,8 +413,12 @@ llm_api_key = "\${${a.keyEnv}}"${reviewer}
 path = "\${PROJECT}"
 enabled = true
 EOF
+bubo init
 
-# 4) verify + run the first (dry-run) review
+# 4) authenticate the review agent (logs in here — the key never enters the agent's env)
+${authBash}
+
+# 5) verify + run the first (dry-run) review
 bubo doctor
 bubo-poller`
 }

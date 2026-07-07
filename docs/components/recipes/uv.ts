@@ -12,12 +12,15 @@ export const uv: InstallFragment = {
   ],
   prereqInstall: (ctx) => ctx.os.prereqInstall(ctx.agentCli),
   installCode: () => `uv tool install bubo`,
-  initIntro: 'Run bubo init to seed the config, then open it and fill in the minimum:',
+  initIntro:
+    'Run bubo init --no-agent-config to seed the config, then open it and fill in the minimum:',
   configCode: (ctx) => `# ${ctx.os.configPath}
 ${ctx.toml}`,
   runCode: (ctx) => `${ctx.os.exportLine(ctx.scmEnv, `<${ctx.scmPrefix}>`)}
 ${ctx.os.exportLine(ctx.agentKeyEnv, `<your-${ctx.agentKeyName.toLowerCase()} key>`)}
 
+bubo init        # template the agent profile from the config you just edited
+${ctx.agentAuth}
 bubo doctor      # checks workspace, config, DB, and the agent profile
 bubo-poller      # one poll cycle — dry-run by default, so it posts nothing`,
 }
