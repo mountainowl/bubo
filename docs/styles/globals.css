@@ -1,0 +1,22 @@
+/* Site-wide code font.
+   Use JetBrains Mono for every code / terminal element, overriding the
+   Nextra theme's default ui-monospace stack on the docs pages too. The
+   webfont itself is loaded from theme.config.tsx's <Head>. */
+:root {
+  --code-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo,
+    Consolas, 'Liberation Mono', monospace;
+}
+
+code,
+pre,
+kbd,
+samp,
+tt {
+  font-family: var(--code-mono) !important;
+}
+
+/* Highlight spans inside fenced blocks inherit from <pre>/<code>, but force
+   them in case a utility class sets font-family directly on the span. */
+:is(pre, code) * {
+  font-family: var(--code-mono) !important;
+}

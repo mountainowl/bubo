@@ -1,0 +1,9 @@
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="uv">
+  <defs>
+    <linearGradient id="uvBolt" x1="3" y1="2" x2="21" y2="22" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7c3aed" />
+      <stop offset="1" stop-color="#4f46e5" />
+    </linearGradient>
+  </defs>
+  <path d="M13.2 2 4 13.6h5.6L10.8 22 20 10.4h-5.6z" fill="url(#uvBolt)" />
+</svg>

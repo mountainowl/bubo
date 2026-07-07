@@ -1,0 +1,317 @@
+# Configuration reference
+
+Bubo reads one runtime config file: `config/env.toml` under `BUBO_ROOT`.
+
+Start from the packaged template:
+
+```sh
+bubo init
+# or, from a source checkout:
+cp config/env.example.toml config/env.toml
+```
+
+`config/env.toml` is local operator state. Do not commit real tokens.
+
+String values support environment-variable interpolation:
+
+```toml
+token = "${GITLAB_TOKEN}"                         # required; fails if unset
+url   = "${GITLAB_URL:-https://gitlab.com}"       # fallback when unset
+```
+
+Use `$$` for a literal dollar sign.
+
+## Runtime requirements
+
+| Resource | Minimum | Recommended | Notes |
+|---|---:|---:|---|
+| CPU | 2 vCPU | 4 vCPU | Git checkout, JSON parsing, and agent subprocesses. |
+| RAM | 2 GB | 4 GB | Increase with review concurrency. |
+| Disk | 10 GB | 20 GB+ | Worktrees, SQLite state, logs, reports, and agent installs. |
+| Network | outbound HTTPS | outbound HTTPS | SCM host and LLM provider access. No inbound port is required for polling. |
+
+Required tools:
+
+| Tool | Required for |
+|---|---|
+| Python 3.14+ | Bubo runtime. |
+| Node.js | Codex or Claude CLI installs. |
+| `git` | Repository checkout. |
+| `glab` | GitLab checkout and GitLab tooling. |
+| `gh` | GitHub checkout and GitHub tooling. |
+| Codex, Claude, or another CLI agent | Review execution. |
+
+## `[scm]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `provider` | string | `"gitlab"` | SCM backend. Allowed: `"gitlab"`, `"github"`. `BUBO_PROVIDER` overrides this for one run. |
+
+## `[gitlab]`
+
+Used when `[scm].provider = "gitlab"`.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `url` | string | `"https://gitlab.com"` | GitLab web URL. Use your self-hosted GitLab URL when needed. |
+| `api_url` | string | `"<url>/api/v4"` | GitLab REST API URL used by GitLab tools. |
+| `bot_username` | string | unset | Bot username used to separate bot comments from developer replies. |
+| `denied_tools_regex` | string | `"^(delete_.*\|merge_merge_request\|push_files)$"` | GitLab MCP tool names blocked inside the review agent. |
+| `token` | string | unset | GitLab token. Exported as `GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, and `GLAB_TOKEN`. Requires `api` scope. |
+
+## `[github]`
+
+Used when `[scm].provider = "github"`.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `api_url` | string | `"https://api.github.com"` | GitHub REST API base. Use `https://<host>/api/v3` for GitHub Enterprise Server. |
+| `bot_username` | string | unset | Bot username used to separate bot comments from developer replies. |
+| `token` | string | unset | GitHub token. Exported as `GITHUB_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, and `GH_TOKEN`. Requires pull-request read/write access. |
+
+## `[review]`
+
+Controls polling, filtering, and review-output policy.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `dry_run` | boolean | `true` | Store planned findings without posting SCM comments. |
+| `max_merge_requests_per_poll` | integer | `5` | Maximum MRs/PRs queued by one poll cycle. |
+| `max_findings_per_merge_request` | integer | `5` | Maximum findings accepted from one review. Also fills `{{MAX_FINDINGS_PER_REVIEW}}` in the prompt. |
+| `timeout_seconds` | integer | `1800` | Per-review worker timeout. |
+| `min_confidence` | number | `0.85` | Minimum finding confidence required to plan or post. |
+| `category_min_confidence` | table | `{}` | Per-canonical-category confidence floors. Only raises the global floor. |
+| `calibrate_confidence` | boolean | `false` | Derive category floors from repository outcome history. |
+| `calibrate_max_confidence` | number | `0.97` | Maximum derived category floor. |
+| `allowed_kinds` | string array | `[]` | Optional allowlist matched against finding `severity`, `category`, or `type`. Empty means no kind filter. |
+| `tone` | string | `"terse"` | Comment voice. Allowed: `"terse"`, `"collaborative"`, `"socratic"`, `"formal"`, `"casual"`. |
+| `mode` | string | `"collaborate"` | Surface mode. Allowed: `"collaborate"`, `"gate"`. |
+| `suppress_disputed_classes` | boolean | `false` | Suppress finding categories repeatedly disputed on the same repository. |
+| `dispute_suppress_threshold` | number | `0.5` | Dispute rate required before a category can be suppressed. |
+| `dispute_suppress_min_samples` | integer | `5` | Minimum outcome rows required before suppression can apply. |
+| `verify_findings` | boolean | `false` | Re-check surviving findings before planning/posting. |
+| `verify_lenses` | string array | `["correctness", "in_diff", "reproduce"]` | Verification lenses. Each lens is one verifier call per finding. |
+| `verify_min_votes` | integer | `2` | Number of verifier votes required for a finding to survive. |
+| `verify_confidence_floor` | number | `0.6` | Minimum verifier confidence for a real vote to count. |
+| `verify_max_findings` | integer | `5` | Maximum findings verified per change. Findings beyond the cap post unverified. |
+| `verify_timeout_seconds` | integer | `300` | Timeout for each verifier call. |
+| `verify_command` | string array | `[]` | Verifier command. Empty reuses `[agents].reviewer_command`. |
+
+Canonical categories for `category_min_confidence`: `correctness`, `security`,
+`concurrency`, `resource`, `error_handling`, `performance`, `style`, `docs`,
+`test`, `design`, `naming`, `other`.
+
+## `[governance]`
+
+Controls AI-code provenance and advisory governance signals.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `capture_provenance` | boolean | `false` | Capture per-change AI-provenance bands for audit. |
+| `ai_trailer_patterns` | string array | built-in patterns | Regexes matched against commit-message lines for declared AI assistance. |
+| `sensitive_path_globs` | string array | `[]` | `fnmatch` globs for sensitive paths, such as `payments/**` or `*.pem`. |
+| `rigor_modulation` | boolean | `false` | Add heightened-scrutiny prompt context when a change escalates. |
+| `escalate_bands` | string array | `["likely_ai", "collaborative"]` | Provenance bands that escalate. Allowed bands: `unknown`, `likely_ai`, `collaborative`. |
+| `rigor_require_sensitive` | boolean | `true` | Require a sensitive-path match before escalation. |
+| `policy_mode` | string | `"off"` | Advisory policy mode. Allowed: `"off"`, `"report-only"`, `"soft"`. |
+
+## `[poller]`
+
+Controls state location and single-MR debug targeting.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `state_dir` | string | `"var"` | Runtime state directory. Relative paths resolve under `BUBO_ROOT`. |
+| `interval_seconds` | integer | `900` | Suggested interval for long-running wrappers. Cron/systemd can use their own interval. |
+| `target_merge_request_iid` | integer | unset | Debug filter for one GitLab MR IID. Leave unset in production. |
+
+## `[agents]`
+
+Controls the review agent command and agent-facing environment.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `reviewer_command` | string array | `["codex", "--ask-for-approval", "never", "exec", "--profile", "bubo", "--skip-git-repo-check"]` | Command prefix used to run the review agent. The review prompt is appended as the final argument. |
+| `llm_model` | string | unset | Model label used for review metadata and cost attribution. |
+| `llm_api_key` | string | unset | LLM API key. Exported as `LLM_API_KEY` and optionally as `llm_api_key_env`. |
+| `llm_api_key_env` | string | unset | Provider-specific env var name, such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`. |
+| `reasoning_effort` | string | `"medium"` | Exported as `REVIEW_REASONING_EFFORT` for agents that honor it. |
+| `dry_run` | boolean | `true` | Exported as `REVIEW_DRY_RUN` for the agent. Posting is controlled by `[review].dry_run`. |
+| `codex_profile` | string | `"bubo"` | Exported as `CODEX_REVIEW_PROFILE`. Used by Codex-based reviewer commands. |
+| `codex_sandbox` | string | `"read-only"` | Exported as `CODEX_SANDBOX`. Used by Codex-based reviewer commands. |
+| `post_no_findings_comment` | boolean | `true` | Post one change-level acknowledgement when a review finds no actionable issues. Honors `[review].dry_run`. |
+| `no_findings_comment_body` | string | `"Automated review ran — no issues found."` | Body for the no-findings acknowledgement. Empty disables the acknowledgement. |
+
+Prompt path note: the runtime reads `prompts/00-meta.md` under `BUBO_ROOT`.
+Set `BUBO_PROMPT_SOURCE` to use another prompt file.
+
+## `[telemetry]`
+
+Controls OpenTelemetry and cost estimation.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Export metrics and spans to an OTLP collector. SQLite state is written either way. |
+| `service_name` | string | `"bubo"` | OTel service name. |
+| `environment` | string | `"dev"` | Environment label, such as `dev`, `staging`, or `prod`. |
+| `otlp_endpoint` | string | `""` | OTLP/gRPC collector endpoint. |
+| `otlp_protocol` | string | `"grpc"` | Only `grpc` is supported. |
+| `export_interval_seconds` | integer | `30` | Metric export interval. |
+| `emit_finding_events` | boolean | `true` | Emit per-finding lifecycle metrics. |
+| `emit_outcome_sync` | boolean | `true` | Emit outcome-sync metrics. |
+| `input_per_1m` | number | `0.0` | Estimated input-token price per 1M tokens. |
+| `output_per_1m` | number | `0.0` | Estimated output-token price per 1M tokens. |
+| `cached_input_per_1m` | number | `0.0` | Estimated cached-input price per 1M tokens. |
+
+## `[mcp_server]`
+
+Controls the `bubo-mcp` server. See [MCP server](/mcp) for client setup.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `transport` | string | `"stdio"` | Allowed: `"stdio"`, `"http"`. |
+| `host` | string | `"127.0.0.1"` | HTTP bind address. Ignored for `stdio`. |
+| `port` | integer | `8765` | HTTP bind port. Ignored for `stdio`. |
+| `bearer_token` | string | unset | Required for HTTP transport. Clients send `Authorization: Bearer <token>`. |
+
+## `[[projects]]`
+
+One block per repository.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `path` | string | required | Repository path, such as `group/repo`, `group/subgroup/repo`, or `owner/repo`. |
+| `enabled` | boolean | `true` | Include or skip the repository during polling. |
+
+## Direct environment overrides
+
+| Variable | Description |
+|---|---|
+| `BUBO_ROOT` | Install root. Defaults to `~/.local/share/bubo`. |
+| `BUBO_BASE_DIR` | Runtime state directory. Usually derived from `[poller].state_dir`. |
+| `BUBO_PROVIDER` | Overrides `[scm].provider` for one run. |
+| `BUBO_PROMPT_SOURCE` | Overrides the prompt template path. |
+| `BUBO_MCP_TRANSPORT` | Overrides `[mcp_server].transport`. |
+| `BUBO_MCP_HOST` | Overrides `[mcp_server].host`. |
+| `BUBO_MCP_PORT` | Overrides `[mcp_server].port`. |
+| `BUBO_MCP_BEARER_TOKEN` | Overrides `[mcp_server].bearer_token`. |
+
+## Runtime files
+
+| Path | Description |
+|---|---|
+| `$BUBO_ROOT/config/env.toml` | Operator config. |
+| `$BUBO_BASE_DIR/state/reviewer.sqlite` | Review state, findings, and outcomes. |
+| `$BUBO_BASE_DIR/work/` | Per-change worktrees. |
+| `$BUBO_BASE_DIR/reports/` | Agent transcripts. |
+| `$BUBO_BASE_DIR/log/` | JSON-line logs. |
+| `$BUBO_BASE_DIR/rendered-prompts/` | Rendered prompt files. |
+| `$BUBO_ROOT/prompts/00-meta.md` | Default prompt template. |
+| `$BUBO_ROOT/skills/code-reviewer/` | Bundled review skill. |
+| `~/.codex/config.toml` | Codex client config written by `bubo init`, unless skipped. |
+| `~/.claude/settings.json` | Claude settings written by `bubo init`, unless skipped. |
+
+## Sample `config/env.toml`
+
+This sample uses GitLab, Codex, dry-run reviews, no HTTP MCP server, and local
+SQLite state. Change only the provider block and project paths for GitHub.
+
+```toml
+[scm]
+provider = "gitlab"
+
+[gitlab]
+url                = "https://gitlab.com"
+api_url            = "https://gitlab.com/api/v4"
+bot_username       = "bubo"
+denied_tools_regex = "^(delete_.*|merge_merge_request|push_files)$"
+token              = "${GITLAB_TOKEN}"
+
+[github]
+api_url      = "https://api.github.com"
+bot_username = "bubo"
+# token      = "${GITHUB_TOKEN}"
+
+[review]
+dry_run                        = true
+max_merge_requests_per_poll    = 5
+max_findings_per_merge_request = 5
+timeout_seconds                = 1800
+min_confidence                 = 0.85
+category_min_confidence        = {}
+calibrate_confidence           = false
+calibrate_max_confidence       = 0.97
+allowed_kinds                  = []
+tone                           = "terse"
+mode                           = "collaborate"
+suppress_disputed_classes      = false
+dispute_suppress_threshold     = 0.5
+dispute_suppress_min_samples   = 5
+verify_findings                = false
+verify_lenses                  = ["correctness", "in_diff", "reproduce"]
+verify_min_votes               = 2
+verify_confidence_floor        = 0.6
+verify_max_findings            = 5
+verify_timeout_seconds         = 300
+verify_command                 = []
+
+[governance]
+capture_provenance    = false
+sensitive_path_globs  = []
+rigor_modulation      = false
+escalate_bands        = ["likely_ai", "collaborative"]
+rigor_require_sensitive = true
+policy_mode           = "off"
+
+[poller]
+state_dir        = "var"
+interval_seconds = 900
+# target_merge_request_iid = 123
+
+[agents]
+reviewer_command = [
+  "codex",
+  "--ask-for-approval",
+  "never",
+  "exec",
+  "--profile",
+  "bubo",
+  "--skip-git-repo-check",
+]
+llm_model                  = "gpt-5.5"
+llm_api_key                = "${LLM_API_KEY}"
+llm_api_key_env            = "OPENAI_API_KEY"
+reasoning_effort           = "medium"
+dry_run                    = true
+codex_profile              = "bubo"
+codex_sandbox              = "read-only"
+post_no_findings_comment   = true
+no_findings_comment_body   = "Automated review ran — no issues found."
+
+[telemetry]
+enabled                 = false
+service_name            = "bubo"
+environment             = "prod"
+otlp_endpoint           = "http://127.0.0.1:4317"
+otlp_protocol           = "grpc"
+export_interval_seconds = 30
+emit_finding_events     = true
+emit_outcome_sync       = true
+input_per_1m            = 0.0
+output_per_1m           = 0.0
+cached_input_per_1m     = 0.0
+
+[mcp_server]
+transport = "stdio"
+host      = "127.0.0.1"
+port      = 8765
+# bearer_token = "${BUBO_MCP_TOKEN}"
+
+[[projects]]
+path    = "group/repo"
+enabled = true
+
+[[projects]]
+path    = "group/another-repo"
+enabled = false
+```

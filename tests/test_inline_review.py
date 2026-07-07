@@ -594,6 +594,21 @@ enabled = true
 
         self.assertEqual("disc-rest", discussion_id)
 
+    def test_count_added_lines_sums_new_lines_across_files(self):
+        from bubo.findings import changed_lines_from_files, count_added_lines
+
+        self.assertEqual(0, count_added_lines({}))
+
+        changed = changed_lines_from_files(
+            [
+                ("a.py", "a.py", "@@ -1,0 +1,2 @@\n+one\n+two\n"),
+                ("b.py", "b.py", "@@ -5,1 +5,1 @@\n-old\n+new\n"),
+            ]
+        )
+        # a.py adds 2 lines, b.py adds 1 -> 3 added lines reviewed; removed and
+        # context lines are not counted.
+        self.assertEqual(3, count_added_lines(changed))
+
 
 if __name__ == "__main__":
     unittest.main()

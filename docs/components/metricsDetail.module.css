@@ -1,0 +1,258 @@
+.wrap {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 3.5rem 0 2rem;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #1d4ed8;
+}
+
+.title {
+  margin: 0.5rem 0 0;
+  font-size: clamp(1.6rem, 3.5vw, 2.4rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: #111827;
+}
+
+.bar {
+  width: 64px;
+  height: 4px;
+  margin: 0.85rem 0 2rem;
+  border-radius: 999px;
+  background: #1d4ed8;
+}
+
+.marquee {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.9rem;
+  margin: 0 0 1rem;
+}
+@media (min-width: 900px) {
+  .marquee {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+.mItem {
+  border: 1px solid #dbe3f8;
+  border-radius: 0.8rem;
+  padding: 1.15rem 1.25rem;
+  background: #f5f8ff;
+}
+.mBig {
+  font-size: clamp(1.8rem, 4.2vw, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: #1d4ed8;
+  font-variant-numeric: tabular-nums;
+}
+.mLabel {
+  margin-top: 0.55rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #111827;
+}
+.mSub {
+  margin-top: 0.25rem;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: #6b7280;
+}
+.lede {
+  margin: 0 0 1.25rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #374151;
+  max-width: 70ch;
+}
+.note {
+  margin: 2rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid #eef0f3;
+  font-size: 0.74rem;
+  line-height: 1.6;
+  color: #9ca3af;
+}
+.noteBody {
+  margin: 0;
+}
+.note sup {
+  font-size: 0.78em;
+  line-height: 0;
+}
+.cite {
+  white-space: nowrap;
+}
+.cite a {
+  color: #1d4ed8;
+  text-decoration: none;
+  font-weight: 600;
+  padding: 0 1px;
+}
+.cite a:hover {
+  text-decoration: underline;
+}
+.refs {
+  margin: 0.85rem 0 0;
+  padding-left: 1.4rem;
+  font-size: 0.72rem;
+  line-height: 1.7;
+  list-style: disc;
+}
+.refs li {
+  margin: 0.15rem 0;
+}
+.refs li::marker {
+  color: #9ca3af;
+}
+.refNum {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+.noteLink {
+  color: #1d4ed8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.noteLink:hover {
+  text-decoration: none;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+@media (min-width: 640px) {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (min-width: 1024px) {
+  .grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 0.8rem;
+  padding: 1.1rem 1.2rem 0.6rem;
+  background: #ffffff;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+.panel:hover {
+  border-color: #c7d2fe;
+  transform: translateY(-2px);
+}
+
+.panelTitle {
+  margin: 0 0 0.6rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid #eef0f3;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #1d4ed8;
+}
+
+.rows {
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.42rem 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+.row:last-child {
+  border-bottom: none;
+}
+
+.k {
+  font-size: 0.82rem;
+  color: #6b7280;
+}
+
+.v {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #111827;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hero .v {
+  color: #1d4ed8;
+  font-size: 1rem;
+}
+
+:global(html.dark) .mItem {
+  border-color: #2a3a5f;
+  background: #11213f;
+}
+:global(html.dark) .mBig {
+  color: #60a5fa;
+}
+:global(html.dark) .mLabel {
+  color: #f3f4f6;
+}
+:global(html.dark) .mSub,
+:global(html.dark) .note {
+  color: #9ca3af;
+}
+:global(html.dark) .note {
+  border-top-color: #2a2c31;
+}
+:global(html.dark) .lede {
+  color: #cbd2da;
+}
+:global(html.dark) .noteLink,
+:global(html.dark) .cite a,
+:global(html.dark) .refNum {
+  color: #60a5fa;
+}
+
+:global(html.dark) .title {
+  color: #f3f4f6;
+}
+:global(html.dark) .eyebrow,
+:global(html.dark) .panelTitle,
+:global(html.dark) .hero .v {
+  color: #60a5fa;
+}
+:global(html.dark) .bar {
+  background: #60a5fa;
+}
+:global(html.dark) .panel {
+  border-color: #2a2c31;
+  background: #161616;
+}
+:global(html.dark) .panel:hover {
+  border-color: #3b4252;
+}
+:global(html.dark) .panelTitle {
+  border-bottom-color: #2a2c31;
+}
+:global(html.dark) .row {
+  border-bottom-color: #232427;
+}
+:global(html.dark) .k {
+  color: #9ca3af;
+}
+:global(html.dark) .v {
+  color: #f3f4f6;
+}

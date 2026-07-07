@@ -1,0 +1,90 @@
+import { Badge } from '../components/Badge'
+import { Footnote } from '../components/Footnote'
+
+# GitHub Action <Badge href="#experimental">Experimental</Badge>
+
+Run Bubo on pull requests from GitHub Actions: it reviews the PR that triggered the
+workflow and posts inline findings via the GitHub REST API — no MCP server, no
+poller, no self-hosted host required. It's a composite action, so it runs on
+**GitHub-hosted *and* self-hosted runners**, and your LLM key never leaves the
+runner. Still [experimental](#experimental) — start with `dry-run`.
+
+## Quick start
+
+```yaml
+# .github/workflows/bubo.yml
+name: Bubo review
+on:
+  pull_request:
+
+permissions:
+  contents: read         # read the diff
+  pull-requests: write   # post inline findings
+
+jobs:
+  review:
+    runs-on: ubuntu-latest          # or your self-hosted runner label
+    steps:
+      - uses: mountainowl/bubo@v0   # pin a released tag once you've validated it
+        with:
+          llm-api-key: ${{ secrets.OPENAI_API_KEY }}
+          dry-run: "true"           # plan only; flip to "false" to post
+          install-agent: "true"     # hosted runners: best-effort agent install
+          tone: "collaborative"
+```
+
+Start with `dry-run: "true"` and read the run logs / transcript. When findings
+look right, set `dry-run: "false"` to post them inline.
+
+## Inputs
+
+| Input | Default | What it does |
+|---|---|---|
+| `llm-api-key` | *(required)* | Your review LLM key (e.g. an OpenAI key for Codex). Pass a secret. |
+| `llm-api-key-env` | `OPENAI_API_KEY` | Env var your agent CLI reads the key from. |
+| `llm-model` | `gpt-5.5` | Model label for cost/telemetry (the real model comes from your agent profile). |
+| `github-token` | `${{ github.token }}` | Reads the diff + posts comments. Needs `pull-requests: write`. |
+| `reviewer-command` | *(bundled Codex)* | Space-separated argv to run a different agent CLI (e.g. `claude -p`). |
+| `dry-run` | `false` | `true` plans findings but posts nothing. |
+| `tone` | `terse` | Review voice: `terse` / `collaborative` / `socratic` / `formal` / `casual`. |
+| `min-confidence` | *(Bubo default)* | Drop findings below this confidence (0.0–1.0). |
+| `max-findings` | *(Bubo default)* | Cap findings posted per PR. |
+| `bubo-version` | *(latest)* | Pin a Bubo PyPI version. |
+| `install-agent` | `false` | Best-effort install of the agent CLI on a hosted runner. Leave `false` on self-hosted runners that pre-provision the agent. |
+
+## Self-hosted runners (recommended)
+
+Use self-hosted runners when repository data must remain inside your
+infrastructure. Pre-provision the agent once on the runner image and leave
+`install-agent: false`:
+
+- Install the agent CLI (Codex or Claude) and authenticate it (e.g.
+  `codex login --with-api-key`), or supply auth the runner already holds.
+- Install the `code-reviewer` skill in the agent's config.
+- Put `uv`, `git`, and the agent CLI on `PATH`.
+
+The action then just installs Bubo from PyPI, writes config from your inputs,
+scopes the review to the triggering PR, and posts.
+
+## Execution flow
+
+1. Installs Bubo from PyPI (`uv tool install bubo`).
+2. (hosted, optional) Best-effort installs the agent CLI; authenticates Codex
+   with your key.
+3. `bubo init` lays down the workspace + agent profile + `code-reviewer` skill.
+4. Writes `config/env.toml` from your inputs — `provider = "github"`, the PR's
+   repo as the single project, and `[poller].target_merge_request_iid` set to the
+   PR number, so the review is scoped to exactly this PR.
+5. Runs the review; findings post inline via REST (the MCP path is skipped in CI).
+
+<Footnote id="experimental">
+
+**Experimental in v1.** The review needs an agent CLI (Codex or Claude) installed
+and authenticated on the runner.
+
+- The action installs it on hosted runners (`install-agent: true`, best-effort).
+- Or you install it once on a self-hosted runner.
+
+Once set up, dry-run on one PR before you let it post findings.
+
+</Footnote>

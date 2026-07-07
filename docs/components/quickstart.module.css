@@ -1,0 +1,402 @@
+.page {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --code-font: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  background: #ffffff;
+  min-height: calc(100dvh - 4rem);
+}
+.page code {
+  font-family: var(--code-font);
+}
+:global(html.dark) .page {
+  background: #111111;
+}
+
+.inner {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: clamp(2rem, 5vw, 4rem) clamp(1.25rem, 4vw, 3rem) 5rem;
+}
+
+/* ---------- header ---------- */
+.header {
+  position: relative;
+  margin-bottom: 3rem;
+}
+.kicker {
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #2563eb;
+  font-weight: 600;
+}
+.title {
+  margin-top: 0.6rem;
+  font-size: clamp(2.4rem, 6vw, 4rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  color: #111827;
+}
+:global(html.dark) .title {
+  color: #f3f4f6;
+}
+.subtitle {
+  margin-top: 1rem;
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  color: #4b5563;
+  max-width: 40rem;
+}
+:global(html.dark) .subtitle {
+  color: #9ca3af;
+}
+
+/* ---------- steps ---------- */
+.step {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1.1rem;
+  padding: 2rem 0;
+  border-top: 1px solid #e5e7eb;
+}
+:global(html.dark) .step {
+  border-top-color: #262626;
+}
+.stepNum {
+  width: 2.1rem;
+  height: 2.1rem;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 700;
+  font-size: 1rem;
+}
+.stepTitle {
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #111827;
+  margin-top: 0.15rem;
+}
+:global(html.dark) .stepTitle {
+  color: #f3f4f6;
+}
+.stepDesc {
+  margin-top: 0.4rem;
+  color: #4b5563;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+:global(html.dark) .stepDesc {
+  color: #9ca3af;
+}
+.stepBody {
+  margin-top: 1rem;
+}
+
+/* ---------- agent picker (top-level) ---------- */
+.agentGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+@media (max-width: 560px) {
+  .agentGrid {
+    grid-template-columns: 1fr;
+  }
+  .step {
+    grid-template-columns: 1fr;
+  }
+  .stepNum {
+    display: none;
+  }
+}
+.agentCard {
+  text-align: left;
+  cursor: pointer;
+  padding: 1.1rem 1.2rem;
+  border-radius: 0.8rem;
+  border: 1.5px solid #e5e7eb;
+  background: #f9fafb;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.agentCard:hover {
+  transform: translateY(-1px);
+}
+:global(html.dark) .agentCard {
+  border-color: #2a2a2a;
+  background: #181818;
+}
+.agentCardActive {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+}
+:global(html.dark) .agentCardActive {
+  border-color: #3b82f6;
+  background: rgba(37, 99, 235, 0.16);
+}
+.agentName {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #111827;
+}
+.agentIcon {
+  width: 1.2rem;
+  height: 1.2rem;
+  flex: none;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+:global(html.dark) .agentName {
+  color: #f3f4f6;
+}
+.agentTag {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.15);
+  color: #2563eb;
+}
+.agentDesc {
+  margin-top: 0.45rem;
+  font-size: 0.85rem;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+/* ---------- tabs (OS / method) ---------- */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+}
+.tab {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.95rem;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: transparent;
+  color: #4b5563;
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+.tabIcon {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+:global(html.dark) .tab {
+  border-color: #2a2a2a;
+  color: #9ca3af;
+}
+.tab:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+}
+.tabActive {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+:global(html.dark) .tabActive {
+  color: #fff;
+}
+
+/* ---------- code blocks ---------- */
+.code {
+  position: relative;
+  margin: 0.6rem 0;
+}
+.code pre {
+  margin: 0;
+  overflow-x: auto;
+  padding: 1rem 1.1rem;
+  border-radius: 0.375rem;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  color: #24292e;
+  font-size: 0.86rem;
+  line-height: 1.6;
+  font-family: var(--code-font);
+}
+:global(html.dark) .code pre {
+  background: #000000;
+  border-color: #404040;
+  color: #e6edf3;
+}
+.code code {
+  font-family: var(--code-font);
+  white-space: pre;
+}
+.codeActions {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  display: flex;
+  gap: 0.4rem;
+  z-index: 1;
+}
+.iconBtn {
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #57606a;
+  transition: color 0.15s ease;
+}
+.iconBtn:hover {
+  color: #24292e;
+}
+:global(html.dark) .iconBtn {
+  color: #8b949e;
+}
+:global(html.dark) .iconBtn:hover {
+  color: #fff;
+}
+
+.note {
+  margin-top: 0.7rem;
+  padding: 0.7rem 0.9rem;
+  border-left: 3px solid #2563eb;
+  border-radius: 0 0.4rem 0.4rem 0;
+  background: rgba(37, 99, 235, 0.07);
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: #4b5563;
+}
+:global(html.dark) .note {
+  color: #b6c2cf;
+}
+.link {
+  color: #2563eb;
+  font-weight: 600;
+  text-decoration: none;
+}
+.link:hover {
+  text-decoration: underline;
+}
+.subhead {
+  margin: 1.2rem 0 0.2rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: normal;
+  color: #374151;
+}
+:global(html.dark) .subhead {
+  color: #cbd5e1;
+}
+.dot {
+  margin: 0 0.6rem;
+  color: #9ca3af;
+}
+
+.backLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 1.5rem;
+  color: #6b7280;
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.backLink:hover {
+  color: #2563eb;
+}
+
+/* ---------- "give me a script" starter ---------- */
+.scriptStarter {
+  margin-top: 1.6rem;
+}
+.scriptCta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.3rem;
+  border-radius: 0.6rem;
+  border: 1px dashed #2563eb;
+  background: rgba(37, 99, 235, 0.06);
+  color: #2563eb !important;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.scriptCta:hover {
+  background: rgba(37, 99, 235, 0.13);
+}
+.scriptPanel {
+  margin-top: 1.3rem;
+  padding: 1.5rem;
+  border-radius: 0.9rem;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+:global(html.dark) .scriptPanel {
+  border-color: #262626;
+  background: #161616;
+}
+.scriptPanelTitle {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #111827;
+}
+:global(html.dark) .scriptPanelTitle {
+  color: #f3f4f6;
+}
+.scriptPanelDesc {
+  font-size: 0.85rem;
+  color: #6b7280;
+  margin: 0.2rem 0 1.1rem;
+}
+.selectorRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.55rem;
+}
+.selectorRow .tabs {
+  margin-bottom: 0;
+}
+.selectorLabel {
+  width: 5.5rem;
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #6b7280;
+}

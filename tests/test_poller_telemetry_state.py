@@ -269,15 +269,16 @@ def test_record_review_run_start_and_finish() -> None:
                 tokens=TokenUsage(input=10, output=2, cached=1, total=13),
                 cost_usd=0.25,
                 error=None,
+                lines_reviewed=42,
             )
 
             with sqlite3.connect(paths.DB) as db:
                 row = db.execute(
-                    "select status,tokens_input,tokens_output,tokens_cached,tokens_total,cost_usd from review_runs where run_id=?",
+                    "select status,tokens_input,tokens_output,tokens_cached,tokens_total,cost_usd,lines_reviewed from review_runs where run_id=?",
                     (run_id,),
                 ).fetchone()
 
-            assert row == ("success", 10, 2, 1, 13, 0.25)
+            assert row == ("success", 10, 2, 1, 13, 0.25, 42)
     finally:
         paths.DB = original_db
 

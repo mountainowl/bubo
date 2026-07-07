@@ -1,0 +1,161 @@
+.wrap {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 1.25rem 0 1.75rem;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 0.55rem 0.95rem;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #6b7280;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.tab:hover {
+  color: #1d4ed8;
+}
+.tabActive {
+  color: #1d4ed8;
+  border-bottom-color: #1d4ed8;
+}
+
+.blurb {
+  margin: 0.9rem 0 0;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: #6b7280;
+}
+
+.steps {
+  margin: 0.85rem 0 1.1rem;
+  padding-left: 1.25rem;
+  list-style: decimal;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #374151;
+}
+.steps li {
+  margin-bottom: 0.35rem;
+}
+.steps li::marker {
+  color: #1d4ed8;
+  font-weight: 700;
+}
+.steps code,
+.note code {
+  font-size: 0.85em;
+  background: #eef0f3;
+  padding: 1px 6px;
+  border-radius: 5px;
+}
+
+.block {
+  margin-top: 1rem;
+}
+.blockLabel {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+
+.note {
+  margin: 1rem 0 0;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: #6b7280;
+}
+
+.info {
+  margin-top: 1rem;
+  border-left: 3px solid #1d4ed8;
+  background: #f8fafc;
+  padding: 0.85rem 1rem 1rem;
+}
+.infoLabel {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #1d4ed8;
+}
+.infoTitle {
+  margin: 0 0 0.35rem;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  color: #111827;
+}
+.infoBody {
+  margin: 0 0 0.75rem;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: #374151;
+}
+.infoBody code {
+  font-size: 0.85em;
+  background: #eef0f3;
+  padding: 1px 6px;
+  border-radius: 5px;
+}
+
+:global(html.dark) .tabs {
+  border-bottom-color: #2a2c31;
+}
+:global(html.dark) .tab {
+  color: #9ca3af;
+}
+:global(html.dark) .tab:hover,
+:global(html.dark) .tabActive {
+  color: #60a5fa;
+}
+:global(html.dark) .tabActive {
+  border-bottom-color: #60a5fa;
+}
+:global(html.dark) .blurb,
+:global(html.dark) .note,
+:global(html.dark) .blockLabel {
+  color: #9ca3af;
+}
+:global(html.dark) .steps {
+  color: #cbd2da;
+}
+:global(html.dark) .steps li::marker {
+  color: #60a5fa;
+}
+:global(html.dark) .steps code,
+:global(html.dark) .note code {
+  background: #1f2024;
+}
+:global(html.dark) .info {
+  border-left-color: #60a5fa;
+  background: #15171b;
+}
+:global(html.dark) .infoLabel {
+  color: #60a5fa;
+}
+:global(html.dark) .infoTitle {
+  color: #f9fafb;
+}
+:global(html.dark) .infoBody {
+  color: #cbd2da;
+}
+:global(html.dark) .infoBody code {
+  background: #1f2024;
+}

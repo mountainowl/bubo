@@ -1,0 +1,29 @@
+.note {
+  margin: 2.5rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid #eef0f3;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.65;
+  color: #6b7280;
+}
+.note p {
+  margin: 0;
+}
+.note p + p {
+  margin-top: 0.6rem;
+}
+.note ul {
+  margin: 0.5rem 0;
+  padding-left: 1.3rem;
+  list-style: disc;
+  font-size: inherit;
+}
+.note li {
+  margin: 0.15rem 0;
+  font-size: inherit;
+}
+:global(html.dark) .note {
+  border-top-color: #2a2c31;
+  color: #9ca3af;
+}

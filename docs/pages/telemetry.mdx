@@ -1,0 +1,176 @@
+# Telemetry
+
+Bubo emits OpenTelemetry metrics and traces, namespaced `llm_review.*` and defined in
+`src/bubo/telemetry/metrics.py`. Telemetry is off by default. Enable it and point it at an
+OTLP/gRPC collector for live dashboards. For one-off numbers without a collector, read the
+same rollups over [MCP](#over-mcp), [`bubo report`](#recipe--reproduce-the-overview-metrics),
+or the [static UI](#static-html-dashboard).
+
+## Enable
+
+Configure `[telemetry]` in `config/env.toml`. `enabled = false` (the default) makes every
+metric and span a no-op. With `enabled = true` and no `otlp_endpoint`, instruments record
+in-process but nothing exports.
+
+```toml
+[telemetry]
+enabled                 = true
+otlp_endpoint           = "otel-collector:4317"   # OTLP/gRPC; empty = record but do not export
+otlp_protocol           = "grpc"                  # grpc is the only supported protocol
+service_name            = "bubo"
+environment             = "prod"                  # low-cardinality label: dev / staging / prod
+export_interval_seconds = 30
+
+# Per-finding and outcome-sync metrics — drop either to cut emission volume.
+emit_finding_events = true
+emit_outcome_sync   = true
+
+# LLM pricing for llm_review.cost.usd, USD per 1M tokens. All default to 0.
+input_per_1m        = 2.50
+output_per_1m       = 10.00
+cached_input_per_1m = 0.25
+```
+
+Per-review cost = `(input × input_per_1m + output × output_per_1m + cached × cached_input_per_1m) / 1e6`.
+Leave the rates at `0` to skip cost.
+
+## Metrics
+
+Every instrument carries `repo`. Run-scoped instruments also carry `model`, `prompt_version`,
+`review_mode` (`poller`/`manual`), `status`, `dry_run`, and `tone`.
+
+| Metric | Type | Counts | Extra attributes |
+|---|---|---|---|
+| `llm_review.runs` | counter | one per completed review run | — |
+| `llm_review.findings` | counter | one per finding lifecycle event — initial post plus every `--sync-outcomes` transition | `status` (`planned`/`posted`/`skipped`/`resolved`/`disputed`/`false_positive`/`duplicate`/`deleted`/`developer_replied`), `finding_type`, `severity`, `category` |
+| `llm_review.tokens` | counter | LLM tokens per review | `operation` (`input`/`output`/`cached`/`total`) |
+| `llm_review.cost.usd` | counter | estimated USD per review | — |
+| `llm_review.provenance` | counter | one per AI-provenance signal | `provenance_band`, `provenance_source` |
+| `llm_review.governance` | counter | one per policy decision | `governance_mode`, `governance_action` |
+| `llm_review.verifications` | counter | one per verification-lens result | `outcome` (`verified`/`refuted`) |
+| `llm_review.failures` | counter | one per failed stage | `error_type`, `operation` (`review`/`outcome_sync`) |
+| `llm_review.latency.review_seconds` | histogram | worker wall-clock per review | — |
+| `llm_review.latency.queue_seconds` | histogram | queue wait before a worker picks up a job — the saturation signal | `repo` only |
+| `llm_review.lines_reviewed` | histogram | added lines reviewed per run | — |
+
+Trim volume with two switches: `emit_finding_events = false` drops the per-finding counter;
+`emit_outcome_sync = false` keeps only the initial-post events on `llm_review.findings`.
+
+## Dashboards
+
+- **Throughput** — `rate(llm_review.runs[5m])` by `repo`, `status`.
+- **Saturation** — `histogram_quantile(0.95, llm_review.latency.queue_seconds_bucket)`. Rising means raise `max_merge_requests_per_poll`.
+- **Cost** — `sum(rate(llm_review.cost.usd[1d])) by (repo, model)`.
+- **Precision** — `llm_review.findings{status="resolved"} / llm_review.findings{status="posted"}` by `severity`.
+- **Reliability** — `rate(llm_review.failures[5m])` by `operation`.
+
+## Traces
+
+Each review is one trace. `llm_review.run` opens a child span per stage. A trace shows
+where a review's wall-clock went — a slow review is almost always the agent stage.
+
+```text
+llm_review.run              repo, mr_iid, sha, run_id
+├─ llm_review.checkout      repo, sha
+├─ llm_review.provenance    repo                       (governance only)
+├─ llm_review.agent         repo, model, tokens_input/output/total, cost_usd, exit_code
+└─ llm_review.post          repo, dry_run, findings_posted/planned/skipped
+```
+
+Any OTel backend (Tempo, Jaeger, Honeycomb, Grafana, Datadog) breaks latency, tokens, and
+cost down by stage and model. Spans export only when `otlp_endpoint` is set.
+
+## Cardinality
+
+Metric attributes stay low-cardinality. MR IID, SHA, file path, line, fingerprint, and
+discussion ID live in SQLite or span attributes, never as metric labels. Spans carry the
+per-MR context for trace-level drilldown.
+
+## Reading metrics without a collector
+
+Three read-only paths return the same rollups without OTLP, without writes, and without the
+Slack attachment. None require the poller to be running.
+
+### Over MCP
+
+The [MCP server](/mcp) exposes the metrics tools to any chat client or agent. Ask in plain
+language; the client picks the tool.
+
+| Ask the agent | Tool called |
+|---|---|
+| Counts, tokens, and cost for `acme/app` over the last 48 hours. | `get_metrics` |
+| Full governance report for the last 7 days. | `get_governance_report` |
+| Which finding categories `acme/app` disputes most. | `get_dispute_classes` |
+
+`get_metrics(since_hours=48, project="acme/app")` returns:
+
+```json
+{
+  "window_hours": 48,
+  "project": "acme/app",
+  "reviews_total": 124,
+  "by_status": { "success": 70, "no_findings": 48, "failed": 5, "running": 1 },
+  "findings_total": 74,
+  "tokens_total_sum": 13125521,
+  "cost_usd_sum": 25.61
+}
+```
+
+`get_governance_report` returns the full nested report (the same document as `bubo report`,
+below). Every metrics tool reads SQLite and is safe to call anytime — only `review_change`
+writes.
+
+### Recipe — reproduce the overview metrics
+
+The [overview](/overview) figures come from `bubo report`, the rollup also exposed as
+`get_governance_report`. Run it against your install:
+
+```sh
+# Full JSON report for a fixed window (the overview's month view).
+bubo report --format json --since 2026-06-01 --until 2026-07-01 > report.json
+
+# Rolling window, one project.
+bubo report --format json --since-hours 720 --project acme/app
+```
+
+The JSON maps to the overview panels:
+
+| Overview panel | Report field |
+|---|---|
+| Total review runs / completed / completion rate | `reviews.reviews_total`, `reviews.by_status` |
+| Findings returned / posted | `reviews.findings_total` |
+| Findings tracked (outcome records) | `outcomes.total` |
+| Developer replied | `outcomes.developer_replied` |
+| Resolved / Resolution rate | `outcomes.resolved`, `outcomes.accept_rate` |
+| Disputed / False positives | `outcomes.disputed`, `outcomes.false_positive` |
+| Findings accepted / — of which blocking | `roi.accepted`, `roi.blocking_accepted` |
+| Accepted per $ | `roi.accepted_per_usd` |
+| Total tokens / total cost | `reviews.tokens_total_sum`, `reviews.cost_usd_sum` |
+| Latency p50 / p95 / avg | `latency.p50_seconds`, `latency.p95_seconds`, `latency.avg_seconds` |
+
+Export one tabular section as CSV instead of JSON:
+
+```sh
+bubo report --format csv --section audit --since-hours 720 > audit.csv
+# --section noise_trend      → daily false-positive trend
+# --section dispute_classes  → per-category dispute rates
+```
+
+Two overview numbers are not report fields. `cost_usd_sum` is the recorded provider cost; the
+overview's all-in cost and its reviewer-time dollar value are estimates it documents in its own
+footnote. The changed/added/removed LoC and files-reviewed counts are derived from diff stats,
+not from `bubo report`.
+
+### Static HTML dashboard
+
+`bubo ui-export` writes a self-contained static site — recent reviews, health, and the same
+report windows — with no server and no writes to the database.
+
+```sh
+bubo ui-export --out ./bubo-ui
+open ./bubo-ui/index.html          # macOS; or xdg-open, or serve the directory
+```
+
+The bundle is `index.html` plus `data.json`, a read-only snapshot holding the 24h/7d/30d
+reports, the 50 most recent reviews, health, and the effective config. It loads over `file://`
+or from any static host, and never touches `reviewed_mrs`.

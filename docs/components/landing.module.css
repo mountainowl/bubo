@@ -1,0 +1,338 @@
+.page {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #ffffff;
+}
+
+/* ---------- HERO ---------- */
+.hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: calc(100dvh - 4rem); /* minus the Nextra navbar */
+  display: flex;
+  align-items: center;
+  padding: 2rem clamp(1.5rem, 4vw, 4rem);
+  background: #ffffff;
+}
+
+.gradient {
+  position: absolute;
+  inset: 0;
+  z-index: -10;
+  background: radial-gradient(
+    ellipse 800px 1200px at 0% 0%,
+    rgba(29, 78, 216, 0.25) 0%,
+    rgba(29, 78, 216, 0.14) 20%,
+    rgba(29, 78, 216, 0.06) 40%,
+    rgba(255, 255, 255, 0.3) 70%,
+    rgba(255, 255, 255, 0.85) 90%,
+    #ffffff 100%
+  );
+}
+
+.pattern {
+  position: absolute;
+  inset: 0;
+  z-index: -10;
+  width: 100%;
+  height: 100%;
+  stroke: #e5e7eb;
+  -webkit-mask-image: radial-gradient(100% 100% at top right, white, transparent);
+  mask-image: radial-gradient(100% 100% at top right, white, transparent);
+}
+
+.heroInner {
+  max-width: 46rem;
+}
+
+.hello {
+  font-size: clamp(1.5rem, 4vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #374151;
+  opacity: 0;
+  animation: fade 0.8s ease-out forwards;
+}
+
+.name {
+  margin-top: 1.5rem;
+  font-size: clamp(2.5rem, 7vw, 5rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  color: #1f2937;
+  opacity: 0;
+  animation: fade 0.8s ease-out 0.2s forwards;
+}
+
+.tagline {
+  margin-top: 1.5rem;
+  font-size: clamp(1.05rem, 2.4vw, 1.5rem);
+  font-weight: 500;
+  color: #4b5563;
+  max-width: 38rem;
+  opacity: 0;
+  animation: fade 0.8s ease-out 0.4s forwards;
+}
+
+.signalKey {
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  margin-top: 2.5rem;
+  opacity: 0;
+  animation: fade 0.8s ease-out 0.6s forwards;
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1.6rem;
+  border-radius: 0.6rem;
+  background: #1d4ed8;
+  color: #ffffff !important;
+  font-weight: 600;
+  font-size: 1.05rem;
+  text-decoration: none !important;
+  box-shadow: 0 10px 25px -5px rgba(29, 78, 216, 0.5);
+  transition: transform 0.2s ease;
+}
+.cta:hover {
+  transform: scale(1.05);
+}
+
+.ctaGhost {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.85rem 1.4rem;
+  border-radius: 0.6rem;
+  border: 1px solid #d1d5db;
+  color: #374151 !important;
+  font-weight: 600;
+  font-size: 1.05rem;
+  text-decoration: none !important;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+.ctaGhost:hover {
+  border-color: #1d4ed8;
+  color: #1d4ed8 !important;
+}
+
+.social {
+  position: absolute;
+  bottom: 2rem;
+  left: clamp(1.5rem, 4vw, 4rem);
+  display: flex;
+  gap: 1rem;
+  color: #374151;
+  opacity: 0;
+  animation: fade 0.8s ease-out 0.8s forwards;
+}
+.social a {
+  color: inherit;
+  transition: color 0.2s ease;
+}
+.social a:hover {
+  color: #1d4ed8;
+}
+
+/* ---------- ABOUT / CAPABILITIES sections (devportfolio form) ---------- */
+.section {
+  padding: clamp(3rem, 8vw, 6rem) clamp(1.5rem, 4vw, 4rem);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  max-width: 80rem;
+}
+
+@media (min-width: 1024px) {
+  .grid {
+    grid-template-columns: 4fr 8fr;
+    gap: 4rem;
+    align-items: start;
+  }
+}
+
+.title {
+  font-size: clamp(2rem, 5vw, 4rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #111827;
+}
+
+.bar {
+  width: 75px;
+  height: 5px;
+  margin-top: 0.6rem;
+  border-radius: 999px;
+  background: #1d4ed8;
+}
+
+.about {
+  font-size: clamp(1.1rem, 2vw, 1.5rem);
+  line-height: 1.6;
+  color: #4b5563;
+  max-width: 48rem;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.pill {
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #1f2937;
+  font-size: 0.95rem;
+  font-weight: 500;
+  transition: background-color 0.2s ease;
+}
+.pill:hover {
+  background: #e5e7eb;
+}
+
+/* ---------- Features ---------- */
+.featureGroups {
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+}
+.featureGroupTitle {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #1d4ed8;
+  margin-bottom: 1.1rem;
+}
+.featureList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.2rem;
+}
+@media (min-width: 640px) {
+  .featureList {
+    grid-template-columns: 1fr 1fr;
+    gap: 1.4rem 2.5rem;
+  }
+}
+.featureItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding-left: 0.9rem;
+  border-left: 2px solid #e5e7eb;
+}
+.featureName {
+  font-weight: 700;
+  font-size: 1rem;
+  color: #111827;
+}
+.featureDesc {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: #4b5563;
+}
+.featureLink {
+  color: #1d4ed8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 500;
+}
+.featureLink:hover {
+  text-decoration: none;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------- Dark mode (Nextra toggles `html.dark`) ---------- */
+:global(html.dark) .page,
+:global(html.dark) .hero {
+  background: #111111;
+}
+:global(html.dark) .gradient {
+  background: radial-gradient(
+    ellipse 800px 1200px at 0% 0%,
+    rgba(59, 130, 246, 0.28) 0%,
+    rgba(59, 130, 246, 0.15) 22%,
+    rgba(59, 130, 246, 0.06) 42%,
+    rgba(17, 17, 17, 0.4) 70%,
+    rgba(17, 17, 17, 0.85) 90%,
+    #111111 100%
+  );
+}
+:global(html.dark) .pattern {
+  stroke: #1f2937;
+}
+:global(html.dark) .hello {
+  color: #d1d5db;
+}
+:global(html.dark) .name {
+  color: #f3f4f6;
+}
+:global(html.dark) .tagline {
+  color: #9ca3af;
+}
+:global(html.dark) .signalKey {
+  color: #60a5fa;
+}
+:global(html.dark) .ctaGhost {
+  border-color: #374151;
+  color: #d1d5db !important;
+}
+:global(html.dark) .social {
+  color: #9ca3af;
+}
+:global(html.dark) .title {
+  color: #f3f4f6;
+}
+:global(html.dark) .about {
+  color: #9ca3af;
+}
+:global(html.dark) .pill {
+  background: #1f2024;
+  color: #e5e7eb;
+}
+:global(html.dark) .pill:hover {
+  background: #2a2c31;
+}
+:global(html.dark) .featureGroupTitle {
+  color: #60a5fa;
+}
+:global(html.dark) .featureItem {
+  border-left-color: #2a2c31;
+}
+:global(html.dark) .featureName {
+  color: #f3f4f6;
+}
+:global(html.dark) .featureDesc {
+  color: #9ca3af;
+}
+:global(html.dark) .featureLink {
+  color: #60a5fa;
+}

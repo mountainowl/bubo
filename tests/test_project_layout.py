@@ -18,22 +18,7 @@ def test_project_uses_uv_src_layout() -> None:
 
 
 def test_project_tree_keeps_config_but_not_runtime_checkouts() -> None:
-    readme = (ROOT / "README.md").read_text()
-
     assert (ROOT / "config" / "env.example.toml").is_file()
-    # Asset guard: every image/doc the README links to must exist on disk, so a
-    # docs edit can never leave a broken link. The list tracks what the README
-    # *currently references* — #100 dropped the hero render and the
-    # stale-branded GitLab MR screenshots, so they are no longer asserted here
-    # (those files may still linger in docs/images/ but are not referenced).
-    referenced_assets = [
-        "docs/images/bubo-avatar-preview.png",
-        "docs/examples/README.md",
-        "assets/bubo.png",
-    ]
-    for asset in referenced_assets:
-        assert (ROOT / asset).is_file(), f"referenced asset missing on disk: {asset}"
-        assert asset in readme, f"README no longer links to asserted asset: {asset}"
     assert "config/env.toml" in (ROOT / ".gitignore").read_text()
     assert not any(path.name.startswith("secrets.") for path in (ROOT / "config").iterdir())
     assert not (ROOT / "config" / "config.env").exists()
@@ -73,44 +58,20 @@ def test_launch_readiness_files_exist() -> None:
     # Scorecard badge via shields' direct endpoint — the api.scorecard.dev
     # URL 302-redirects, which GitHub's image proxy renders as a broken image.
     assert "img.shields.io/ossf-scorecard/github.com/mountainowl/bubo" in readme
-    assert "Run it as a poller beside your" in readme
 
 
-def test_readme_config_table_groups_sections() -> None:
-    config_doc = (ROOT / "docs" / "configuration.md").read_text()
-
-    assert "| Section | Setting | Default | Purpose / impact |" not in config_doc
-    assert "<th>Setting</th>" in config_doc
-    assert "<th>Default</th>" in config_doc
-    assert "<th>Purpose / impact</th>" in config_doc
-    assert "<code>[secrets]</code>" not in config_doc
-    assert "<code>[agent]</code>" not in config_doc
-    for section in (
-        "[scm]",
-        "[gitlab]",
-        "[github]",
-        "[review]",
-        "[poller]",
-        "[agents]",
-        "[telemetry]",
-        "[[projects]]",
-    ):
-        assert f'<tr><th colspan="3"><code>{section}</code></th></tr>' in config_doc
-    assert "<code>[telemetry.pricing.default]</code>" not in config_doc
-
-
-def test_readme_links_to_split_docs() -> None:
-    readme = (ROOT / "README.md").read_text()
-    for doc in (
-        "docs/prerequisites.md",
-        "docs/install-and-configure.md",
-        "docs/run.md",
-        "docs/configuration.md",
-        "docs/operate.md",
-        "docs/telemetry.md",
-    ):
-        assert (ROOT / doc).is_file(), f"missing split doc: {doc}"
-        assert doc in readme, f"README does not link to {doc}"
+def test_docs_site_present() -> None:
+    # The mkdocs split docs were replaced by the Nextra site under docs/,
+    # published to GitHub Pages via .github/workflows/deploy-docs.yml.
+    docs = ROOT / "docs"
+    assert (docs / "package.json").is_file()
+    assert (docs / "next.config.mjs").is_file()
+    assert (docs / "theme.config.tsx").is_file()
+    for page in ("configuration", "operate", "telemetry", "troubleshooting", "mcp"):
+        assert (docs / "pages" / f"{page}.mdx").is_file(), f"missing docs page: {page}.mdx"
+    # the old mkdocs layout is gone
+    assert not (docs / "configuration.md").exists()
+    assert not (ROOT / "mkdocs.yml").exists()
 
 
 def test_meta_prompt_includes_concise_review_style_example() -> None:

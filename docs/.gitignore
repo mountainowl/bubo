@@ -1,0 +1,11 @@
+.next
+out
+node_modules
+
+# IDE / build artifacts
+.idea/
+.DS_Store
+*.tsbuildinfo
+
+# local agent / preview config
+.claude/

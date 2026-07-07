@@ -75,6 +75,7 @@ from bubo.errors import describe
 from bubo.events import log, now
 from bubo.findings import (
     calibrated_category_floors,
+    count_added_lines,
     dispute_stats_by_canonical,
     extract_findings,
     filter_findings_by_policy,
@@ -1106,6 +1107,7 @@ def worker(job: Path) -> int:
     started = time.monotonic()
     tokens = TokenUsage()
     cost_usd = 0.0
+    lines_reviewed = 0
     repo: Path | None = None
     try:
         cfg = read_config()
@@ -1142,6 +1144,17 @@ def worker(job: Path) -> int:
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
             with telemetry.span("llm_review.checkout", repo=project, sha=sha):
                 provider.checkout(cfg, project, mr, repo)
+            # Lines of code reviewed: added lines across the change's diff,
+            # captured for EVERY review (independent of whether findings exist,
+            # so a clean review still records its size). Soft-fail — a metric
+            # must never break a review (mirrors capture_provenance).
+            try:
+                lines_reviewed = count_added_lines(
+                    provider.changed_lines(cfg, token, project, iid)
+                )
+            except Exception as exc:
+                log("lines_reviewed_failed", project=project, iid=iid, error=type(exc).__name__)
+                lines_reviewed = 0
             # Opt-in governance (off by default). Captures provenance and
             # evaluates the policy gate; returns a heightened-scrutiny directive
             # to inject into the prompt when the change escalates. No-op + no API
@@ -1240,6 +1253,7 @@ def worker(job: Path) -> int:
                 tokens=tokens,
                 cost_usd=cost_usd,
                 error=None,
+                lines_reviewed=lines_reviewed,
             )
             telemetry.record_review_done(
                 repo=project,
@@ -1251,6 +1265,7 @@ def worker(job: Path) -> int:
                 tokens=tokens,
                 cost_usd=cost_usd,
                 tone=cfg.tone,
+                lines_reviewed=lines_reviewed,
             )
             log(
                 "review_done",
@@ -1264,6 +1279,7 @@ def worker(job: Path) -> int:
                 seconds=round(time.monotonic() - started, 2),
                 tokens_total=tokens.total,
                 cost_usd=cost_usd,
+                lines_reviewed=lines_reviewed,
                 report=str(report),
                 run_id=run_id,
             )
@@ -1285,6 +1301,7 @@ def worker(job: Path) -> int:
                 tokens=tokens,
                 cost_usd=cost_usd,
                 error=error,
+                lines_reviewed=lines_reviewed,
             )
         if telemetry is not None:
             telemetry.record_failure(
@@ -1300,6 +1317,7 @@ def worker(job: Path) -> int:
                 tokens=tokens,
                 cost_usd=cost_usd,
                 tone=cfg.tone if cfg is not None else None,
+                lines_reviewed=lines_reviewed,
             )
         log(
             "review_failed",

@@ -750,6 +750,18 @@ def changed_lines_from_diffs(diffs: list[JsonObject]) -> dict[str, JsonObject]:
     )
 
 
+def count_added_lines(changed: dict[str, JsonObject]) -> int:
+    """Total *added* lines across a changed-line map — the per-review
+    "lines of code reviewed" metric.
+
+    Counts only added lines (the ``new_lines`` an inline comment can attach
+    to), summed over every changed file; removed/context lines are not
+    counted. Provider-neutral: both providers normalize into the same
+    ``new_lines`` shape via :func:`changed_lines_from_files`.
+    """
+    return sum(len(entry.get("new_lines") or ()) for entry in changed.values())
+
+
 def resolve_finding_line(
     changed: dict[str, JsonObject], finding: JsonObject
 ) -> tuple[JsonObject, int] | None:

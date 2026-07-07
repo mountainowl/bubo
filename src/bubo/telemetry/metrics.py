@@ -105,6 +105,10 @@ class ReviewTelemetry:
             self.meter.create_histogram,
             "llm_review.latency.queue_seconds",
         )
+        self._lines_reviewed = _safe_instrument(
+            self.meter.create_histogram,
+            "llm_review.lines_reviewed",
+        )
 
     @classmethod
     def from_config(cls, config: TelemetryConfig) -> ReviewTelemetry:
@@ -158,6 +162,7 @@ class ReviewTelemetry:
         tokens: TokenUsage,
         cost_usd: float,
         tone: str | None = None,
+        lines_reviewed: int = 0,
     ) -> None:
         attrs = metric_attrs(
             repo=repo,
@@ -169,6 +174,7 @@ class ReviewTelemetry:
         )
         self._add(self._runs, 1, attrs)
         self._record(self._review_duration, duration_seconds, attrs)
+        self._record(self._lines_reviewed, lines_reviewed, attrs)
         self._add_token("input", tokens.input, attrs)
         self._add_token("output", tokens.output, attrs)
         self._add_token("cached", tokens.cached, attrs)

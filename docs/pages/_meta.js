@@ -1,0 +1,37 @@
+export default {
+  index: {
+    display: 'hidden',
+    theme: {
+      layout: 'raw',
+      sidebar: false,
+      toc: false,
+      breadcrumb: false,
+      pagination: false,
+      timestamp: false,
+      footer: false,
+    },
+  },
+  build: {
+    display: 'hidden',
+    theme: {
+      layout: 'raw',
+      sidebar: false,
+      toc: false,
+      breadcrumb: false,
+      pagination: false,
+      timestamp: false,
+      footer: false,
+    },
+  },
+  overview: 'Overview',
+  features: 'Features',
+  'how-it-works': 'How it works',
+  recipes: 'Recipes',
+  mcp: 'MCP server',
+  'github-action': 'GitHub Action (CI)',
+  operate: 'Operate',
+  telemetry: 'Metrics & telemetry',
+  troubleshooting: 'Troubleshooting',
+  configuration: 'Configuration reference',
+  references: 'References',
+}

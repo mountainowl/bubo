@@ -153,6 +153,10 @@ def init_db() -> None:
         # effectiveness can be A/B'd against outcomes. Additive; legacy rows read
         # back as the default ``terse``. See bubo.review_config.VALID_TONES.
         ensure_column(db, "review_runs", "tone", "text")
+        # Lines of code reviewed per run — the count of *added* lines across the
+        # change's diff (the lines an inline comment can attach to), not total
+        # diff churn. Additive; legacy rows read back as NULL.
+        ensure_column(db, "review_runs", "lines_reviewed", "integer")
         db.execute(
             """
             create table if not exists review_findings (
@@ -331,13 +335,15 @@ def record_review_run_finish(
     tokens: TokenUsage,
     cost_usd: float,
     error: str | None,
+    lines_reviewed: int = 0,
 ) -> None:
     """Finalize a ``review_runs`` row at the end of a worker.
 
-    Updates token counts, cost, and the terminal status. If no row exists
-    for ``run_id`` (because the worker failed before
-    :func:`record_review_run_start`), this is a silent no-op — the row
-    simply never appears in telemetry rather than carrying partial data.
+    Updates token counts, cost, ``lines_reviewed`` (added lines across the
+    change's diff), and the terminal status. If no row exists for ``run_id``
+    (because the worker failed before :func:`record_review_run_start`), this
+    is a silent no-op — the row simply never appears in telemetry rather than
+    carrying partial data.
     """
     with connect_db() as db:
         db.execute(
@@ -350,6 +356,7 @@ def record_review_run_finish(
               tokens_cached=?,
               tokens_total=?,
               cost_usd=?,
+              lines_reviewed=?,
               error=?
             where run_id=?
             """,
@@ -361,6 +368,7 @@ def record_review_run_finish(
                 tokens.cached,
                 tokens.total,
                 cost_usd,
+                lines_reviewed,
                 error,
                 run_id,
             ),

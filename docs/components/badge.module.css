@@ -1,0 +1,29 @@
+.badge {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 0.55rem;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #b45309;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  text-decoration: none;
+  white-space: nowrap;
+  transform: translateY(-0.18em);
+}
+a.badge:hover {
+  background: #fde68a;
+}
+:global(html.dark) .badge {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.4);
+}
+:global(html.dark) a.badge:hover {
+  background: rgba(251, 191, 36, 0.22);
+}

@@ -1,0 +1,344 @@
+# Troubleshooting
+
+Bubo runs three subsystems that fail differently and leave different evidence:
+**review execution** (the agent produces findings), **posting** (findings reach the
+MR/PR), and **outcome sync** (`--sync-outcomes` grades what developers did). Decide
+which one failed before digging in.
+
+Two rules save the most time:
+
+1. A `no_findings` result is not trustworthy until you confirm the agent could read
+   the diff — the sandbox failure below looks identical to a clean review.
+2. Metrics only move while `bubo-poller --sync-outcomes` keeps running. Posting is
+   immediate; resolution, replies, and disputes are a separate job.
+
+Start with the read-only probes, then jump to the matching symptom.
+
+## Read-only triage
+
+Every command here is read-only — safe on production, no writes. `$BUBO_BASE_DIR` is
+the runtime state root (`$BUBO_ROOT/var` by default, i.e. `~/.local/share/bubo/var`).
+
+```sh
+# Runtime state root ($BUBO_ROOT/var by default).
+BASE="${BUBO_BASE_DIR:-${BUBO_ROOT:-$HOME/.local/share/bubo}/var}"
+
+# 1. Install + config sanity: workspace dirs, env.toml, DB, Codex profile.
+bubo doctor
+
+# 2. Poller liveness — exit 0 healthy, 1 stale, 2 config error.
+bubo-poller --health
+
+# 3. Poll-cycle logs (the poller writes JSON lines to stdout under systemd/cron).
+journalctl -u bubo -n 200 --no-pager
+
+# 4. Newest per-review worker log (JSON lines: one {"ts","event",...} per line).
+tail -n 80 "$(ls -t "$BASE"/log/*.log | head -1)"
+
+# 5. Recent runs — dry_run, timings, and errors live in review_runs.
+sqlite3 "$BASE/state/reviewer.sqlite" "
+  SELECT project, iid, sha, status, dry_run, started_at, finished_at, error
+  FROM review_runs ORDER BY started_at DESC LIMIT 20;"
+
+# 6. Dedup state, finding states, and outcome tallies.
+sqlite3 "$BASE/state/reviewer.sqlite" "
+  SELECT status, count(*) FROM reviewed_mrs GROUP BY status;
+  SELECT status, count(*) FROM review_findings GROUP BY status;
+  SELECT sum(resolved) resolved, sum(disputed) disputed, sum(false_positive) fp,
+         sum(duplicate) dup, sum(developer_replied) replied,
+         sum(merged_unresolved) merged_unresolved, count(*) total
+  FROM finding_outcomes;"
+```
+
+Worker logs are named `<project-slug>-<iid>-<sha12>.log`. `reviewed_mrs` holds one
+dedup row per `(project, iid, sha)`; per-run detail (timings, tokens, cost, error)
+lives in `review_runs`; `finding_outcomes` records outcomes as boolean columns, not a
+single status.
+
+## Failure signatures
+
+| Symptom | Likely cause | First check |
+|---|---|---|
+| MR never reviewed | project disabled, wrong provider, scheduler down, `target_merge_request_iid` left set, stale state row | `review_runs` / `reviewed_mrs`; cron / `journalctl -u bubo` |
+| "No findings" on risky code | Codex sandbox/bubblewrap blocked the agent's tools | grep the worker log for `bwrap:` / `git_diff` failed |
+| Reviews suddenly all fail or go no-findings | LLM account out of funds, or key deleted/rotated | `review_runs.error` for `insufficient_quota` / `invalid_api_key` / `401` |
+| MCP works locally, not over SSH | password / passphrase / banner corrupts the stdio stream | `ssh -o BatchMode=yes host 'bubo mcp --help'` |
+| Findings recorded, not posted | `dry_run`, confidence / gate / `allowed_kinds` filters, duplicate fingerprint, line-mapping miss | `review_findings.status`; `finding_filtered` log events |
+| Metrics show zero resolved | `--sync-outcomes` not scheduled, or `bot_username` mismatch | outcome-sync logs; `[gitlab]`/`[github]`.`bot_username` |
+| Cost shows zero | pricing left at defaults | `[telemetry].input_per_1m` / `output_per_1m` / `cached_input_per_1m` |
+| GitHub resolution stays zero | GraphQL unavailable or token scope gap | GraphQL `reviewThreads` vs REST-fallback logs |
+| GitLab posting fails | token scope or bot lacks MR access | token is the bot user's and has `api` scope |
+| Same MR reviewed repeatedly | new SHA each push, or failed rows retried | `reviewed_mrs` by `(project, iid, sha)` |
+| Success status, no comments | `post_no_findings_comment = false` or `dry_run = true` | `[agents].post_no_findings_comment`; `[review].dry_run` |
+
+## Review did not run
+
+An open MR/PR is never picked up.
+
+- **Scheduler down.** `bubo init` does not install a scheduler — `bubo-poller` runs
+  from cron or systemd ([Operate](/operate#schedule-the-poller)). `bubo-poller --health`
+  exit `1` means the last reviewed row is older than `[review].timeout_seconds × 3`.
+- **Wrong `$BUBO_ROOT`.** The scheduler and your shell must resolve the same root; a
+  run against the wrong root reads an empty DB and reviews nothing.
+- **Project disabled.** The repo needs `[[projects]] enabled = true` and the matching
+  `[scm].provider`.
+- **`target_merge_request_iid` left set.** `[poller].target_merge_request_iid` pins the
+  poller to a single MR and skips every other one. Unset it in production.
+- **Stale/failed state row.** `reviewed_mrs` is keyed on `(project, iid, sha)`; a row at
+  the current SHA is not re-reviewed until the SHA changes. Read `review_runs.error` for
+  why it failed.
+- **Token cannot read the MR/PR.** A token that cannot list or read the MR yields nothing
+  to review. `bubo doctor` does not test SCM scope.
+
+## "No findings" on a change that isn't clean
+
+**Symptom**
+
+- A review (usually an MCP-triggered `review_change`) returns no findings on a
+  change that is not genuinely clean.
+- The transcript or report file shows:
+  ```
+  bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+  sandbox is rejecting shell execution
+  git_status / git_diff / git_show failed
+  ```
+- An anomalous spike in `no_findings`. Codex exits with status 0; Bubo may not classify the run as failed.
+
+**Cause**
+
+`[agents].codex_sandbox` (`read-only` or `workspace-write`) isolates the run with
+**bubblewrap**, which needs an unprivileged user namespace. An npm/global Codex
+ships its own `bwrap` with no AppArmor profile; on Ubuntu with
+`kernel.apparmor_restrict_unprivileged_userns = 1` the kernel blocks it, and every
+git/shell tool the agent needs fails. The poller usually survives (its diff is
+embedded in the prompt); the MCP path fails because it runs Codex nested with no
+checkout and must shell out to git. An apt/distro Codex uses the system `bwrap`,
+which has an allowed profile. This is why the apt-installed path can work while
+another install path fails.
+
+Confirm the restriction is on:
+
+```sh
+sysctl kernel.apparmor_restrict_unprivileged_userns   # 1 = on
+```
+
+**Fix — AppArmor distros (Ubuntu, Debian, openSUSE)**
+
+Grant the user-namespace capability to Codex's own bundled `bwrap`. Locate it:
+
+```sh
+BWRAP=$(find "$(dirname "$(dirname "$(readlink -f "$(command -v codex)")")")" \
+  -path '*codex-resources/bwrap' 2>/dev/null | head -1)
+echo "$BWRAP"
+```
+
+Install a profile and reload AppArmor:
+
+```sh
+PROFILE=/etc/apparmor.d/codex-bwrap
+sudo tee "$PROFILE" >/dev/null <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+$BWRAP flags=(default_allow) {
+  userns,
+  include if exists <local/codex-bwrap>
+}
+EOF
+sudo apparmor_parser -r "$PROFILE"
+```
+
+Verify:
+
+```sh
+"$BWRAP" --unshare-net --ro-bind / / --proc /proc --dev /dev /bin/echo ok   # → ok
+codex exec --profile bubo --skip-git-repo-check --ephemeral 'run: echo ok'  # → ok
+```
+
+- If `apparmor_parser --version` is < 4.0, set `abi <abi/4.0>` to your parser's
+  abi (e.g. `abi <abi/3.0>` on Ubuntu 22.04) or drop the `abi` line.
+- A Codex upgrade can move the bundled `bwrap`; re-run the locate step and
+  `apparmor_parser -r`.
+
+**Fix — non-AppArmor hosts**
+
+- **RHEL / Fedora / Rocky / Alma (SELinux):** the AppArmor sysctl and profile
+  don't apply. User namespaces are usually allowed; if not, check
+  `sysctl user.max_user_namespaces` (must be `> 0`).
+- **Arch / other:** userns usually works out of the box; if `bwrap` still fails,
+  confirm `kernel.unprivileged_userns_clone = 1`.
+
+**Alternatives (no profile)**
+
+- `sudo apt install bubblewrap` (Debian/Ubuntu) — Codex prefers a `bwrap` on
+  `PATH`, and the distro package ships an allowed profile. Confirm with
+  `command -v bwrap` → `/usr/bin/bwrap`.
+- On a dedicated, credential-stripped host, set
+  `codex_sandbox = "danger-full-access"` in `[agents]`. **Not** `workspace-write`
+  — it is also bubblewrap-based and fails identically.
+- Do not disable `kernel.apparmor_restrict_unprivileged_userns` host-wide unless
+  the host is isolated and you accept the security tradeoff.
+
+**Make it visible**
+
+Because this hides as "no findings", ship poller stdout to your observability
+stack and alert on an anomalous no-findings rate (see
+[Metrics & telemetry](/telemetry)). To check a single run by hand, grep its
+worker log for `bwrap:`.
+
+## Found issues but did not post
+
+`review_findings` has rows, but nothing appears on the MR/PR. Each filter drops
+findings before the poster runs:
+
+- **`[review].dry_run = true`** (the default) — findings are recorded, never posted.
+  Set it to `false` to post.
+- **Confidence floor** — `[review].min_confidence` (`0.85`) and any
+  `[review].category_min_confidence` drop below-floor findings.
+- **Gate mode** — `[review].mode = "gate"` posts only blocking defects and drops
+  non-defect categories.
+- **`allowed_kinds`** — a non-empty `[review].allowed_kinds` whitelist drops kinds
+  not listed.
+- **Dispute suppression** — `[review].suppress_disputed_classes = true` drops a
+  category this repo repeatedly disputes.
+- **Duplicate fingerprint** — a finding already posted at this
+  `(project, iid, sha, fingerprint)` is not re-posted.
+- **Line-mapping miss** — a finding whose file/line is not in the diff cannot anchor
+  inline.
+- **Token lacks write scope** — GitLab needs `api`; GitHub needs `pull-requests: write`.
+
+Check `review_findings.status` (`posted` / `suppressed` / …) and the
+`finding_filtered` log events, which name the drop reason.
+
+## Posted but metrics are wrong
+
+Comments exist, but `resolved`/`disputed` tallies stay at zero.
+
+- **`--sync-outcomes` not scheduled.** Outcomes update only when
+  `bubo-poller --sync-outcomes` runs (hourly cron; see [Operate](/operate#outcome-sync)).
+- **`bot_username` mismatch.** Sync tells bot comments from developer replies by
+  author. A wrong `[gitlab].bot_username` / `[github].bot_username` misattributes both.
+- **GitHub resolution needs GraphQL.** REST cannot read per-thread resolution; without
+  GraphQL, sync falls back to a resolution-blind path (posted/deleted/replied only). See
+  [Operate → posting & thread resolution](/operate#posting--thread-resolution).
+- **GitLab resolution is REST.** The discussions API carries `resolved`/`resolvable`; a
+  token without MR access reads nothing.
+- **Stale SQLite after a migration or host move.** If you reset `reviewer.sqlite`,
+  backfill history before trusting the numbers:
+  `bubo-poller --backfill-gitlab-bot-comments-since <ISO>` (or `--backfill-github-…`).
+
+## MCP
+
+`review_change` and the read-only metrics tools reach the reviewer over MCP. Diagnose
+by transport (`[mcp_server].transport`; see [MCP server](/mcp)).
+
+**stdio (the default).** Codex spawns `bubo mcp` per session — there's no long-lived
+process to ping. Smoke-test the binary with a one-shot `initialize` handshake:
+
+```sh
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
+  | bin/bubo mcp
+```
+
+A JSON-RPC reply containing `"serverInfo":{"name":"bubo",…}` means it works (the proposed
+`protocolVersion` doesn't matter — the server replies with its own). A Python traceback or
+no output means a broken config/import — run `bubo doctor` first.
+
+**stdio over SSH.** Non-interactive key auth is mandatory: a password prompt, key
+passphrase, or login banner is written into the same stdin/stdout the MCP client uses and
+hangs the agent. Pin the user and key in `~/.ssh/config` and verify with no prompt (see the
+SSH tab on [MCP server](/mcp)):
+
+```sh
+ssh -o BatchMode=yes bubo-reviewer '/opt/bubo/bin/bubo mcp --help >/dev/null'
+```
+
+**HTTP.** The server is long-lived; probe `/mcp`. With no token it must return **401**
+(up, and auth enforced); connection-refused means it's down:
+
+```sh
+# 401 → up and requiring auth
+curl -s -o /dev/null -w '%{http_code}\n' http://HOST:PORT/mcp
+
+# anything other than 401 → your token is accepted
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $BUBO_MCP_TOKEN" http://HOST:PORT/mcp
+```
+
+Under systemd, `journalctl -u bubo` shows the boot line — and an
+`mcp_http_bound_external` warning if it's bound to a non-loopback interface.
+
+**Client timeout.** A long `review_change` can outrun the client. Set the Codex client's
+`tool_timeout_sec` at or above `[review].timeout_seconds` (default `1800`).
+
+## Agent & LLM auth
+
+Reviews fail at the agent stage, or the agent cannot authenticate.
+
+- **The agent authenticates itself, not through Bubo.** The poller strips the LLM key
+  from the agent subprocess env. Codex uses its own `auth.json` (`codex login
+  --with-api-key` on the host); Claude uses `ANTHROPIC_API_KEY` in the agent env or an
+  `apiKeyHelper`. Pre-authenticate the agent on the poller host. `bubo doctor` checks the
+  Codex `[profiles.bubo]` block, not credentials.
+- **Claude selected but not wired.** Set `reviewer_command = ["claude", "-p"]` in
+  `[agents]`; without it, the bundled Codex default runs.
+- **Model unavailable.** A model your provider does not serve fails the agent stage; the
+  message is in `review_runs.error` and the worker log.
+
+## LLM account out of funds or key revoked
+
+Reviews that worked start failing — or silently return no findings — after the provider
+account runs out of credit or the API key is deleted or rotated.
+
+**Signatures** (in `review_runs.error` and the worker log):
+
+- Codex / OpenAI — `insufficient_quota` or "exceeded your current quota" (no funds);
+  `invalid_api_key` or a `401` (key deleted or rotated).
+- Claude / Anthropic — an `authentication_error` / `401` (key deleted); a credit or
+  billing error (no funds).
+
+**Cause.** The agent CLI authenticates directly with the provider — Bubo strips the LLM
+key from the agent env. A depleted balance or a revoked key rejects every agent call.
+Two traps:
+
+- The failure can surface as `no_findings` when the agent exits `0` on the error (rule 1
+  above). A no-findings spike across every repo right after a billing change is this, not
+  clean code.
+- `bubo doctor` does not catch it — it checks the Codex profile block, not live provider
+  auth.
+
+**Fix.**
+
+- Top up the provider account, or issue a new key.
+- Re-authenticate the agent on the host — its credentials are separate from
+  `config/env.toml`: `codex login --with-api-key` (Codex), or update `ANTHROPIC_API_KEY`
+  / the `apiKeyHelper` (Claude).
+- Re-review. A failed `reviewed_mrs` row at the current SHA is not retried until the SHA
+  changes: a new commit re-reviews, or trigger `review_change` over [MCP](/mcp) to re-run
+  the same SHA immediately.
+
+## Upgrades
+
+- **Re-run `bubo init` after every upgrade.** It refreshes the packaged
+  prompts/skills/plugins and leaves `config/env.toml` untouched (`--force` overwrites
+  config — only use it deliberately). See [Operate → install](/operate#install).
+- **Stale Codex config.** An old `~/.codex/config.toml` missing `[profiles.bubo]` fails
+  `bubo doctor`; re-running `bubo init` restores it.
+- **Old binary on `PATH`.** After `uv tool install --reinstall bubo`, run `hash -r` to
+  drop the shell's cached path to the previous `bubo`.
+- **Schema migrations.** Columns are added additively; `bubo-poller --init-db` (which
+  `bubo init` runs) applies them. Existing state survives.
+
+## Cost
+
+`cost_usd` / `llm_review.cost.usd` is zero or disagrees with the provider bill.
+
+- **Pricing left at defaults.** `[telemetry].input_per_1m`, `output_per_1m`, and
+  `cached_input_per_1m` default to `0`. Cost is a local estimate from these rates, not the
+  provider's invoice.
+- **Cached tokens uncounted.** Leaving `cached_input_per_1m` at `0` while the provider
+  discounts cache hits skews the estimate.
+- **Retries and re-reviews bill again.** Every agent invocation bills tokens; a new SHA
+  re-reviews and re-bills. `review_runs` holds one row per run with `tokens_total` /
+  `cost_usd`.
+- **Sync jobs are not reviews.** `--sync-outcomes` and the reply classifier also call the
+  model. Those tokens hit the bill but may not map to a `review_runs` row.

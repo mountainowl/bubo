@@ -1,0 +1,16 @@
+.eyebrow {
+  margin: 2.25rem 0 0;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #1d4ed8;
+}
+/* sit the kicker right above the heading that follows it */
+.eyebrow + :global(h2) {
+  margin-top: 0.35rem !important;
+}
+:global(html.dark) .eyebrow {
+  color: #60a5fa;
+}

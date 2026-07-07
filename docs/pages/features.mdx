@@ -1,0 +1,53 @@
+# Features
+
+Bubo reviews merge requests and pull requests with your chosen model, then posts
+only actionable comments. Every knob below lives in the
+[Configuration reference](/configuration).
+
+## Reviews
+
+- **Only what matters.** What's wrong, why it matters, and how to fix it — no chatter.
+- **Clean-review acknowledgement.** On clean changes, Bubo can post one short note so teams know the review ran. [config →](/configuration#agents)
+- **Dry run.** Run the full review path without posting comments. [dry_run →](/configuration#review)
+- **Pick the tone.** Terse, collaborative, socratic, formal, or casual. [Tones →](/configuration#review)
+
+## AI model flexibility
+
+- **Self-hosted.** Run it in your own infrastructure. [Install →](/recipes) · [System requirements →](/configuration#runtime-requirements)
+- **Bring your own model.** Use Codex, Claude, or any reviewer agent exposed through a CLI. [Recipes →](/recipes)
+- **SCM.** Supports GitLab and GitHub. [config →](/configuration#scm)
+
+## Decision gates
+
+- **Collaborate or gate.** Post questions and suggestions, or restrict output to merge-blocking defects.
+  [Surface mode →](/configuration#review)
+- **Confidence calibration.** Tune thresholds from team dispute history, with manual overrides when needed.
+  [Calibrate →](/configuration#review)
+- **Learns team preferences.** Categories repeatedly dismissed by a team can be suppressed.
+  [Suppression →](/configuration#review)
+- **Double-checks first.** Optional second pass for models whose findings don't hold up.
+  [Verify →](/configuration#review)
+
+## Governance, compliance & ROI
+
+- **AI-code provenance.** Identifies AI-assisted and sensitive changes for closer
+  review; it does not block merges by itself. [Provenance →](/configuration#governance)
+- **Audit trail.** A chronological record you can inspect — metrics and decisions. [Governance report →](/operate#governance-report)
+- **ROI reporting.** `bubo report` exports accept/dispute rate, bugs caught, noise
+  trend, cost, and lines of code reviewed.
+  [Governance report →](/operate#governance-report)
+- **Self-hosted control.** Repository data stays within the infrastructure and model path you configure.
+- **Redaction and signed releases.** Credentials are scrubbed before the model sees the diff. Release artifacts are keylessly signed with [cosign](https://www.sigstore.dev/), include [SLSA Build L3](https://slsa.dev/) provenance, and ship with an [SPDX SBOM](https://spdx.dev/). [verify →](operate#verify-a-release)
+
+## Integrations
+
+- **MCP.** Trigger an ad-hoc review from your editor, and query review state,
+  findings, and metrics. [MCP server →](/mcp)
+- **Reviews in CI.** A GitHub Action that reviews PRs and comments inline
+  in your pipeline. [GitHub Action →](/github-action)
+- **A read-only dashboard.** Recent reviews, health, findings, and reports. [Operate →](/operate)
+
+---
+
+**Next:** [Recipes](/recipes) · [How it works](/how-it-works) ·
+[Configuration reference](/configuration)

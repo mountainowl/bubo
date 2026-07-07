@@ -1,33 +1,23 @@
 name: Deploy docs to Pages
 
-# Builds the MkDocs Material site under docs/ and publishes it to
-# https://mountainowl.github.io/bubo/. The repo's homepage
-# URL in About points at that origin.
+# Builds the Nextra docs site under docs/ and publishes it to
+# https://mountainowl.github.io/bubo/. It is a GitHub Pages project site, so the
+# build sets basePath=/bubo (NEXT_PUBLIC_BASE_PATH) and exports a static bundle.
 #
-# Triggers:
-#   * push to main when docs/, mkdocs.yml, or this workflow change
-#   * manual run via the Actions tab (workflow_dispatch) for re-deploys
-#     without a content change
-#
-# The Pages "GitHub Actions" source MUST be enabled in repo Settings
-# → Pages → Source = "GitHub Actions" for the deploy step to bind
-# its artifact to the live site.
+# Requires repo Settings -> Pages -> Source = "GitHub Actions".
 
 on:
   push:
     branches: [main]
     paths:
       - docs/**
-      - mkdocs.yml
       - .github/workflows/deploy-docs.yml
-      - pyproject.toml
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Allow only one concurrent deploy. If a newer push lands while a build
-# is mid-flight, cancel the older one — Pages only serves the latest.
+# One deploy at a time; a newer push cancels an in-flight build.
 concurrency:
   group: pages-deploy
   cancel-in-progress: true
@@ -36,40 +26,42 @@ jobs:
   build:
     name: Build site
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - name: Set up Node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          python-version: "3.14"
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
 
-      - name: Install docs dependencies
-        run: uv sync --locked --group docs
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build the static site
-        # --strict fails on any warning (broken link, missing nav entry,
-        # malformed YAML) so a busted PR can't ship a broken site.
-        run: uv run mkdocs build --strict
+        env:
+          NEXT_PUBLIC_BASE_PATH: /bubo
+        run: npm run build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: site
+          path: docs/out
 
   deploy:
     name: Deploy to Pages
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      pages: write          # publish to the Pages environment
-      id-token: write       # OIDC for the deploy-pages action
+      pages: write # publish to the Pages environment
+      id-token: write # OIDC for the deploy-pages action
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
