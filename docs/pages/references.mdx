@@ -8,15 +8,96 @@ such, so you can weight them accordingly.
 
 ## Research & academic
 
-- **Launch-Day Diffusion: Tracking Hacker News Impact on GitHub Stars
-  for AI Tools** — arXiv preprint [2511.04453](https://arxiv.org/abs/2511.04453).
+**Code review and software quality.** The evidence behind Bubo's premise — that
+systematic review measurably reduces defects — and the review-rate figures its
+[overview](/overview) estimates budget against.
+
+- **Fagan, "Design and Code Inspections to Reduce Errors in Program
+  Development,"** IBM Systems Journal 15(3), 182–211, 1976 —
+  [doi.org/10.1147/sj.153.0182](https://doi.org/10.1147/sj.153.0182). The
+  foundational result that a systematic inspection process yields large net
+  gains in defect removal; the intellectual root of automated review.
+- **Kemerer & Paulk, "The Impact of Design and Code Reviews on Software
+  Quality,"** IEEE Trans. Software Eng. 35(4), 2009 —
+  [sites.pitt.edu](https://sites.pitt.edu/~ckemerer/PSP_Data.pdf). Empirical
+  evidence that review lowers defect density, and that review *rate* drives
+  effectiveness — the basis for the "defects caught → reviewer-hours saved"
+  framing and the ~200–400 LoC/hr rate on the overview.
+- **McIntosh, Kamei, Adams & Hassan, "The Impact of Code Review Coverage and
+  Participation on Software Quality,"** MSR 2014 (distinguished paper) —
+  [doi.org/10.1145/2597073.2597076](https://doi.org/10.1145/2597073.2597076).
+  Lower review coverage and participation track with more post-release
+  defects — the argument for reviewing *every* change, which Bubo automates.
+- **SmartBear / Cisco, "Best Practices for Peer Code Review"** —
+  [smartbear.com](https://smartbear.com/learn/code-review/best-practices-for-peer-code-review/).
+  The industry study behind the ~200–400 LoC/hr careful-review rate and the
+  sharp fall in defect detection above ~400–500 LoC that the overview
+  estimates use. *(Industry white paper, not peer-reviewed.)*
+
+**Modern, tool-based code review.** Why Bubo posts inline, tracks finding
+outcomes, and offers review *tone* and a gate/collaborate mode rather than only
+flagging bugs.
+
+- **Bacchelli & Bird, "Expectations, Outcomes, and Challenges of Modern Code
+  Review,"** ICSE 2013, 712–721 —
+  [doi.org/10.1109/ICSE.2013.6606617](https://doi.org/10.1109/ICSE.2013.6606617).
+  Finds defect-finding is one of several review outcomes (alongside
+  understanding and team signalling) and that low-signal comments erode trust
+  — the rationale for Bubo's confidence floors, outcome tracking, and
+  dispute-driven suppression.
+- **Sadowski, Söderberg, Church, Sipko & Bacchelli, "Modern Code Review: A
+  Case Study at Google,"** ICSE-SEIP 2018, 181–190 —
+  [doi.org/10.1145/3183519.3183525](https://doi.org/10.1145/3183519.3183525).
+  Review at scale is lightweight, fast, and per-change — the model Bubo's
+  per-MR/PR poller targets.
+
+**LLM methods Bubo implements.** The techniques behind Bubo's confidence and
+verification machinery.
+
+- **Guo, Pleiss, Sun & Weinberger, "On Calibration of Modern Neural
+  Networks,"** ICML 2017 (PMLR 70:1321–1330) —
+  [arXiv:1706.04599](https://arxiv.org/abs/1706.04599). Modern models are
+  poorly calibrated out of the box — the basis for Bubo's confidence floors
+  and `calibrate_confidence`, which derives per-category thresholds from
+  observed outcome history rather than trusting raw model confidence.
+- **Wang et al., "Self-Consistency Improves Chain-of-Thought Reasoning in
+  Language Models,"** ICLR 2023 —
+  [arXiv:2203.11171](https://arxiv.org/abs/2203.11171). Sampling diverse
+  reasoning and keeping the majority answer beats a single pass — the idea
+  behind Bubo's `verify_min_votes`: a finding survives only when enough
+  independent verifier lenses agree.
+- **Zheng et al., "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena,"**
+  NeurIPS 2023 (Datasets & Benchmarks) —
+  [arXiv:2306.05685](https://arxiv.org/abs/2306.05685). Establishes
+  LLM-as-judge and documents its biases (self-enhancement, verbosity); Bubo's
+  separate, perspective-diverse verifier lenses (`correctness` / `in_diff` /
+  `reproduce`) apply and harden that pattern.
+
+**Launch dynamics.**
+
+- **"Launch-Day Diffusion: Tracking Hacker News Impact on GitHub Stars
+  for AI Tools"** — arXiv preprint [2511.04453](https://arxiv.org/abs/2511.04453).
   An empirical study (n≈138 AI/LLM tool launches, 2024–2025) measuring
   how a Hacker News appearance translates into GitHub stars, and how
   *posting time* affects the outcome. We used it to reason about launch
-  timing. Caveat worth keeping in mind: the **direction** of the timing
-  effect (optimal windows produce materially more stars) is well
-  supported, but the paper's specific absolute star-count figures are a
-  single unreplicated preprint — treat them as indicative, not precise.
+  timing. Caveat: the **direction** of the timing effect (optimal windows
+  produce materially more stars) is well supported, but the paper's specific
+  absolute star-count figures are a single unreplicated preprint — treat them
+  as indicative, not precise.
+
+## Cost & pricing data
+
+The inputs behind the overview's dollar figures — surfaced here for
+auditability. These are data sources, not research.
+
+- **U.S. Bureau of Labor Statistics — "Software Developers," Occupational
+  Outlook Handbook, May 2024** —
+  [bls.gov](https://www.bls.gov/ooh/computer-and-information-technology/software-developers.htm).
+  The $133,080 median (~$64/hr) that, at a conservative 1.4× benefits/overhead
+  load, yields the ~$90/hr fully-loaded reviewer rate on the overview.
+- **Peer AI-reviewer list pricing** — CodeRabbit, Greptile, Qodo, Graphite,
+  accessed 2026. ~$24–30/developer-month, the comparison point for Bubo's
+  per-review cost. *(Vendor list prices, subject to change.)*
 
 ## How GitHub discovery actually works
 
