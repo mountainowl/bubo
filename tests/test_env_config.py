@@ -94,7 +94,6 @@ def test_runtime_env_exports_from_env_toml() -> None:
         "gitlab": {
             "api_url": "https://gitlab.example/api/v4",
             "bot_username": "review-bot",
-            "denied_tools_regex": "^(delete_.*)$",
             "token": "gitlab-secret",
         },
         "poller": {
@@ -120,14 +119,14 @@ def test_runtime_env_exports_from_env_toml() -> None:
     # BUBO_ROOT covers the same intent.
     assert "BUBO_HOME" not in env
     assert env["BUBO_BASE_DIR"] == "/opt/bubo/var"
-    assert env["REVIEW_MODEL"] == "gpt-test"
-    assert env["REVIEW_REASONING_EFFORT"] == "high"
+    assert env["LLM_MODEL"] == "gpt-test"
+    # LLM_MODEL_EFFORT falls back to the deprecated `reasoning_effort` key.
+    assert env["LLM_MODEL_EFFORT"] == "high"
     assert env["REVIEW_DRY_RUN"] == "false"
     assert env["POLL_INTERVAL_SECONDS"] == "123"
     assert env["CODEX_REVIEW_PROFILE"] == "reviewer"
     assert env["CODEX_SANDBOX"] == "read-only"
     assert env["GITLAB_API_URL"] == "https://gitlab.example/api/v4"
-    assert env["GITLAB_DENIED_TOOLS_REGEX"] == "^(delete_.*)$"
     assert env["BUBO_GITLAB_USERNAME"] == "review-bot"
     assert env["GITLAB_TOKEN"] == "gitlab-secret"
     assert env["GITLAB_PERSONAL_ACCESS_TOKEN"] == "gitlab-secret"
@@ -142,8 +141,7 @@ def test_runtime_env_exports_from_env_toml() -> None:
 
 
 def test_llm_key_exports_under_operator_named_var() -> None:
-    # The operator names the env var their LLM CLI reads — no model-based
-    # guessing. Here Anthropic, despite no "claude" anywhere.
+    # Back-compat: the deprecated `llm_api_key_env` is still honored when present.
     env = runtime_env(
         Path("/opt/bubo"),
         {"agents": {"llm_api_key": "secret", "llm_api_key_env": "ANTHROPIC_API_KEY"}},
@@ -151,6 +149,24 @@ def test_llm_key_exports_under_operator_named_var() -> None:
     assert env["LLM_API_KEY"] == "secret"
     assert env["ANTHROPIC_API_KEY"] == "secret"
     assert "OPENAI_API_KEY" not in env
+
+
+def test_llm_model_effort_new_key_wins_over_deprecated() -> None:
+    env = runtime_env(
+        Path("/opt/bubo"),
+        {"agents": {"llm_model_effort": "low", "reasoning_effort": "high"}},
+    )
+    assert env["LLM_MODEL_EFFORT"] == "low"
+
+
+def test_llm_base_url_exported_only_when_set() -> None:
+    with_url = runtime_env(
+        Path("/opt/bubo"),
+        {"agents": {"llm_base_url": "https://gw.internal/v1"}},
+    )
+    assert with_url["LLM_BASE_URL"] == "https://gw.internal/v1"
+    without = runtime_env(Path("/opt/bubo"), {"agents": {}})
+    assert "LLM_BASE_URL" not in without
 
 
 def test_llm_key_works_for_any_provider_name() -> None:

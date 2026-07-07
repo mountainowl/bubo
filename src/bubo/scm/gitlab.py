@@ -1,8 +1,9 @@
-"""GitLab provider — wraps the GitLab REST client + MCP posting.
+"""GitLab provider — wraps the GitLab REST client.
 
-Composes :mod:`bubo.gitlab` (REST), :mod:`bubo.mcp`
-(inline posting), and the GitLab-specific checkout/position logic that
-previously lived inline in the poller.
+Composes :mod:`bubo.gitlab` (REST) with the GitLab-specific checkout and
+position logic. Checkout uses plain ``git`` over HTTPS (credential-safe, see
+:func:`bubo.scm.base.git_checkout_change`); posting and outcome sync use the
+REST API.
 """
 
 from __future__ import annotations
@@ -10,15 +11,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from bubo import gitlab, mcp
+from bubo import gitlab
 from bubo.config_values import ConfigError
 from bubo.errors import describe
-from bubo.events import log
 from bubo.findings import build_position, changed_lines_from_diffs
 from bubo.review_config import ReviewConfig
-from bubo.scm.base import build_review_contract
-from bubo.secrets import redact_secrets
-from bubo.subproc import run_bounded
+from bubo.scm.base import build_review_contract, git_checkout_change
 from bubo.types import JsonObject
 
 
@@ -82,43 +80,19 @@ class GitLabProvider:
 
     def checkout(self, cfg: ReviewConfig, project: str, change: JsonObject, dest: Path) -> None:
         number = self.change_number(change)
-        sha = self.head_sha(change)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if not (dest / ".git").exists():
-            result = run_bounded(["glab", "repo", "clone", project, str(dest)], timeout=900)
-            if result.returncode:
-                raise RuntimeError(
-                    describe(
-                        "git clone failed for the change",
-                        reason=redact_secrets(result.stdout[-3000:]),
-                        fix=(
-                            "verify the repo URL, the token's scope/permissions, and "
-                            "network access to the host."
-                        ),
-                    )
-                )
-        for args in (
-            ["git", "fetch", "origin", "--prune"],
-            [
-                "git",
-                "fetch",
-                "origin",
-                f"refs/merge-requests/{number}/head:refs/remotes/origin/mr-{number}",
-            ],
-            ["git", "checkout", "--detach", sha],
-        ):
-            result = run_bounded(args, cwd=dest, timeout=900)
-            if result.returncode:
-                raise RuntimeError(
-                    describe(
-                        "git fetch/checkout failed for the change",
-                        reason=redact_secrets(result.stdout[-3000:]),
-                        fix=(
-                            "verify the repo URL, the token's scope/permissions, and "
-                            "network access to the host."
-                        ),
-                    )
-                )
+        # Plain HTTPS clone URL; the token is supplied per-git-call as an auth
+        # header (see git_checkout_change), never embedded in the URL or remote.
+        # cfg.gitlab_url is the web host and carries any self-hosted host/port;
+        # `project` is the full path-with-namespace (sub-groups included).
+        clone_url = f"{cfg.gitlab_url.rstrip('/')}/{project}.git"
+        git_checkout_change(
+            clone_url=clone_url,
+            ref_fetch=f"refs/merge-requests/{number}/head:refs/remotes/origin/mr-{number}",
+            sha=self.head_sha(change),
+            dest=dest,
+            token=self.token(),
+            username="oauth2",
+        )
 
     def post_inline_comment(
         self,
@@ -129,24 +103,13 @@ class GitLabProvider:
         body: str,
         position: JsonObject,
     ) -> str:
-        # Prefer the MCP server; fall back to REST on any MCP failure so a
-        # missing upstream server / launcher (e.g. after the bin/ consolidation
-        # in #77) never crashes a review. Mirrors the GitHub provider.
-        try:
-            result = mcp.call_tool(
-                "create_merge_request_thread", mcp.thread_args(project, number, body, position)
-            )
-            found = mcp.discussion_id(result)
-            if found:
-                return found
-        except (RuntimeError, TimeoutError, OSError) as exc:
-            log("gitlab_mcp_post_failed", project=project, number=number, error=str(exc))
         existing = gitlab.find_discussion_by_body(cfg, token, project, number, body)
         if existing:
             return existing
-        return mcp.discussion_id_from_response(
-            gitlab.create_merge_request_discussion(cfg, token, project, number, body, position)
+        created = gitlab.create_merge_request_discussion(
+            cfg, token, project, number, body, position
         )
+        return str(created.get("id") or "")
 
     def post_change_comment(
         self,

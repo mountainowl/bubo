@@ -210,6 +210,51 @@ class _SilentTelemetry:
         raise AssertionError("unexpected failure metric")
 
 
+def test_outcome_sync_emits_analytics_once_per_outcome_transition(monkeypatch) -> None:
+    """Anonymous analytics fire on the false->true transition only.
+
+    A posted finding is re-checked every sync; PostHog can't dedupe (no
+    fingerprint is sent), so a still-resolved finding must NOT re-emit on the
+    second pass — otherwise "Resolved: N" would grow by one every cycle.
+    """
+    captured: list[str] = []
+    monkeypatch.setattr(poller.analytics, "analytics_enabled", lambda cfg: True)
+    monkeypatch.setattr(
+        poller.analytics,
+        "record_finding_outcome",
+        lambda cfg, *, scm_provider, outcome: captured.append(outcome),
+    )
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            _seed_posted_finding(paths.DB)
+            fake = _SilentTelemetry()
+            cfg = ReviewConfig(gitlab_url="https://gitlab.com", telemetry_config=fake.config)
+            # resolved + developer_replied, no reply text (so the LLM classifier
+            # never runs); both flags are first-seen on pass 1.
+            outcome = {
+                "resolved": True,
+                "deleted": False,
+                "developer_replied": True,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "resolved_at": None,
+                "merged_unresolved": False,
+            }
+            provider = _FakeProvider(outcome=outcome)
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=provider):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
+                        poller.sync_outcomes(limit=1)  # transition -> emits both
+                        poller.sync_outcomes(limit=1)  # already true -> no new emits
+            assert sorted(captured) == ["developer_replied", "resolved"]
+    finally:
+        paths.DB = original_db
+
+
 def test_outcome_sync_classifies_rejecting_reply_as_disputed() -> None:
     original_db = paths.DB
     try:

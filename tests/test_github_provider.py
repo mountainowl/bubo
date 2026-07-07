@@ -79,33 +79,63 @@ def test_provider_build_position_uses_line_and_side() -> None:
     assert provider.build_position({}, changed, {"file": "src/A.py", "line": 7}) is None
 
 
-def test_provider_post_falls_back_to_rest_when_mcp_fails() -> None:
+def test_provider_post_creates_via_rest() -> None:
     provider = GitHubProvider()
     position = {"commit_id": "abc", "path": "src/A.py", "line": 7, "side": "RIGHT"}
 
-    with patch("bubo.mcp.call_tool", side_effect=RuntimeError("no such tool")):
-        with patch("bubo.github.find_review_comment_by_body", return_value=""):
-            with patch(
-                "bubo.github.create_pr_review_comment",
-                return_value={"id": "gh-comment-1"},
-            ):
-                comment_id = provider.post_inline_comment(
-                    ReviewConfig(provider="github"), "tok", "o/r", 5, "body", position
-                )
+    with patch("bubo.github.find_review_comment_by_body", return_value=""):
+        with patch(
+            "bubo.github.create_pr_review_comment",
+            return_value={"id": "gh-comment-1"},
+        ):
+            comment_id = provider.post_inline_comment(
+                ReviewConfig(provider="github"), "tok", "o/r", 5, "body", position
+            )
 
     assert comment_id == "gh-comment-1"
 
 
-def test_provider_post_prefers_mcp_when_it_returns_id() -> None:
+def test_provider_post_reuses_existing_review_comment() -> None:
     provider = GitHubProvider()
     position = {"commit_id": "abc", "path": "src/A.py", "line": 7, "side": "RIGHT"}
 
-    with patch("bubo.mcp.call_tool", return_value={"id": "mcp-comment-9"}):
+    with patch("bubo.github.find_review_comment_by_body", return_value="existing-5"):
         comment_id = provider.post_inline_comment(
             ReviewConfig(provider="github"), "tok", "o/r", 5, "body", position
         )
 
-    assert comment_id == "mcp-comment-9"
+    assert comment_id == "existing-5"
+
+
+def test_checkout_clones_credential_safe(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-SECRET")
+    calls: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+
+    def fake_run(args: list[str], *, cwd=None, timeout=0):
+        calls.append(args)
+        return _Result()
+
+    # GitHub Enterprise api_url -> the web host bubo clones from is the netloc.
+    cfg = ReviewConfig(provider="github", github_api_url="https://ghe.example.com/api/v3")
+    with patch("bubo.scm.base.run_bounded", side_effect=fake_run):
+        GitHubProvider().checkout(
+            cfg, "o/r", {"number": 5, "head": {"sha": "abc123"}}, tmp_path / "wt"
+        )
+
+    clone = next(a for a in calls if "clone" in a)
+    assert "https://ghe.example.com/o/r.git" in clone
+    assert not any("ghp-SECRET" in part for part in clone)
+    remote = [a for a in calls if "-c" in a]
+    assert remote
+    assert all(
+        any(part.startswith("http.extraHeader=Authorization: Basic ") for part in a)
+        for a in remote
+    )
+    assert calls[-1] == ["git", "checkout", "--detach", "abc123"]
 
 
 def test_classify_review_thread_outcome_reads_markers_and_replies() -> None:

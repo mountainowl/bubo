@@ -4,7 +4,6 @@ This file is the orchestrator. It sequences the review pipeline; the
 heavy lifting lives in dedicated sibling modules:
 
 * :mod:`bubo.db` — SQLite schema and all writers.
-* :mod:`bubo.mcp` — JSON-RPC client for the GitLab MCP server.
 * :mod:`bubo.gitlab` — REST client.
 * :mod:`bubo.findings` — finding extraction, policy filter,
   diff-position mapping.
@@ -47,7 +46,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from bubo import github, gitlab, paths
+from bubo import analytics, github, gitlab, paths
 from bubo.config_values import ConfigError
 from bubo.db import (
     already_seen,
@@ -92,7 +91,6 @@ from bubo.governance_policy import (
     is_escalated,
 )
 from bubo.hash_utils import stable_hash
-from bubo.mcp import call_tool as mcp_call_tool
 from bubo.outcome_classifier import classify_developer_reply
 from bubo.paths import CONFIG, ROOT
 from bubo.prompt import render_meta_prompt as _render_meta_prompt
@@ -164,7 +162,7 @@ REVIEWER_ENV_ALLOWLIST = {
 # ---------------------------------------------------------------------------
 
 
-def reviewer_env(source: Mapping[str, str]) -> dict[str, str]:
+def reviewer_env(source: Mapping[str, str], cfg: ReviewConfig | None = None) -> dict[str, str]:
     """Build the env dict for the agent subprocess.
 
     Filters ``source`` through :data:`REVIEWER_ENV_ALLOWLIST` — dropping
@@ -173,9 +171,21 @@ def reviewer_env(source: Mapping[str, str]) -> dict[str, str]:
     MCP server the agent spawns via ``bin/bubo`` resolves the install
     root. The review prompt (with its contract + findings cap) is passed to
     the agent as a command argument, not via the environment.
+
+    **base_url exception:** a custom OpenAI-compatible endpoint
+    (``cfg.llm_base_url``) reads the API key from the environment at request
+    time — there is no login flow to stash it in ``auth.json``. So, and *only*
+    when a base URL is configured, exactly ``LLM_API_KEY`` and ``LLM_BASE_URL``
+    are let through the allowlist. This deliberately re-exposes one credential
+    to the agent, which is why it is gated on the operator opting into a base
+    URL rather than widening the static allowlist for everyone.
     """
     env = {key: value for key, value in source.items() if key in REVIEWER_ENV_ALLOWLIST}
     env["BUBO_ROOT"] = str(ROOT)
+    if cfg is not None and cfg.llm_base_url:
+        for name in ("LLM_API_KEY", "LLM_BASE_URL"):
+            if source.get(name):
+                env[name] = source[name]
     return env
 
 
@@ -199,7 +209,7 @@ def run_verification(finding: JsonObject, repo: Path | None, cfg: ReviewConfig) 
     verdicts: list[Verdict] = []
     if not command:
         return verdicts
-    env = reviewer_env(os.environ)
+    env = reviewer_env(os.environ, cfg)
     for lens in cfg.verify_lenses:
         prompt = build_verification_prompt(finding, lens=lens)
         try:
@@ -474,6 +484,9 @@ def poll() -> int:
         inflight_cap=inflight_cap,
         max_merge_requests_per_poll=cfg.max_merge_requests_per_poll,
     )
+    analytics.record_session_start(
+        cfg.analytics_config, scm_provider=cfg.provider, projects_count=len(cfg.projects)
+    )
     if inflight >= inflight_cap:
         log(
             "poll_throttled_inflight",
@@ -519,6 +532,7 @@ def poll() -> int:
                 return queued
     if queued == 0:
         log("no_pending_reviews", poll_run_id=poll_run_id)
+    analytics.flush()
     log("poll_done", poll_run_id=poll_run_id, queued=queued)
     return queued
 
@@ -564,6 +578,29 @@ def emit_finding_metric(
     """Forward one finding-lifecycle event to OTel if telemetry is enabled."""
     if telemetry and telemetry.config.emit_finding_events:
         telemetry.record_finding(repo=repo, status=status, finding=finding, dry_run=dry_run)
+
+
+def changed_loc(
+    provider: ScmProvider,
+    cfg: ReviewConfig,
+    token: str,
+    project: str,
+    number: int,
+) -> tuple[int | None, int | None]:
+    """Best-effort ``(files_changed, lines_changed)`` for anonymous analytics.
+
+    Sums the provider's added-line counts (the same changed-line map the
+    poster uses for position mapping). Returns ``(None, None)`` on any failure
+    — analytics must never break a review, and an unknown count must not
+    masquerade as zero.
+    """
+    try:
+        changed = provider.changed_lines(cfg, token, project, number)
+    except Exception:
+        return None, None
+    files = len(changed)
+    lines = sum(len(entry.get("new_lines") or ()) for entry in changed.values())
+    return files, lines
 
 
 def _position_file(position: JsonObject) -> Any:
@@ -1109,6 +1146,8 @@ def worker(job: Path) -> int:
     cost_usd = 0.0
     lines_reviewed = 0
     repo: Path | None = None
+    files_changed: int | None = None
+    lines_changed: int | None = None
     try:
         cfg = read_config()
         provider = get_provider(cfg)
@@ -1155,6 +1194,10 @@ def worker(job: Path) -> int:
             except Exception as exc:
                 log("lines_reviewed_failed", project=project, iid=iid, error=type(exc).__name__)
                 lines_reviewed = 0
+            # Anonymous LoC for analytics — computed ONLY when analytics is
+            # enabled, so an opted-out user pays no extra API round-trip.
+            if analytics.analytics_enabled(cfg.analytics_config):
+                files_changed, lines_changed = changed_loc(provider, cfg, token, project, iid)
             # Opt-in governance (off by default). Captures provenance and
             # evaluates the policy gate; returns a heightened-scrutiny directive
             # to inject into the prompt when the change escalates. No-op + no API
@@ -1171,7 +1214,7 @@ def worker(job: Path) -> int:
                     telemetry=telemetry,
                 )
             extra_directive = governance[1] if governance else ""
-            env = reviewer_env(os.environ)
+            env = reviewer_env(os.environ, cfg)
             with telemetry.span("llm_review.agent", repo=project, model=model) as agent_span:
                 result = run(
                     [
@@ -1267,6 +1310,27 @@ def worker(job: Path) -> int:
                 tone=cfg.tone,
                 lines_reviewed=lines_reviewed,
             )
+            analytics.record_review_completed(
+                cfg.analytics_config,
+                scm_provider=cfg.provider,
+                agent=analytics.agent_label(cfg.reviewer_command),
+                model=model,
+                status=str(status),
+                dry_run=cfg.dry_run,
+                review_mode=str(ReviewMode.DIFF),
+                tone=cfg.tone,
+                duration_seconds=round(time.monotonic() - started, 2),
+                tokens_input=tokens.input,
+                tokens_output=tokens.output,
+                tokens_cached=tokens.cached,
+                tokens_total=tokens.total,
+                cost_usd=cost_usd,
+                findings_posted=posted,
+                findings_planned=planned,
+                findings_skipped=skipped,
+                files_changed=files_changed,
+                lines_changed=lines_changed,
+            )
             log(
                 "review_done",
                 project=project,
@@ -1319,6 +1383,28 @@ def worker(job: Path) -> int:
                 tone=cfg.tone if cfg is not None else None,
                 lines_reviewed=lines_reviewed,
             )
+        if cfg is not None:
+            analytics.record_review_completed(
+                cfg.analytics_config,
+                scm_provider=cfg.provider,
+                agent=analytics.agent_label(cfg.reviewer_command),
+                model=model,
+                status=str(ReviewStatus.FAILED),
+                dry_run=cfg.dry_run,
+                review_mode=str(ReviewMode.DIFF),
+                tone=cfg.tone,
+                duration_seconds=round(time.monotonic() - started, 2),
+                tokens_input=tokens.input,
+                tokens_output=tokens.output,
+                tokens_cached=tokens.cached,
+                tokens_total=tokens.total,
+                cost_usd=cost_usd,
+                findings_posted=0,
+                findings_planned=0,
+                findings_skipped=0,
+                files_changed=files_changed,
+                lines_changed=lines_changed,
+            )
         log(
             "review_failed",
             project=project,
@@ -1332,6 +1418,7 @@ def worker(job: Path) -> int:
     finally:
         if repo is not None:
             cleanup_worktree(repo)
+        analytics.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -1462,6 +1549,8 @@ def sync_outcomes(limit: int = 200) -> int:
                 discussion_id=finding["discussion_id"],
                 outcome=outcome,
             )
+            prior_outcome = finding.get("prior_outcome") or {}
+            analytics_on = analytics.analytics_enabled(cfg.analytics_config)
             for name in (
                 "resolved",
                 "deleted",
@@ -1470,12 +1559,23 @@ def sync_outcomes(limit: int = 200) -> int:
                 "false_positive",
                 "duplicate",
             ):
-                if outcome[name] and telemetry.config.emit_outcome_sync:
+                if not outcome[name]:
+                    continue
+                if telemetry.config.emit_outcome_sync:
                     telemetry.record_finding(
                         repo=project,
                         status=name,
                         finding={"type": "unknown", "severity": "unknown", "category": "unknown"},
                         dry_run=False,
+                    )
+                # Anonymous analytics fan-out, beside the DB upsert above. Emit
+                # only on the false->true transition: the same posted finding is
+                # re-checked every cycle and PostHog has no per-finding key to
+                # dedupe on (the fingerprint is never sent), so an every-sync
+                # emit would multiply the count.
+                if analytics_on and not prior_outcome.get(name):
+                    analytics.record_finding_outcome(
+                        cfg.analytics_config, scm_provider=cfg.provider, outcome=name
                     )
             synced += 1
         except Exception as exc:
@@ -1495,12 +1595,20 @@ def sync_outcomes(limit: int = 200) -> int:
                 iid=iid,
                 error=redact_secrets(str(exc)),
             )
+    analytics.flush()
     log("outcome_sync_done", synced=synced, classified=classifications)
     return synced
 
 
 def backfill_gitlab_bot_comments(updated_after: str, limit: int = 500) -> int:
-    """Import already-posted GitLab bot discussions into local metrics state."""
+    """Import already-posted GitLab bot discussions into local metrics state.
+
+    Analytics boundary: outcomes written here are DB-only. This imports
+    pre-existing history, so it deliberately does not emit anonymous
+    ``finding_outcome`` events (those would land in PostHog at backfill time,
+    corrupting the by-day breakdown). Only the live ``sync_outcomes`` path
+    emits — see :func:`bubo.analytics.record_finding_outcome`.
+    """
     init_db()
     cfg = read_config()
     provider = get_provider(cfg)
@@ -1630,6 +1738,10 @@ def backfill_github_bot_comments(updated_after: str, limit: int = 500) -> int:
     GraphQL (so resolution state is real), records the bot's root comment as
     a POSTED finding, and upserts its outcome. Correlates to any existing
     row by the stored comment id so a re-run is idempotent.
+
+    Analytics boundary: like its GitLab twin, outcomes written here are
+    DB-only — backfilled history is not emitted to anonymous analytics; only
+    the live ``sync_outcomes`` path emits ``finding_outcome`` events.
     """
     init_db()
     cfg = read_config()
@@ -1832,7 +1944,6 @@ __all__ = [
     "latest_reviewed_row",
     "log",
     "main",
-    "mcp_call_tool",
     "normalize_config",
     "now",
     "poll",

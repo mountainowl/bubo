@@ -36,7 +36,7 @@ def test_default_runtime_config_is_consolidated_in_env_toml() -> None:
     assert "telemetry.pricing.default" not in text
     assert "post_summary" not in config
     assert config["agents"]["llm_model"] == "gpt-5.5"
-    assert config["agents"]["reasoning_effort"] == "medium"
+    assert config["agents"]["llm_model_effort"] == "medium"
     assert config["poller"]["interval_seconds"] == 900
 
 

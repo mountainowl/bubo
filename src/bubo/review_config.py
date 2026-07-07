@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from bubo.analytics_config import AnalyticsConfig, analytics_config_from_dict
 from bubo.config_values import (
     ConfigError,
     bool_value,
@@ -157,6 +158,12 @@ class ReviewConfig:
         Reserved for a future "post one summary comment per MR" path.
     telemetry_config:
         Parsed :class:`TelemetryConfig` block.
+    analytics_config:
+        Parsed :class:`~bubo.analytics_config.AnalyticsConfig` block — the
+        anonymous, **on-by-default** usage analytics ("help improve Bubo").
+        Sends numbers only (no code, paths, repo names, or text); opt out via
+        ``[analytics] enabled = false``, ``BUBO_ANALYTICS=0``, or
+        ``DO_NOT_TRACK=1``. See :mod:`bubo.analytics`.
     governance_config:
         Parsed :class:`~bubo.governance_config.GovernanceConfig` block —
         the opt-in, off-by-default AI-provenance / governance surface. In its
@@ -301,8 +308,11 @@ class ReviewConfig:
     target_merge_request_iid: int | None = None
     reviewer_command: list[str] = field(default_factory=lambda: list(DEFAULT_REVIEWER_COMMAND))
     model: str | None = None
+    model_effort: str | None = None
+    llm_base_url: str | None = None
     post_summary: bool = False
     telemetry_config: TelemetryConfig = field(default_factory=TelemetryConfig)
+    analytics_config: AnalyticsConfig = field(default_factory=AnalyticsConfig)
     governance_config: GovernanceConfig = field(default_factory=GovernanceConfig)
     projects: list[str] = field(default_factory=list)
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
@@ -364,6 +374,26 @@ def load_review_config(
     return review_config_from_dict(raw, log_event=log_event)
 
 
+def _agent_model_effort(
+    agent: dict[str, Any], log_event: Callable[..., None] | None
+) -> str | None:
+    """Read ``[agents].llm_model_effort``, falling back to the deprecated
+    ``reasoning_effort`` key. Emits a ``config_key_deprecated`` event when the
+    old key is the one in use so operators get a nudge to rename it.
+    """
+    if agent.get("llm_model_effort"):
+        return str(agent["llm_model_effort"])
+    if agent.get("reasoning_effort"):
+        if log_event is not None:
+            log_event(
+                "config_key_deprecated",
+                key="agents.reasoning_effort",
+                replacement="agents.llm_model_effort",
+            )
+        return str(agent["reasoning_effort"])
+    return None
+
+
 def review_config_from_dict(
     raw: dict[str, Any], log_event: Callable[..., None] | None = None
 ) -> ReviewConfig:
@@ -423,7 +453,10 @@ def review_config_from_dict(
             str(item) for item in agent.get("reviewer_command", DEFAULT_REVIEWER_COMMAND)
         ],
         model=str(agent["llm_model"]) if agent.get("llm_model") else None,
+        model_effort=_agent_model_effort(agent, log_event),
+        llm_base_url=str(agent["llm_base_url"]) if agent.get("llm_base_url") else None,
         telemetry_config=telemetry_config,
+        analytics_config=analytics_config_from_dict(raw),
         governance_config=governance_config_from_dict(raw),
         projects=[
             item["path"]

@@ -6,8 +6,8 @@ Two concerns live here:
    dict via :mod:`tomllib`. The only file format supported is TOML; there
    is no migration path from ``.env`` or YAML.
 2. **Exporting** values from the loaded config into the process environment
-   so child processes (the agent CLI, the GitLab MCP server, the `glab`
-   tool, etc.) can pick them up without re-parsing the TOML themselves.
+   so the poller (and the credential redactor) can pick them up without
+   re-parsing the TOML themselves.
 
 The shell wrapper :file:`bin/bubo` invokes this module's ``main`` to print
 ``export`` lines a POSIX shell can `eval`. The Python runtime calls
@@ -36,14 +36,14 @@ _ENV_PLACEHOLDER = re.compile(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\
 
 ENV_CONFIG_NAME = "env.toml"
 
-# GitLab credential fanout: one TOML key, multiple env-var names because
-# downstream tools (`glab`, GitLab MCP server, our own poller) each read a
-# different variable. Listed once here so `redact_secrets` and exporters
-# stay in sync.
+# GitLab credential fanout: one TOML key, multiple env-var names. The provider
+# reads the first that is set; the extra aliases keep `redact_secrets` and any
+# operator-set environment in sync. Listed once here so exporters and the
+# redactor cannot drift.
 GITLAB_TOKEN_ENV_NAMES = ("GITLAB_TOKEN", "GITLAB_PERSONAL_ACCESS_TOKEN", "GLAB_TOKEN")
 
-# GitHub credential fanout: `gh` reads GH_TOKEN; the GitHub MCP server and
-# most tooling read GITHUB_TOKEN / GITHUB_PERSONAL_ACCESS_TOKEN.
+# GitHub credential fanout: the provider reads the first that is set; the
+# aliases keep the redactor and any operator-set environment in sync.
 GITHUB_TOKEN_ENV_NAMES = (
     "GITHUB_TOKEN",
     "GITHUB_PERSONAL_ACCESS_TOKEN",
@@ -185,18 +185,23 @@ def runtime_env(root: Path, cfg: dict[str, Any]) -> dict[str, str]:
         # state_dir; paths.py reads it at import time. Always exported so
         # forked workers inherit the same view.
         "BUBO_BASE_DIR": str(base_dir),
-        "REVIEW_MODEL": str(agent.get("llm_model", "gpt-5.5")),
-        "REVIEW_REASONING_EFFORT": str(agent.get("reasoning_effort", "medium")),
+        # Standardized LLM knobs. LLM_MODEL_EFFORT falls back to the deprecated
+        # `reasoning_effort` key so existing configs keep working.
+        "LLM_MODEL": str(agent.get("llm_model", "gpt-5.5")),
+        "LLM_MODEL_EFFORT": str(
+            agent.get("llm_model_effort") or agent.get("reasoning_effort") or "medium"
+        ),
         "REVIEW_DRY_RUN": _bool_text(manual_dry_run),
         "POLL_INTERVAL_SECONDS": str(int(poller.get("interval_seconds", 900))),
         "CODEX_REVIEW_PROFILE": str(agent.get("codex_profile", "bubo")),
         "CODEX_SANDBOX": str(agent.get("codex_sandbox", "read-only")),
         "GITLAB_API_URL": str(gitlab.get("api_url", f"{gitlab_url}/api/v4")),
-        "GITLAB_DENIED_TOOLS_REGEX": str(
-            gitlab.get("denied_tools_regex", "^(delete_.*|merge_merge_request|push_files)$")
-        ),
         "GITHUB_API_URL": str(github.get("api_url", "https://api.github.com")),
     }
+    # Custom OpenAI-compatible endpoint (optional). Its presence is what flips
+    # bubo into "base_url mode" (see reviewer_env / the Codex model-provider block).
+    if agent.get("llm_base_url"):
+        exports["LLM_BASE_URL"] = str(agent["llm_base_url"])
     if gitlab.get("bot_username"):
         exports["BUBO_GITLAB_USERNAME"] = str(gitlab["bot_username"])
     if github.get("bot_username"):
@@ -250,9 +255,10 @@ def credential_env(cfg: dict[str, Any]) -> dict[str, str]:
         # Generic name first — every wrapper that honors it falls back here.
         for env_key in LLM_API_KEY_ENV_KEYS:
             exports[env_key] = value
-        # Operator-named variable for the LLM CLI actually in use. No
-        # provider is inferred; the operator declares the name. Blank /
-        # whitespace-only is treated as unset.
+        # Deprecated: `llm_api_key_env` named an extra env var to expose the key
+        # under. The agent now authenticates via its own login (set up by
+        # `bubo init`), so this is no longer needed — but it is still honored
+        # when present so existing configs keep working. Blank = unset.
         key_env = agent.get("llm_api_key_env")
         if isinstance(key_env, str) and key_env.strip():
             exports[key_env.strip()] = value

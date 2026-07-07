@@ -40,9 +40,11 @@ look right, set `dry-run: "false"` to post them inline.
 
 | Input | Default | What it does |
 |---|---|---|
-| `llm-api-key` | *(required)* | Your review LLM key (e.g. an OpenAI key for Codex). Pass a secret. |
-| `llm-api-key-env` | `OPENAI_API_KEY` | Env var your agent CLI reads the key from. |
-| `llm-model` | `gpt-5.5` | Model label for cost/telemetry (the real model comes from your agent profile). |
+| `llm-api-key` | *(required)* | Your review LLM key (e.g. an OpenAI key for Codex). Pass a secret. The action authenticates Codex with it (`codex login --with-api-key`). |
+| `llm-model` | `gpt-5.5` | Model for the review; templated into the agent profile and used for cost metrics. |
+| `llm-model-effort` | `medium` | Reasoning effort: `low` / `medium` / `high`. |
+| `llm-base-url` | *(unset)* | Custom OpenAI-compatible endpoint. When set, the key is passed to the agent's environment. |
+| `llm-api-key-env` | *(deprecated)* | No longer needed; honored when set. |
 | `github-token` | `${{ github.token }}` | Reads the diff + posts comments. Needs `pull-requests: write`. |
 | `reviewer-command` | *(bundled Codex)* | Space-separated argv to run a different agent CLI (e.g. `claude -p`). |
 | `dry-run` | `false` | `true` plans findings but posts nothing. |

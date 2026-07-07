@@ -222,9 +222,46 @@ def test_cmd_init_agent_config_writes_codex_with_profile(
     # The load-bearing block — the v0.5.0 incident's root cause was this
     # being absent.
     assert "[profiles.bubo]" in codex_config
-    # ROOT placeholder substituted with the actual root.
-    assert "{{ROOT}}" not in codex_config
+    # Every placeholder rendered (ROOT, LLM_MODEL, the provider markers, …).
+    assert "{{" not in codex_config
     assert str(isolated_root) in codex_config
+    # Default (no base_url): model/effort come from the seeded example, and the
+    # custom-provider plumbing renders away to nothing.
+    assert 'model = "gpt-5.5"' in codex_config
+    lines = codex_config.splitlines()
+    assert "[model_providers.bubo]" not in lines  # table header, not the doc comment
+    assert 'model_provider = "bubo"' not in lines
+
+
+def test_cmd_init_templates_model_and_base_url_into_agent_config(
+    isolated_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    # An operator config with a custom model/effort and an OpenAI-compatible
+    # endpoint. init reads this existing env.toml (env-seed skips it).
+    (isolated_root / "config").mkdir(parents=True, exist_ok=True)
+    (isolated_root / "config" / "env.toml").write_text(
+        "[agents]\n"
+        'llm_model = "my-model"\n'
+        'llm_model_effort = "high"\n'
+        'llm_base_url = "https://gw.internal/v1"\n'
+    )
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
+
+    codex = (fake_home / ".codex" / "config.toml").read_text()
+    lines = codex.splitlines()
+    assert 'model = "my-model"' in codex
+    assert 'model_reasoning_effort = "high"' in codex
+    assert "[model_providers.bubo]" in lines  # table header rendered
+    assert 'base_url = "https://gw.internal/v1"' in codex
+    assert 'env_key = "LLM_API_KEY"' in codex
+    assert 'model_provider = "bubo"' in lines
+    assert "{{" not in codex
+    # Claude settings get the model too.
+    claude = (fake_home / ".claude" / "settings.json").read_text()
+    assert '"model": "my-model"' in claude
 
 
 # ---------------------------------------------------------------------------

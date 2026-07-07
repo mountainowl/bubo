@@ -12,10 +12,14 @@ requests and GitHub pull requests.
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from typing import Protocol
 
+from bubo.errors import describe
 from bubo.review_config import ReviewConfig
+from bubo.secrets import redact_secrets
+from bubo.subproc import run_bounded
 from bubo.types import JsonObject
 
 # The finding-output contract shared by every provider's review prompt. Only
@@ -126,6 +130,69 @@ def build_review_contract(cfg: ReviewConfig) -> str:
     contract = REVIEW_CONTRACT.format(max_findings=cfg.max_findings_per_merge_request)
     voice = comment_voice_directive(cfg.tone)
     return f"{contract}\n\n{voice}" if voice else contract
+
+
+def _git_auth_args(token: str, username: str) -> list[str]:
+    """Per-invocation HTTP Basic auth, passed as a ``-c http.extraHeader`` so the
+    token is sent on the wire but **never written to ``.git/config``** — the review
+    agent later runs with read access to the worktree, so a persisted credential
+    would be exfiltratable. Basic auth works for both GitLab (``oauth2:<token>``)
+    and GitHub (``x-access-token:<token>``) git-over-HTTPS.
+    """
+    cred = base64.b64encode(f"{username}:{token}".encode()).decode()
+    return ["-c", f"http.extraHeader=Authorization: Basic {cred}"]
+
+
+def _run_git(args: list[str], *, cwd: Path | None, what: str) -> None:
+    result = run_bounded(args, cwd=cwd, timeout=900)
+    if result.returncode:
+        raise RuntimeError(
+            describe(
+                what,
+                reason=redact_secrets(result.stdout[-3000:]),
+                fix=(
+                    "verify the repo URL, the token's scope/permissions, and "
+                    "network access to the host."
+                ),
+            )
+        )
+
+
+def git_checkout_change(
+    *,
+    clone_url: str,
+    ref_fetch: str,
+    sha: str,
+    dest: Path,
+    token: str,
+    username: str,
+) -> None:
+    """Clone (if needed), fetch the change ref, and detach at ``sha`` over HTTPS.
+
+    Auth is supplied per-invocation via :func:`_git_auth_args` on every
+    remote-touching call (clone, ``fetch --prune``, the ref fetch), so the
+    ``origin`` remote URL stays plain and **no credential is persisted to
+    ``.git/config``**. ``checkout`` is local and needs no auth. Raises
+    ``RuntimeError`` with a secret-redacted reason on any git failure.
+    """
+    auth = _git_auth_args(token, username)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not (dest / ".git").exists():
+        _run_git(
+            ["git", *auth, "clone", clone_url, str(dest)],
+            cwd=None,
+            what="git clone failed for the change",
+        )
+    for remote_args in (
+        ["git", *auth, "fetch", "origin", "--prune"],
+        ["git", *auth, "fetch", "origin", ref_fetch],
+    ):
+        _run_git(remote_args, cwd=dest, what="git fetch failed for the change")
+    _run_git(
+        ["git", "checkout", "--detach", sha],
+        cwd=dest,
+        what="git checkout failed for the change",
+    )
 
 
 class ScmProvider(Protocol):

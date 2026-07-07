@@ -1,19 +1,15 @@
-"""GitHub provider — GitHub REST client + GitHub MCP posting.
+"""GitHub provider — GitHub REST client.
 
-Composes :mod:`bubo.github` (REST), :mod:`bubo.mcp` (inline
-posting through a GitHub MCP server), and GitHub-specific checkout and
-position logic.
+Composes :mod:`bubo.github` (REST) with GitHub-specific checkout and position
+logic.
 
 Key differences from GitLab, all encapsulated here:
 
-* **Checkout** uses ``gh repo clone`` and the ``refs/pull/<n>/head`` ref.
+* **Checkout** uses plain ``git`` over HTTPS (credential-safe, see
+  :func:`bubo.scm.base.git_checkout_change`) and the ``refs/pull/<n>/head`` ref.
 * **Position** is GitHub's ``{commit_id, path, line, side}`` anchor, not
   GitLab's base/start/head ``position`` dict.
-* **Posting** goes through the GitHub MCP server (``bin/bubo mcp-upstream github``). The
-  exact tool name varies between GitHub MCP server implementations, so it
-  is overrideable via ``BUBO_GITHUB_MCP_TOOL``; if the MCP call
-  fails for any reason, posting falls back to the well-defined REST
-  endpoint so a tool-name mismatch never blocks a review.
+* **Posting** goes through the GitHub REST API (an inline PR review comment).
 * **Outcome** is classified from REST data; thread *resolution* state is
   GitHub-GraphQL-only and is reported as unresolved (documented).
 """
@@ -22,25 +18,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
-from bubo import github, mcp
+from bubo import github
 from bubo.config_values import ConfigError
 from bubo.errors import describe
 from bubo.events import log
 from bubo.findings import changed_lines_from_files, resolve_finding_line
-from bubo.paths import ROOT
 from bubo.review_config import ReviewConfig
-from bubo.scm.base import build_review_contract
-from bubo.secrets import redact_secrets
-from bubo.subproc import run_bounded
+from bubo.scm.base import build_review_contract, git_checkout_change
 from bubo.types import JsonObject
-
-# GitHub MCP server command — the dispatcher running the upstream GitHub MCP
-# server (mirrors the GitLab default). argv list; absent → REST fallback.
-_GITHUB_MCP_SERVER = [str(ROOT / "bin" / "bubo"), "mcp-upstream", "github"]
-# Tool name for posting an inline PR review comment. Overrideable because
-# different GitHub MCP servers name this tool differently.
-_GITHUB_MCP_TOOL = os.environ.get("BUBO_GITHUB_MCP_TOOL", "create_pull_request_review_comment")
 
 
 class GitHubProvider:
@@ -129,38 +116,20 @@ class GitHubProvider:
 
     def checkout(self, cfg: ReviewConfig, project: str, change: JsonObject, dest: Path) -> None:
         number = self.change_number(change)
-        sha = self.head_sha(change)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if not (dest / ".git").exists():
-            result = run_bounded(["gh", "repo", "clone", project, str(dest)], timeout=900)
-            if result.returncode:
-                raise RuntimeError(
-                    describe(
-                        "git clone failed for the change",
-                        reason=redact_secrets(result.stdout[-3000:]),
-                        fix=(
-                            "verify the repo URL, the token's scope/permissions, and "
-                            "network access to the host."
-                        ),
-                    )
-                )
-        for args in (
-            ["git", "fetch", "origin", "--prune"],
-            ["git", "fetch", "origin", f"refs/pull/{number}/head:refs/remotes/origin/pr-{number}"],
-            ["git", "checkout", "--detach", sha],
-        ):
-            result = run_bounded(args, cwd=dest, timeout=900)
-            if result.returncode:
-                raise RuntimeError(
-                    describe(
-                        "git fetch/checkout failed for the change",
-                        reason=redact_secrets(result.stdout[-3000:]),
-                        fix=(
-                            "verify the repo URL, the token's scope/permissions, and "
-                            "network access to the host."
-                        ),
-                    )
-                )
+        # Derive the web host from the API URL: api.github.com → github.com;
+        # GitHub Enterprise uses https://<host>/api/v3, whose web host is the netloc.
+        host = urlparse(cfg.github_api_url).netloc or "github.com"
+        if host == "api.github.com":
+            host = "github.com"
+        clone_url = f"https://{host}/{project}.git"
+        git_checkout_change(
+            clone_url=clone_url,
+            ref_fetch=f"refs/pull/{number}/head:refs/remotes/origin/pr-{number}",
+            sha=self.head_sha(change),
+            dest=dest,
+            token=self.token(),
+            username="x-access-token",
+        )
 
     def post_inline_comment(
         self,
@@ -171,33 +140,11 @@ class GitHubProvider:
         body: str,
         position: JsonObject,
     ) -> str:
-        owner, _, repo = project.partition("/")
-        args = {
-            "owner": owner,
-            "repo": repo,
-            "pullNumber": number,
-            "body": body,
-            "commitId": position["commit_id"],
-            "path": position["path"],
-            "line": position["line"],
-            "side": position.get("side", "RIGHT"),
-        }
-        # Prefer the MCP server; fall back to REST on any MCP failure so a
-        # tool-name mismatch (which varies across GitHub MCP servers) never
-        # blocks a review.
-        try:
-            result = mcp.call_tool(_GITHUB_MCP_TOOL, args, server=_GITHUB_MCP_SERVER)
-            found = mcp.discussion_id(result)
-            if found:
-                return found
-        except (RuntimeError, TimeoutError, OSError) as exc:
-            log("github_mcp_post_failed", project=project, number=number, error=str(exc))
         existing = github.find_review_comment_by_body(cfg, token, project, number, body)
         if existing:
             return existing
-        return mcp.discussion_id_from_response(
-            github.create_pr_review_comment(cfg, token, project, number, body, position)
-        )
+        created = github.create_pr_review_comment(cfg, token, project, number, body, position)
+        return str(created.get("id") or "")
 
     def post_change_comment(
         self,

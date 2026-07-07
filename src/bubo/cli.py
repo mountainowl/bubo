@@ -34,13 +34,16 @@ import os
 import shutil
 import sqlite3
 import sys
+import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import Any
 
 from bubo import paths
+from bubo.config_values import section
 from bubo.db import init_db
 from bubo.errors import describe
 from bubo.events import log
@@ -309,9 +312,72 @@ def plan_init(
 # ---------------------------------------------------------------------------
 
 
-def _render_template(parts: tuple[str, ...], root: Path) -> str:
-    """Substitute ``{{ROOT}}`` in a packaged template."""
-    return _asset(*parts).read_text().replace("{{ROOT}}", str(root))
+def _render_template(parts: tuple[str, ...], subs: dict[str, str]) -> str:
+    """Substitute ``{{KEY}}`` placeholders in a packaged template.
+
+    ``subs`` always carries ``ROOT``; agent-config templates additionally
+    carry ``LLM_MODEL`` / ``LLM_MODEL_EFFORT`` and the conditional
+    model-provider pieces. Placeholders a given template doesn't contain are
+    simply no-ops.
+    """
+    text = _asset(*parts).read_text()
+    for key, value in subs.items():
+        text = text.replace("{{" + key + "}}", value)
+    return text
+
+
+def _read_agent_config(root: Path) -> dict[str, Any]:
+    """Best-effort read of the ``[agents]`` section for init templating.
+
+    Reads the on-disk ``env.toml`` when present, else the packaged example
+    (which is what a fresh init is about to seed). Parsed WITHOUT placeholder
+    expansion — only the literal ``llm_model`` / ``llm_model_effort`` /
+    ``llm_base_url`` are needed here, never the API key.
+    """
+    cfg_path = root / "config" / "env.toml"
+    text = (
+        cfg_path.read_text(encoding="utf-8")
+        if cfg_path.exists()
+        else _asset("env.example.toml").read_text()
+    )
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return {}
+    return section(raw, "agents")
+
+
+def _agent_template_subs(root: Path, agent: dict[str, Any]) -> dict[str, str]:
+    """Build the placeholder substitutions for the agent-config templates.
+
+    When ``[agents].llm_base_url`` is set, point the Codex ``bubo`` profile at a
+    custom OpenAI-compatible provider that reads the key from ``LLM_API_KEY`` at
+    request time (the env var that ``reviewer_env`` lets through in base_url
+    mode). When it is unset, both provider placeholders render empty and Codex
+    uses its built-in provider.
+    """
+    model = str(agent.get("llm_model") or "gpt-5.5")
+    effort = str(agent.get("llm_model_effort") or agent.get("reasoning_effort") or "medium")
+    base_url = str(agent.get("llm_base_url") or "").strip()
+    if base_url:
+        provider_line = 'model_provider = "bubo"'
+        provider_block = (
+            "[model_providers.bubo]\n"
+            'name = "bubo custom endpoint"\n'
+            f'base_url = "{base_url}"\n'
+            'env_key = "LLM_API_KEY"\n'
+            'wire_api = "chat"\n'
+        )
+    else:
+        provider_line = ""
+        provider_block = ""
+    return {
+        "ROOT": str(root),
+        "LLM_MODEL": model,
+        "LLM_MODEL_EFFORT": effort,
+        "MODEL_PROVIDER_LINE": provider_line,
+        "MODEL_PROVIDER_BLOCK": provider_block,
+    }
 
 
 def _copy_traversable(source: Traversable | Path, target: Path) -> None:
@@ -330,7 +396,7 @@ def _copy_traversable(source: Traversable | Path, target: Path) -> None:
             dest.write_bytes(entry.read_bytes())
 
 
-def _execute(action: Action, root: Path) -> None:
+def _execute(action: Action, subs: dict[str, str]) -> None:
     if action.kind == "skip":
         return
     if action.kind == "mkdir":
@@ -339,7 +405,7 @@ def _execute(action: Action, root: Path) -> None:
     if action.kind == "write_file":
         assert isinstance(action.source, tuple), "write_file expects a parts tuple"
         action.target.parent.mkdir(parents=True, exist_ok=True)
-        action.target.write_text(_render_template(action.source, root))
+        action.target.write_text(_render_template(action.source, subs))
         return
     if action.kind == "copy_tree":
         assert isinstance(action.source, tuple), "copy_tree expects a parts tuple"
@@ -402,6 +468,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         force=args.force,
         install_agent_config=not args.no_agent_config,
     )
+    subs = _agent_template_subs(root, _read_agent_config(root))
     if args.dry_run:
         print(f"# bubo init --dry-run (root={root})")
         for action in actions:
@@ -409,7 +476,7 @@ def cmd_init(args: argparse.Namespace) -> int:
             print(f"{action.kind:>11}  {action.target}{note}")
         return 0
     for action in actions:
-        _execute(action, root)
+        _execute(action, subs)
         log(
             "init_action",
             kind=action.kind,

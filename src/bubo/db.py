@@ -841,12 +841,20 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
 
     Never-synced findings come first; then oldest ``last_checked_at``.
     The poller uses this list to drive ``--sync-outcomes``.
+
+    Each row carries ``prior_outcome`` — the currently-stored outcome flags
+    (all ``False`` if never synced) — so the caller can detect the
+    ``false -> true`` transition of each dimension and emit analytics exactly
+    once per outcome rather than on every re-check.
     """
     with connect_db() as db:
         rows = db.execute(
             """
             select rf.project,rf.iid,rf.sha,rf.fingerprint,rf.discussion_id,
-                   fo.reply_classified
+                   fo.reply_classified,
+                   coalesce(fo.resolved,0), coalesce(fo.deleted,0),
+                   coalesce(fo.developer_replied,0), coalesce(fo.disputed,0),
+                   coalesce(fo.false_positive,0), coalesce(fo.duplicate,0)
             from review_findings rf
             left join finding_outcomes fo
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
@@ -868,6 +876,14 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
             "fingerprint": row[3],
             "discussion_id": row[4],
             "reply_classified": bool(row[5]),
+            "prior_outcome": {
+                "resolved": bool(row[6]),
+                "deleted": bool(row[7]),
+                "developer_replied": bool(row[8]),
+                "disputed": bool(row[9]),
+                "false_positive": bool(row[10]),
+                "duplicate": bool(row[11]),
+            },
         }
         for row in rows
     ]

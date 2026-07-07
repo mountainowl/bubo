@@ -20,16 +20,14 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
 
     missing = [path for path in required if not (ROOT / path).exists()]
     assert missing == []
-    # The bin/bubo dispatcher locates the upstream MCP server binaries on PATH
-    # (those names are upstream's, not ours — do not rename them) under its
-    # `mcp-upstream` subcommand, and runs bubo's own poller / MCP server via uv.
+    # The bin/bubo dispatcher runs bubo's own poller / MCP server via uv. There
+    # is no upstream-SCM-MCP path any more — checkout uses git and posting uses
+    # the REST API.
     dispatcher = (ROOT / "bin" / "bubo").read_text()
-    assert "command -v mcp-gitlab" in dispatcher
-    assert "command -v gitlab-mcp" in dispatcher
-    assert "command -v github-mcp-server" in dispatcher
     assert "uv run --project" in dispatcher
     assert "bubo-poller" in dispatcher
     assert "bubo-mcp" in dispatcher
+    assert "mcp-upstream" not in dispatcher
 
 
 def test_cron_template_uses_separate_locks_per_role() -> None:

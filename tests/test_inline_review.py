@@ -355,43 +355,29 @@ No findings for optional categories: []
         self.assertNotIn("OPENAI_API_KEY", env)
         self.assertNotIn("ANTHROPIC_API_KEY", env)
 
-    def test_mcp_call_tool_uses_bounded_communicate(self):
-        class FakeProcess:
-            returncode = 0
+    def test_reviewer_env_strips_llm_key_without_base_url(self):
+        # Default (no base_url): the LLM key never reaches the agent env — it
+        # authenticates via its own login. This is the anti-exfiltration default.
+        source = {"PATH": "/usr/bin", "LLM_API_KEY": "k", "LLM_BASE_URL": ""}
+        env = poller.reviewer_env(source, ReviewConfig())
+        self.assertNotIn("LLM_API_KEY", env)
+        self.assertNotIn("LLM_BASE_URL", env)
 
-            def __init__(self) -> None:
-                self.input = ""
-                self.timeout = None
-
-            def communicate(self, input=None, timeout=None):
-                self.input = input or ""
-                self.timeout = timeout
-                return ('{"jsonrpc":"2.0","id":2,"result":{"ok":true}}\n', "")
-
-            def kill(self):
-                pass
-
-            def wait(self, timeout=None):
-                return 0
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_: object):
-                return None
-
-        fake = FakeProcess()
-        # The MCP client now lives in `bubo.mcp`. Patch its
-        # subprocess import and import MCP_TIMEOUT_SECONDS from the same
-        # module rather than from poller.
-        from bubo import mcp as mcp_module
-
-        with patch("bubo.mcp.subprocess.Popen", return_value=fake):
-            result = poller.mcp_call_tool("tool", {"a": 1})
-
-        self.assertEqual({"ok": True}, result)
-        self.assertEqual(mcp_module.MCP_TIMEOUT_SECONDS, fake.timeout)
-        self.assertIn('"method": "tools/call"', fake.input)
+    def test_reviewer_env_passes_llm_key_only_in_base_url_mode(self):
+        # base_url mode: a custom OpenAI-compatible endpoint reads the key from
+        # the env at request time, so exactly LLM_API_KEY + LLM_BASE_URL are let
+        # through — and nothing else.
+        source = {
+            "PATH": "/usr/bin",
+            "LLM_API_KEY": "k",
+            "LLM_BASE_URL": "https://gw/v1",
+            "GITLAB_TOKEN": "secret",
+        }
+        cfg = ReviewConfig(llm_base_url="https://gw/v1")
+        env = poller.reviewer_env(source, cfg)
+        self.assertEqual("k", env["LLM_API_KEY"])
+        self.assertEqual("https://gw/v1", env["LLM_BASE_URL"])
+        self.assertNotIn("GITLAB_TOKEN", env)
 
     def test_fork_worker_closes_parent_log_handle(self):
         class FakeLog:
@@ -538,62 +524,6 @@ enabled = true
         self.assertEqual(one, two)
         self.assertEqual(64, len(one))
 
-    def test_mcp_thread_args_url_encode_project_and_string_iid(self):
-        from bubo import mcp
-
-        args = mcp.thread_args(
-            "example/enabled-repo",
-            269,
-            "body",
-            {"position_type": "text", "new_line": 12},
-        )
-
-        self.assertEqual("example%2Fenabled-repo", args["project_id"])
-        self.assertEqual("269", args["merge_request_iid"])
-        self.assertEqual("body", args["body"])
-        self.assertEqual(12, args["position"]["new_line"])
-
-    def test_gitlab_provider_post_uses_mcp_discussion_id(self):
-        from bubo.scm.gitlab import GitLabProvider
-
-        with patch("bubo.mcp.call_tool", return_value={"id": "disc-1"}):
-            discussion_id = GitLabProvider().post_inline_comment(
-                ReviewConfig(), "token", "group/repo", 1, "body", {"position_type": "text"}
-            )
-
-        self.assertEqual("disc-1", discussion_id)
-
-    def test_gitlab_provider_post_falls_back_to_existing_body_match(self):
-        from bubo.scm.gitlab import GitLabProvider
-
-        with patch("bubo.mcp.call_tool", return_value={}):
-            with patch(
-                "bubo.gitlab.find_discussion_by_body", return_value="disc-existing"
-            ) as finder:
-                with patch("bubo.gitlab.create_merge_request_discussion") as creator:
-                    discussion_id = GitLabProvider().post_inline_comment(
-                        ReviewConfig(), "token", "group/repo", 1, "body", {"position_type": "text"}
-                    )
-
-        self.assertEqual("disc-existing", discussion_id)
-        finder.assert_called_once()
-        creator.assert_not_called()
-
-    def test_gitlab_provider_post_falls_back_to_rest_create(self):
-        from bubo.scm.gitlab import GitLabProvider
-
-        with patch("bubo.mcp.call_tool", return_value={}):
-            with patch("bubo.gitlab.find_discussion_by_body", return_value=""):
-                with patch(
-                    "bubo.gitlab.create_merge_request_discussion",
-                    return_value={"id": "disc-rest"},
-                ):
-                    discussion_id = GitLabProvider().post_inline_comment(
-                        ReviewConfig(), "token", "group/repo", 1, "body", {"position_type": "text"}
-                    )
-
-        self.assertEqual("disc-rest", discussion_id)
-
     def test_count_added_lines_sums_new_lines_across_files(self):
         from bubo.findings import changed_lines_from_files, count_added_lines
 
@@ -608,7 +538,6 @@ enabled = true
         # a.py adds 2 lines, b.py adds 1 -> 3 added lines reviewed; removed and
         # context lines are not counted.
         self.assertEqual(3, count_added_lines(changed))
-
 
 if __name__ == "__main__":
     unittest.main()

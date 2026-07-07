@@ -18,13 +18,21 @@ inputs:
     description: "API key for your review LLM (e.g. an OpenAI key for Codex). Pass a secret."
     required: true
   llm-api-key-env:
-    description: "Env var name your agent CLI reads the key from."
+    description: "DEPRECATED — no longer needed; the agent authenticates via its own login. Honored when set."
     required: false
-    default: "OPENAI_API_KEY"
+    default: ""
   llm-model:
-    description: "Model label for cost/telemetry attribution (the real model is set by your agent profile)."
+    description: "Model for the review. bubo init templates it into the agent profile and labels cost metrics."
     required: false
     default: "gpt-5.5"
+  llm-model-effort:
+    description: "Reasoning effort: low | medium | high."
+    required: false
+    default: "medium"
+  llm-base-url:
+    description: "Custom OpenAI-compatible endpoint. When set, the key is passed to the agent's environment."
+    required: false
+    default: ""
   github-token:
     description: "Token used to read the PR diff and post review comments. Needs pull-requests: write."
     required: false
@@ -101,7 +109,10 @@ runs:
       env:
         BUBO_ROOT: ${{ runner.temp }}/bubo
       run: |
-        bubo init --root "${BUBO_ROOT}"
+        # First pass: create the workspace, seed env.toml, init the DB. The
+        # agent profile is templated by the SECOND init below, after the real
+        # config (model / effort / base_url) is written.
+        bubo init --root "${BUBO_ROOT}" --no-agent-config
 
     - name: Write config from inputs
       shell: bash
@@ -113,6 +124,8 @@ runs:
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         LLM_API_KEY_ENV: ${{ inputs.llm-api-key-env }}
         LLM_MODEL: ${{ inputs.llm-model }}
+        LLM_MODEL_EFFORT: ${{ inputs.llm-model-effort }}
+        LLM_BASE_URL: ${{ inputs.llm-base-url }}
         REVIEWER_COMMAND: ${{ inputs.reviewer-command }}
         DRY_RUN: ${{ inputs.dry-run }}
         TONE: ${{ inputs.tone }}
@@ -132,8 +145,10 @@ runs:
           echo
           echo '[agents]'
           printf 'llm_model = "%s"\n' "${LLM_MODEL}"
+          printf 'llm_model_effort = "%s"\n' "${LLM_MODEL_EFFORT}"
           printf 'llm_api_key = "%s"\n' "${LLM_API_KEY}"
-          printf 'llm_api_key_env = "%s"\n' "${LLM_API_KEY_ENV}"
+          [ -n "${LLM_BASE_URL}" ] && printf 'llm_base_url = "%s"\n' "${LLM_BASE_URL}"
+          [ -n "${LLM_API_KEY_ENV}" ] && printf 'llm_api_key_env = "%s"\n' "${LLM_API_KEY_ENV}"
           if [ -n "${REVIEWER_COMMAND}" ]; then
             printf 'reviewer_command = ['
             first=1
@@ -159,6 +174,17 @@ runs:
           echo 'enabled = true'
         } > "${cfg}"
         echo "Wrote ${cfg} (provider=github, PR #${PR_NUMBER}, dry_run=${DRY_RUN})"
+
+    - name: Template the agent profile from the written config
+      shell: bash
+      env:
+        BUBO_ROOT: ${{ runner.temp }}/bubo
+      run: |
+        # Second pass: now that env.toml carries the real model / effort /
+        # base_url, init templates them into the agent profile. No --force: the
+        # agent config doesn't exist yet (first pass was --no-agent-config), and
+        # we must NOT re-seed (clobber) the env.toml just written above.
+        bubo init --root "${BUBO_ROOT}"
 
     - name: Authenticate the default Codex agent (best-effort)
       if: ${{ inputs.reviewer-command == '' }}
