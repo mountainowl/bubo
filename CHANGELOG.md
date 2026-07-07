@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.25.1](https://github.com/mountainowl/bubo/compare/v0.25.0...v0.25.1) (2026-07-07)
+
+
+### Documentation
+
+* expand references with the code-review + LLM research bubo rests on ([#154](https://github.com/mountainowl/bubo/issues/154)) ([41a28b3](https://github.com/mountainowl/bubo/commit/41a28b3b4d522cadd917a0f33ebc759fc099def1))
+* fix basePath on raw internal links in the recipe picker ([#156](https://github.com/mountainowl/bubo/issues/156)) ([786b64b](https://github.com/mountainowl/bubo/commit/786b64b5a8d1d9839e871287b91b52869bce8606))
+
 ## [0.25.0](https://github.com/mountainowl/bubo/compare/v0.24.2...v0.25.0) (2026-07-07)
 
 
