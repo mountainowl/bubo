@@ -154,7 +154,7 @@ export function RecipePicker() {
                                 <span key={l.href}>
                                   {i > 0 && <span className={styles.preSep}> · </span>}
                                   <a
-                                    href={l.href}
+                                    href={l.href.startsWith('http') ? l.href : asset(l.href)}
                                     className={styles.preLink}
                                     {...(l.href.startsWith('http')
                                       ? { target: '_blank', rel: 'noreferrer' }
@@ -213,7 +213,10 @@ export function RecipePicker() {
               <p className={styles.recipeNote}>
                 The first run is <strong>dry-run by default</strong> — it plans findings and posts
                 nothing. Flip <code>[review].dry_run = false</code> when it looks right, then{' '}
-                <a href="/operate" className={styles.link}>schedule it</a>.
+                <a href={asset('/operate/#schedule-the-poller')} className={styles.link}>
+                  schedule it
+                </a>
+                .
               </p>
             </>
           )}
