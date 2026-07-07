@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.25.0](https://github.com/mountainowl/bubo/compare/v0.24.2...v0.25.0) (2026-07-07)
+
+
+### Features
+
+* REST-only SCM + LLM_* config + opt-out analytics ([#134](https://github.com/mountainowl/bubo/issues/134)) ([ad035a9](https://github.com/mountainowl/bubo/commit/ad035a9a2e3c1d123abe8f4e71eb96c4673f443e))
+* **telemetry:** lines_reviewed metric + Nextra docs & Pages ([#150](https://github.com/mountainowl/bubo/issues/150)) ([025c0b6](https://github.com/mountainowl/bubo/commit/025c0b6b8567862ddd40086b99328ba6ca51f082))
+
+
+### Documentation
+
+* authenticate the review agent in quickstart + recipe scripts ([#153](https://github.com/mountainowl/bubo/issues/153)) ([175de6b](https://github.com/mountainowl/bubo/commit/175de6b84d378bb0a338cfb699a41a6d5dfa7c46))
+* reconcile docs site with REST-only SCM + standardized LLM config ([#152](https://github.com/mountainowl/bubo/issues/152)) ([f1009d6](https://github.com/mountainowl/bubo/commit/f1009d6b6e81d88c019468d2792f79f12e130700))
+
 ## [0.24.2](https://github.com/mountainowl/bubo/compare/v0.24.1...v0.24.2) (2026-06-18)
 
 
