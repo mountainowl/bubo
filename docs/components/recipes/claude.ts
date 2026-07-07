@@ -17,6 +17,6 @@ export const claude: AgentFragment = {
   cliName: a.cliName,
   configBlock: `[agents]
 llm_model        = "${a.model}"
-llm_api_key_env  = "${a.keyEnv}"
+llm_api_key      = "\${${a.keyEnv}}"
 reviewer_command = ["claude", "-p"]   # Claude is driven via its CLI`,
 }

@@ -5,11 +5,8 @@ const s = SCM.gitlab
 
 export const gitlab: ScmFragment = {
   prereq: {
-    text: 'glab (GitLab CLI), authenticated — clones and fetches merge requests',
-    links: [
-      { label: 'glab', href: 'https://gitlab.com/gitlab-org/cli#installation' },
-      { label: 'token', href: s.tokenUrl },
-    ],
+    text: 'A GitLab token with API scope — clones over HTTPS and drives the REST API',
+    links: [{ label: 'token', href: s.tokenUrl }],
   },
   projectPath: s.path,
   configBlock: `[scm]

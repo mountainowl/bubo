@@ -5,11 +5,8 @@ const s = SCM.github
 
 export const github: ScmFragment = {
   prereq: {
-    text: 'gh (GitHub CLI), authenticated — clones and fetches pull requests',
-    links: [
-      { label: 'gh', href: 'https://cli.github.com/' },
-      { label: 'token', href: s.tokenUrl },
-    ],
+    text: 'A GitHub token with pull-request read + write — clones over HTTPS and drives the REST API',
+    links: [{ label: 'token', href: s.tokenUrl }],
   },
   projectPath: s.path,
   configBlock: `[scm]

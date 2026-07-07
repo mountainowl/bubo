@@ -47,7 +47,7 @@ enabled = true`
 
   const gatewayLine =
     agent === 'selfhosted'
-      ? '\n# The OpenAI-compatible endpoint URL.\ngateway_base_url = "<https://llm.corp.internal/v1>"'
+      ? '\n# The OpenAI-compatible endpoint URL.\nllm_base_url = "<https://llm.corp.internal/v1>"'
       : ''
   const srcKind = install === 'docker' ? 'registry' : 'index'
   const sourceValue = install === 'docker' ? 'ghcr.io/mountainowl/bubo' : 'https://pypi.org/project/bubo/'

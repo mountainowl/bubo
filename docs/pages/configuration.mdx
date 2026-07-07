@@ -36,9 +36,7 @@ Required tools:
 |---|---|
 | Python 3.14+ | Bubo runtime. |
 | Node.js | Codex or Claude CLI installs. |
-| `git` | Repository checkout. |
-| `glab` | GitLab checkout and GitLab tooling. |
-| `gh` | GitHub checkout and GitHub tooling. |
+| `git` | Repository checkout over tokenized HTTPS. |
 | Codex, Claude, or another CLI agent | Review execution. |
 
 ## `[scm]`
@@ -54,10 +52,9 @@ Used when `[scm].provider = "gitlab"`.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `url` | string | `"https://gitlab.com"` | GitLab web URL. Use your self-hosted GitLab URL when needed. |
-| `api_url` | string | `"<url>/api/v4"` | GitLab REST API URL used by GitLab tools. |
+| `api_url` | string | `"<url>/api/v4"` | GitLab REST API URL for MRs, diffs, and outcomes. |
 | `bot_username` | string | unset | Bot username used to separate bot comments from developer replies. |
-| `denied_tools_regex` | string | `"^(delete_.*\|merge_merge_request\|push_files)$"` | GitLab MCP tool names blocked inside the review agent. |
-| `token` | string | unset | GitLab token. Exported as `GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, and `GLAB_TOKEN`. Requires `api` scope. |
+| `token` | string | unset | GitLab token, `api` scope. Exported as `GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, and `GLAB_TOKEN`, and used as the credential for the HTTPS `git clone` — sent as a per-call auth header, never written to `.git/config`. |
 
 ## `[github]`
 
@@ -65,9 +62,9 @@ Used when `[scm].provider = "github"`.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `api_url` | string | `"https://api.github.com"` | GitHub REST API base. Use `https://<host>/api/v3` for GitHub Enterprise Server. |
+| `api_url` | string | `"https://api.github.com"` | GitHub REST API base. Use `https://<host>/api/v3` for GitHub Enterprise Server. The clone host is derived from it (`api.github.com` → `github.com`; GHES → its own host). |
 | `bot_username` | string | unset | Bot username used to separate bot comments from developer replies. |
-| `token` | string | unset | GitHub token. Exported as `GITHUB_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, and `GH_TOKEN`. Requires pull-request read/write access. |
+| `token` | string | unset | GitHub token with pull-request read/write access. Exported as `GITHUB_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, and `GH_TOKEN`, and used as the credential for the HTTPS `git clone` — sent as a per-call auth header, never written to `.git/config`. |
 
 ## `[review]`
 
@@ -132,10 +129,11 @@ Controls the review agent command and agent-facing environment.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `reviewer_command` | string array | `["codex", "--ask-for-approval", "never", "exec", "--profile", "bubo", "--skip-git-repo-check"]` | Command prefix used to run the review agent. The review prompt is appended as the final argument. |
-| `llm_model` | string | unset | Model label used for review metadata and cost attribution. |
-| `llm_api_key` | string | unset | LLM API key. Exported as `LLM_API_KEY` and optionally as `llm_api_key_env`. |
-| `llm_api_key_env` | string | unset | Provider-specific env var name, such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`. |
-| `reasoning_effort` | string | `"medium"` | Exported as `REVIEW_REASONING_EFFORT` for agents that honor it. |
+| `llm_model` | string | `"gpt-5.5"` | Review model. Exported as `LLM_MODEL`; `bubo init` templates it into the agent profile (so it actually drives the model) and the `model` metric label reads it. Re-run `bubo init` after changing. |
+| `llm_model_effort` | string | `"medium"` | Reasoning effort — `"low"`, `"medium"`, or `"high"`. Exported as `LLM_MODEL_EFFORT`; `bubo init` templates it into the agent profile. Falls back to the deprecated `reasoning_effort` key. |
+| `llm_api_key` | string | unset | LLM API key, exported as `LLM_API_KEY`. By default the review agent authenticates via its own login (written by `bubo init`), so the key is **not** injected into the agent environment. The one exception is `llm_base_url`, which reads the key from the environment at request time. |
+| `llm_base_url` | string | unset | Optional OpenAI-compatible endpoint (in-house gateway, proxy, local server). When set, `bubo init` points the Codex profile at it via a `[model_providers]` block, and the agent reads `LLM_API_KEY` from its environment. Exported as `LLM_BASE_URL`. Security: this is the one mode that exposes the key to the agent — leave unset unless you need it. |
+| `llm_api_key_env` | string | unset | **Deprecated.** Named an extra env var to expose the key under; the agent now authenticates via its own login. Still honored when set, but prefer removing it. |
 | `dry_run` | boolean | `true` | Exported as `REVIEW_DRY_RUN` for the agent. Posting is controlled by `[review].dry_run`. |
 | `codex_profile` | string | `"bubo"` | Exported as `CODEX_REVIEW_PROFILE`. Used by Codex-based reviewer commands. |
 | `codex_sandbox` | string | `"read-only"` | Exported as `CODEX_SANDBOX`. Used by Codex-based reviewer commands. |
@@ -162,6 +160,21 @@ Controls OpenTelemetry and cost estimation.
 | `input_per_1m` | number | `0.0` | Estimated input-token price per 1M tokens. |
 | `output_per_1m` | number | `0.0` | Estimated output-token price per 1M tokens. |
 | `cached_input_per_1m` | number | `0.0` | Estimated cached-input price per 1M tokens. |
+
+## `[analytics]`
+
+Anonymous, aggregate usage analytics — on by default, opt-out. No code, diffs,
+findings, tokens, repo names, or paths are ever sent.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `true` | Send anonymous usage counts. Set `false` to opt out. |
+| `endpoint` | string | built-in | OTLP log-ingestion endpoint. Blank disables sending. |
+| `api_key` | string | built-in | Project key for the endpoint. Blank disables sending. |
+
+Two environment kill-switches override the config: `BUBO_ANALYTICS=0` (also
+`false`/`no`/`off`) and the cross-tool `DO_NOT_TRACK=1` convention. Either one
+disables analytics regardless of `enabled`.
 
 ## `[mcp_server]`
 
@@ -221,11 +234,10 @@ SQLite state. Change only the provider block and project paths for GitHub.
 provider = "gitlab"
 
 [gitlab]
-url                = "https://gitlab.com"
-api_url            = "https://gitlab.com/api/v4"
-bot_username       = "bubo"
-denied_tools_regex = "^(delete_.*|merge_merge_request|push_files)$"
-token              = "${GITLAB_TOKEN}"
+url          = "https://gitlab.com"
+api_url      = "https://gitlab.com/api/v4"
+bot_username = "bubo"
+token        = "${GITLAB_TOKEN}"
 
 [github]
 api_url      = "https://api.github.com"
@@ -279,9 +291,9 @@ reviewer_command = [
   "--skip-git-repo-check",
 ]
 llm_model                  = "gpt-5.5"
+llm_model_effort           = "medium"
 llm_api_key                = "${LLM_API_KEY}"
-llm_api_key_env            = "OPENAI_API_KEY"
-reasoning_effort           = "medium"
+# llm_base_url             = "https://llm.internal.example/v1"  # OpenAI-compatible endpoint
 dry_run                    = true
 codex_profile              = "bubo"
 codex_sandbox              = "read-only"
@@ -300,6 +312,9 @@ emit_outcome_sync       = true
 input_per_1m            = 0.0
 output_per_1m           = 0.0
 cached_input_per_1m     = 0.0
+
+[analytics]
+# enabled = false   # anonymous usage analytics are on by default; uncomment to opt out
 
 [mcp_server]
 transport = "stdio"

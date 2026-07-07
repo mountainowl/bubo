@@ -5,8 +5,8 @@ export const mac: OsFragment = {
   icon: '/apple.svg',
   shell: 'bash',
   configPath: '~/.local/share/bubo/config/env.toml',
-  prereqInstall: (cli) => `# Homebrew — runtime, Git, provider CLIs, Node (for the agent CLI)
-brew install uv git node glab gh
+  prereqInstall: (cli) => `# Homebrew — runtime, Git, Node (for the agent CLI)
+brew install uv git node
 ${cli}`,
   exportLine: (name, ph) => `export ${name}="${ph}"`,
 }

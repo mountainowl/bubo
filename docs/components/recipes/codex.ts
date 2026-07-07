@@ -16,6 +16,6 @@ export const codex: AgentFragment = {
   cli: a.cli,
   cliName: a.cliName,
   configBlock: `[agents]
-llm_model       = "${a.model}"
-llm_api_key_env = "${a.keyEnv}"   # env var the ${a.cliName} CLI reads`,
+llm_model   = "${a.model}"
+llm_api_key = "\${${a.keyEnv}}"   # your ${a.keyName} key, exported as LLM_API_KEY`,
 }

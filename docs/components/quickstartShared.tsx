@@ -136,18 +136,16 @@ export const AGENT = {
 } as const
 
 export const OS_PREREQS: Record<OS, string> = {
-  mac: `# Homebrew — runtime, Git, provider CLIs, Node (for the agent CLI)
-brew install uv git node glab gh`,
+  mac: `# Homebrew — runtime, Git, Node (for the agent CLI)
+brew install uv git node`,
   linux: `# uv (Python 3.14+ toolchain)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Debian/Ubuntu — Git, Node, GitHub CLI
-sudo apt-get update && sudo apt-get install -y git nodejs npm gh
-
-# GitLab CLI (glab): https://gitlab.com/gitlab-org/cli#installation`,
+# Debian/Ubuntu — Git, Node
+sudo apt-get update && sudo apt-get install -y git nodejs npm`,
   windows: `# PowerShell
 irm https://astral.sh/uv/install.ps1 | iex
-winget install Git.Git OpenJS.NodeJS GitHub.cli`,
+winget install Git.Git OpenJS.NodeJS`,
 }
 
 export const METHOD: Record<Method, string> = {
@@ -237,8 +235,8 @@ provider = "${scm}"
 token = "$env:${s.env}"
 
 [agents]
-llm_model       = "${a.model}"
-llm_api_key_env = "${a.keyEnv}"${reviewerPwsh}
+llm_model   = "${a.model}"
+llm_api_key = "$env:${a.keyEnv}"${reviewerPwsh}
 
 [[projects]]
 path = "$PROJECT"
@@ -292,8 +290,8 @@ provider = "${scm}"
 token = "\${${s.env}}"
 
 [agents]
-llm_model       = "${a.model}"
-llm_api_key_env = "${a.keyEnv}"${reviewer}
+llm_model   = "${a.model}"
+llm_api_key = "\${${a.keyEnv}}"${reviewer}
 
 [[projects]]
 path = "\${PROJECT}"
@@ -319,7 +317,7 @@ $PROJECT = "${s.path}"
 
 # 1) prerequisites + ${a.cliName} CLI
 irm https://astral.sh/uv/install.ps1 | iex
-winget install Git.Git OpenJS.NodeJS GitHub.cli
+winget install Git.Git OpenJS.NodeJS
 ${a.cli}
 
 # 2) install bubo
@@ -336,8 +334,8 @@ provider = "${scm}"
 token = "$env:${s.env}"
 
 [agents]
-llm_model       = "${a.model}"
-llm_api_key_env = "${a.keyEnv}"${reviewerPwsh}
+llm_model   = "${a.model}"
+llm_api_key = "$env:${a.keyEnv}"${reviewerPwsh}
 
 [[projects]]
 path = "$PROJECT"
@@ -351,10 +349,9 @@ bubo-poller`
 
   const prereq =
     os === 'mac'
-      ? 'brew install uv git node glab gh'
+      ? 'brew install uv git node'
       : `curl -LsSf https://astral.sh/uv/install.sh | sh
-sudo apt-get update && sudo apt-get install -y git nodejs npm gh
-# glab (GitLab CLI): https://gitlab.com/gitlab-org/cli#installation`
+sudo apt-get update && sudo apt-get install -y git nodejs npm`
   const reviewer = agent === 'claude' ? `\nreviewer_command = ["claude", "-p"]` : ''
   return `#!/usr/bin/env bash
 set -euo pipefail
@@ -382,8 +379,8 @@ provider = "${scm}"
 token = "\${${s.env}}"
 
 [agents]
-llm_model       = "${a.model}"
-llm_api_key_env = "${a.keyEnv}"${reviewer}
+llm_model   = "${a.model}"
+llm_api_key = "\${${a.keyEnv}}"${reviewer}
 
 [[projects]]
 path = "\${PROJECT}"

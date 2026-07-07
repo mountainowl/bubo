@@ -127,9 +127,8 @@ and reads thread resolution differently.
 
 ### GitHub
 
-- **Posting** goes through a GitHub MCP server — tool name set by
-  `BUBO_GITHUB_MCP_TOOL` (default `create_pull_request_review_comment`). It falls
-  back to the REST API if the MCP call fails or the tool is missing.
+- **Posting** goes through the GitHub REST API — a pull-request review comment
+  anchored to the diff line. No SCM MCP server or extra CLI is involved.
 - **Thread resolution** (`--sync-outcomes`) reads GitHub's GraphQL `reviewThreads`
   (`isResolved`), since REST doesn't expose per-thread state. If GraphQL is
   unavailable, it falls back to a resolution-blind REST path that still records
@@ -137,9 +136,8 @@ and reads thread resolution differently.
 
 ### GitLab
 
-- **Posting** uses the same MCP-first pattern — the `create_merge_request_thread`
-  tool, falling back to the REST API (a merge-request discussion) on failure. The
-  tool name is fixed; there's no `BUBO_GITLAB_MCP_TOOL` override.
+- **Posting** goes through the GitLab REST API — a merge-request discussion
+  anchored to the diff line. No SCM MCP server or extra CLI is involved.
 - **Thread resolution** needs no GraphQL — GitLab's REST discussions API already
   carries the `resolved` / `resolvable` flags, so `--sync-outcomes` reads accurate
   state (including `merged_unresolved`) straight from REST.
