@@ -30,7 +30,7 @@ const config: DocsThemeConfig = {
           fontFamily: "'IBM Plex Mono', ui-monospace, monospace",
         }}
       >
-        v0.24.2
+        v{process.env.NEXT_PUBLIC_BUBO_VERSION}
       </span>
     </span>
   ),

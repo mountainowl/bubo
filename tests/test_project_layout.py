@@ -55,9 +55,16 @@ def test_launch_readiness_files_exist() -> None:
     assert "bubo init" in readme
     assert "bubo doctor" in readme
     assert "actions/workflows/ci.yml/badge.svg" in readme
+    assert "https://mountainowl.github.io/bubo/recipes/" in readme
+    assert "/install-and-configure/" not in readme
     # Scorecard badge via shields' direct endpoint — the api.scorecard.dev
     # URL 302-redirects, which GitHub's image proxy renders as a broken image.
     assert "img.shields.io/ossf-scorecard/github.com/mountainowl/bubo" in readme
+
+    preview_source = (ROOT / "assets" / "social-preview.html").read_text()
+    assert "github.com/mountainowl/bubo" in preview_source
+    assert "mountainowl/ai-code-review" not in preview_source
+    assert (ROOT / "assets" / "social-preview.png").stat().st_size > 0
 
 
 def test_docs_site_present() -> None:
@@ -72,6 +79,15 @@ def test_docs_site_present() -> None:
     # the old mkdocs layout is gone
     assert not (docs / "configuration.md").exists()
     assert not (ROOT / "mkdocs.yml").exists()
+
+    next_config = (docs / "next.config.mjs").read_text()
+    theme_config = (docs / "theme.config.tsx").read_text()
+    deploy_workflow = (ROOT / ".github" / "workflows" / "deploy-docs.yml").read_text()
+    assert "../pyproject.toml" in next_config
+    assert "NEXT_PUBLIC_BUBO_VERSION" in next_config
+    assert "NEXT_PUBLIC_BUBO_VERSION" in theme_config
+    assert "v0.24.2" not in theme_config
+    assert "pyproject.toml" in deploy_workflow
 
 
 def test_meta_prompt_includes_concise_review_style_example() -> None:
