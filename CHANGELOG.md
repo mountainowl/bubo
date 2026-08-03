@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.2](https://github.com/mountainowl/bubo/compare/v0.25.1...v0.25.2) (2026-08-03)
+
+
+### Bug Fixes
+
+* **docs:** close launch readiness gaps ([e5b43e6](https://github.com/mountainowl/bubo/commit/e5b43e6665adaefaae71bc023ea70a3360984e9e))
+
 ## [0.25.1](https://github.com/mountainowl/bubo/compare/v0.25.0...v0.25.1) (2026-07-07)
 
 
