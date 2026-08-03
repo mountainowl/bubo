@@ -35,8 +35,8 @@ bubo-poller              # one poll cycle — dry-run by default, posts nothing
 ```
 
 Prefer a container? `docker pull ghcr.io/mountainowl/bubo` (multi-arch; the
-review-agent CLI is BYO). Full walkthrough in
-[Install and configure](https://mountainowl.github.io/bubo/install-and-configure/).
+review-agent CLI is BYO). Continue with the
+[recipes and quickstart](https://mountainowl.github.io/bubo/recipes/).
 
 ## Documentation
 

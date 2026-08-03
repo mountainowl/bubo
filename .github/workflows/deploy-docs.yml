@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - docs/**
+      - pyproject.toml
       - .github/workflows/deploy-docs.yml
   workflow_dispatch:
 
