@@ -9,41 +9,50 @@ type Marquee = { big: string; label: string; sub: string }
 // time returned. Bubo aids reviewers, it doesn't replace them — augmentation tone,
 // not displacement. Dollar/hour figures are estimates; see the footnote.
 const MARQUEE: Marquee[] = [
-  { big: '259.5k', label: 'Changed LoC reviewed', sub: 'across 2,809 files in 5 projects' },
-  { big: '0', label: 'False positives · 0 disputes', sub: 'high signal density' },
-  { big: '43', label: 'Findings accepted', sub: '31 blocking · 65 resolved' },
-  { big: '~$77K', label: 'Reviewer time returned', sub: 'for ~$200 of run cost — est. (see note)' },
+  { big: '75.3k', label: 'Added LoC reviewed', sub: 'across 108 instrumented runs in 5 projects' },
+  { big: '0', label: 'False positives · 0 disputes', sub: 'across 191 tracked outcomes' },
+  { big: '156', label: 'Findings accepted', sub: '91 blocking · 81.7% acceptance rate' },
+  { big: '~$22.2K', label: 'Reviewer time returned', sub: 'for $36.83 of recorded cost — est. (see note)' },
 ]
+
+// Measurement window and freshness stamp — sourced from the production report
+// (reviewer.sqlite, all history in the current database).
+const PERIOD = 'May 28 – Aug 10, 2026'
+const LAST_UPDATED = 'August 10, 2026'
 
 const GROUPS: Group[] = [
   {
     title: 'Return on investment',
     rows: [
       { k: 'Loaded reviewer rate', v: '~$90/hr' },
-      { k: 'Reviewer time returned', v: '~$77K', hero: true },
-      { k: 'Return on spend', v: '~385×' },
+      { k: 'Reviewer time returned', v: '~$22.2K', hero: true },
+      { k: 'Return on recorded spend', v: '~602×' },
+      { k: 'Recorded cost / accepted finding', v: '$0.24' },
+      { k: 'Accepted findings / recorded $', v: '4.24' },
       { k: 'Peer AI reviewers', v: '$24–30/dev-mo' },
     ],
   },
   {
     title: 'Reviewer time freed',
     rows: [
-      { k: 'Human first pass @300 LoC/hr', v: '865 hrs' },
-      { k: 'Bubo review wall time', v: '4.67 hrs' },
-      { k: 'Reviewer hours freed (est.)', v: '~861', hero: true },
-      { k: 'Reviewer-days freed (est.)', v: '~108' },
-      { k: 'Cost / reviewer-hour', v: '~$0.23' },
+      { k: 'Added LoC reviewed', v: '75,320' },
+      { k: 'Human first pass @300 LoC/hr', v: '251.1 hrs' },
+      { k: 'Bubo review wall time', v: '4.6 hrs' },
+      { k: 'Reviewer hours returned (est.)', v: '~246.5', hero: true },
+      { k: 'Reviewer-days returned (est.)', v: '~30.8' },
+      { k: 'Cost / reviewer-hour', v: '$0.15' },
     ],
   },
   {
     title: 'Outcomes & precision',
     rows: [
-      { k: 'Findings tracked', v: '91' },
-      { k: 'Developer replied', v: '70' },
-      { k: 'Findings accepted', v: '43' },
-      { k: '— of which blocking', v: '31' },
-      { k: 'Resolved', v: '65' },
-      { k: 'Resolution rate', v: '71.4%', hero: true },
+      { k: 'Findings returned', v: '218' },
+      { k: 'Posted', v: '194 (89.0%)' },
+      { k: 'Outcomes tracked', v: '191' },
+      { k: 'Developer replied', v: '155' },
+      { k: 'Accepted / resolved', v: '156', hero: true },
+      { k: '— of which blocking', v: '91' },
+      { k: 'Acceptance rate', v: '81.7%', hero: true },
       { k: 'Disputed', v: '0' },
       { k: 'False positives', v: '0', hero: true },
     ],
@@ -52,32 +61,33 @@ const GROUPS: Group[] = [
     title: 'Code reviewed',
     rows: [
       { k: 'Projects', v: '5' },
-      { k: 'Files', v: '2,809' },
-      { k: 'Added LoC', v: '147,316' },
-      { k: 'Removed LoC', v: '112,233' },
-      { k: 'Changed LoC', v: '259,549', hero: true },
-      { k: 'Attempted LoC', v: '271,034' },
+      { k: 'Added LoC measured', v: '75,320', hero: true },
+      { k: 'LoC-instrumented runs', v: '108 of 276' },
+      { k: 'Instrumentation coverage', v: '39.1%' },
+      { k: 'Blocking findings', v: '126' },
+      { k: 'Non-blocking findings', v: '92' },
     ],
   },
   {
     title: 'Cost & efficiency',
     rows: [
-      { k: 'Total cost', v: '~$200', hero: true },
-      { k: 'Total tokens', v: '13,125,521' },
-      { k: 'Cost / 1k LoC', v: '~$0.77' },
-      { k: 'Tokens / LoC', v: '50.6' },
-      { k: 'Changed LoC / $', v: '~1,300' },
+      { k: 'Total recorded cost', v: '$36.83', hero: true },
+      { k: 'Total tokens', v: '25,565,663' },
+      { k: 'Avg tokens / run', v: '92,629' },
+      { k: 'Avg recorded cost / run', v: '$0.13' },
+      { k: 'Runs with recorded cost', v: '218 of 276' },
+      { k: 'Latency p50 / p95', v: '128s / 308s' },
     ],
   },
   {
     title: 'Aggregates',
     rows: [
-      { k: 'Period', v: 'Jun 1–29, 2026' },
-      { k: 'Total review runs', v: '124', hero: true },
-      { k: 'Completed', v: '118' },
-      { k: 'Completion rate', v: '95.2%' },
-      { k: 'Findings returned', v: '74' },
-      { k: 'Posted', v: '66' },
+      { k: 'Period', v: PERIOD },
+      { k: 'Total review runs', v: '276', hero: true },
+      { k: 'Successful or clean', v: '269' },
+      { k: 'Completion rate', v: '97.5%' },
+      { k: 'Failed runs', v: '6 (2.2%)' },
+      { k: 'Total run wall time', v: '11.1 hrs' },
     ],
   },
 ]
@@ -88,6 +98,15 @@ export function MetricsDetail() {
       <p className={styles.eyebrow}>Real production metrics</p>
       <h2 className={styles.title}>Measured RoI</h2>
       <div className={styles.bar} />
+
+      <div className={styles.stamp}>
+        <span className={styles.live}>
+          <span className={styles.dot} aria-hidden="true" />
+          Real production numbers
+        </span>
+        <span>Measured {PERIOD}</span>
+        <span>Last updated {LAST_UPDATED}</span>
+      </div>
 
       <p className={styles.lede}>
         Speed is a given. Bubo&apos;s edge is <strong>signal density</strong>: multi-agent orchestration
@@ -122,6 +141,23 @@ export function MetricsDetail() {
       </div>
 
       <div className={styles.note}>
+        <p className={styles.noteLead}>
+          Note: these are real production numbers, not a benchmark or simulation. They are drawn from
+          all Bubo history in the live production database across five GitLab projects, measured
+          continuously from <strong>May 28, 2026</strong> through <strong>August 10, 2026</strong>.
+          Last updated <strong>{LAST_UPDATED}</strong>.
+        </p>
+        <p className={styles.noteBody}>
+          Coverage is partial and stated rather than smoothed over. Reviewer-time figures use only the
+          108 of 276 runs (39.1%) carrying LoC instrumentation, and count added lines only. Recorded
+          provider cost covers 218 of 276 runs (79.0%) — 58 runs have zero or missing model pricing, so
+          the true spend is higher than $36.83. The ~602× return charges that full recorded cost against
+          only the reviewer-time value measurable in the instrumented subset; it is a directional
+          provider-cost ratio, not audited all-in ROI. Host, engineering, and operational costs are not
+          recorded. &ldquo;Accepted&rdquo; means resolved and neither disputed nor marked false-positive;
+          zero recorded false positives reflects the outcome labels present in production, not
+          independently proven precision.
+        </p>
         <p className={styles.noteBody}>
           Reviewer-hours and dollar figures are estimates. Careful peer review runs ~200–400 LoC/hr
           (300 midpoint); review effectiveness drops sharply above ~200 LoC/hr.
