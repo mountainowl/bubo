@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.3](https://github.com/mountainowl/bubo/compare/v0.25.2...v0.25.3) (2026-08-10)
+
+
+### Documentation
+
+* refresh Measured RoI with Aug 10 production numbers ([#185](https://github.com/mountainowl/bubo/issues/185)) ([01eb907](https://github.com/mountainowl/bubo/commit/01eb90765cc68bc0ddc624686e75697844d3809b))
+
 ## [0.25.2](https://github.com/mountainowl/bubo/compare/v0.25.1...v0.25.2) (2026-08-03)
 
 
