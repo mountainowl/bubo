@@ -31,7 +31,7 @@ from bubo.errors import describe
 
 # PostHog OTLP log-ingestion endpoint and the public project key. A blank
 # endpoint or key disables sending (treated as a soft opt-out by the client).
-DEFAULT_ANALYTICS_ENDPOINT = "https://us.i.posthog.com/otlp/v1/logs"
+DEFAULT_ANALYTICS_ENDPOINT = "https://us.i.posthog.com/i/v1/logs"
 DEFAULT_ANALYTICS_API_KEY = "phc_uhKucyWAFGAQTSyQDcH2NqJ2gto3TThBW5mvc8Phf5vq"
 
 
