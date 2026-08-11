@@ -17,6 +17,7 @@ def test_analytics_defaults_to_enabled() -> None:
 
     assert cfg == AnalyticsConfig()
     assert cfg.enabled is True
+    assert cfg.endpoint == "https://us.i.posthog.com/i/v1/logs"
     assert cfg.endpoint == DEFAULT_ANALYTICS_ENDPOINT
     assert cfg.api_key == DEFAULT_ANALYTICS_API_KEY
 
