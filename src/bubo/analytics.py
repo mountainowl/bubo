@@ -3,7 +3,7 @@
 Bubo is free and open source. The only way the project learns what real
 installs actually use — which SCM, which models, how many reviews, how much
 gets reviewed — is anonymous usage signal. This module ships that signal to
-PostHog over OTLP logs. It is **on by default**; see
+PostHog through its Product Analytics batch API. It is **on by default**; see
 :mod:`bubo.analytics_config` for the three opt-outs.
 
 Design — privacy is the whole point, so it is enforced structurally:
@@ -14,14 +14,14 @@ Design — privacy is the whole point, so it is enforced structurally:
   an un-allowlisted field. The list is *numbers and low-cardinality enums
   only* — never project/repo names, file paths, SHAs, finding text, review
   bodies, error strings, or credentials.
-* **No stdlib logging at all.** OTLP egress goes through the OpenTelemetry
-  logs API directly (``LoggerProvider.get_logger(...).emit(...)``). The Python
-  stdlib :mod:`logging` package is never involved, so there is structurally no
-  way for the rest of bubo's logs (which *do* contain repo names and paths) to
-  reach PostHog. We only ever emit what we explicitly hand to :func:`_emit`.
+* **No stdlib logging at all.** Product Analytics events are assembled here
+  and sent directly over HTTPS. The Python stdlib :mod:`logging` package is
+  never involved, so there is structurally no way for the rest of bubo's logs
+  (which *do* contain repo names and paths) to reach PostHog. We only ever send
+  what we explicitly hand to :func:`_emit`.
 * **Best-effort, never fatal.** Every public function swallows all
-  exceptions. Analytics must never slow, block, or break a review. The OTLP
-  exporter uses a short timeout and a background batch processor.
+  exceptions. Events are buffered until :func:`flush`, which uses one request
+  per configured destination with a short timeout.
 * **Anonymous, not identified.** A random install id (see :func:`install_id`)
   lets us count distinct installs without identifying anyone; it is a UUID
   with no link to user, host, or repo.
@@ -30,11 +30,14 @@ Design — privacy is the whole point, so it is enforced structurally:
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import platform
+import threading
 import uuid
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
+from urllib.request import Request, urlopen
 
 from bubo import paths
 from bubo.analytics_config import AnalyticsConfig
@@ -87,6 +90,7 @@ _ALLOWED_ATTRS = frozenset(
 # "other" so a custom command can never leak a path or arbitrary string.
 _KNOWN_PROVIDERS = frozenset({"gitlab", "github"})
 _KNOWN_AGENTS = frozenset({"codex", "claude"})
+_KNOWN_EVENTS = frozenset({"session_start", "review_completed", "finding_outcome"})
 # Developer-engagement outcome dimensions. Mirrors the per-finding flags the
 # poller's outcome sync writes to SQLite; a value outside the set normalizes to
 # "other" so a future column can never leak as an arbitrary string.
@@ -99,16 +103,11 @@ _KNOWN_OUTCOMES = frozenset(
 # smuggle multi-line content.
 _MAX_STR = 64
 
-_INSTRUMENTATION_NAME = "bubo.analytics"
-
-# Module singletons (one OTLP pipeline per process; workers are exec'd, not
-# forked, so each gets a fresh one). `_logger_failed` marks "tried and
-# failed/disabled" so we don't retry setup on every event. Typed `Any` so the
-# OTel SDK is imported lazily inside `_build_pipeline` (a missing/broken SDK
-# degrades to "no analytics" rather than breaking import of the poller).
-_otlp_provider: Any = None
-_logger: Any = None
-_logger_failed: bool = False
+# Buffered per-process; workers are exec'd, not forked, so each gets a fresh
+# queue. Keeping destination beside each event also handles callers that use
+# more than one AnalyticsConfig in the same process.
+_pending_events: list[tuple[str, str, dict[str, Any]]] = []
+_pending_lock = threading.Lock()
 _install_id: str | None = None
 
 
@@ -220,78 +219,16 @@ def _clean(attrs: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _resource() -> Any:
-    """Build the OTel resource with ONLY a fixed service name.
-
-    Uses the raw ``Resource(attributes=...)`` constructor, NOT
-    ``Resource.create()`` — the latter merges ``OTEL_RESOURCE_ATTRIBUTES`` /
-    ``OTEL_SERVICE_NAME`` from the environment, which bubo operators commonly
-    set (they run a ``[telemetry]`` OTLP exporter). Those ride alongside every
-    log record and would bypass the `_clean` allowlist, leaking host/env names
-    to PostHog. The raw constructor performs no env merge.
-    """
-    from opentelemetry.sdk.resources import Resource
-
-    return Resource(attributes={"service.name": "bubo"})
-
-
-def _build_pipeline(cfg: AnalyticsConfig) -> tuple[Any, Any] | None:
-    """Build ``(provider, logger)`` for OTLP log egress, or ``None`` on failure.
-
-    Imports are local so a missing/broken OTel SDK degrades to "no analytics"
-    rather than breaking import of this module (and the poller).
-    """
-    try:
-        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-        from opentelemetry.sdk._logs import LoggerProvider
-        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-
-        provider = LoggerProvider(resource=_resource())
-        exporter = OTLPLogExporter(
-            endpoint=cfg.endpoint,
-            headers={"Authorization": f"Bearer {cfg.api_key}"},
-            timeout=3,
-        )
-        provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
-        logger = provider.get_logger(_INSTRUMENTATION_NAME)
-        # Backstop: flush on interpreter exit even if the caller forgets, so a
-        # process that dies between emit and an explicit flush still ships.
-        atexit.register(flush)
-        return provider, logger
-    except Exception:
-        return None
-
-
-def _get_logger(cfg: AnalyticsConfig) -> Any:
-    global _otlp_provider, _logger, _logger_failed
-    if _logger is None and not _logger_failed:
-        built = _build_pipeline(cfg)
-        if built is None:
-            _logger_failed = True
-        else:
-            _otlp_provider, _logger = built
-    return _logger
-
-
 def _emit(cfg: AnalyticsConfig, event: str, attrs: dict[str, Any]) -> None:
-    """Emit one anonymized event. Best-effort: never raises."""
+    """Queue one anonymized Product Analytics event. Never raises."""
     try:
-        if not analytics_enabled(cfg):
+        if not analytics_enabled(cfg) or event not in _KNOWN_EVENTS:
             return
-        logger = _get_logger(cfg)
-        if logger is None:
-            return
-        from opentelemetry._logs import SeverityNumber
-
         payload = _clean({**_base_attrs(), **attrs})
-        # The event name is both the log body and event_name; PostHog maps it.
-        logger.emit(
-            body=event,
-            event_name=event,
-            severity_number=SeverityNumber.INFO,
-            severity_text="INFO",
-            attributes=payload,
-        )
+        with _pending_lock:
+            _pending_events.append(
+                (cfg.endpoint, cfg.api_key, {"event": event, "properties": payload})
+            )
     except Exception:
         return
 
@@ -390,13 +327,36 @@ def flush() -> None:
     its events before exit.
     """
     try:
-        provider = _otlp_provider
-        if provider is not None:
-            # Bounded so a worker/poll never hangs long on exit when PostHog is
-            # unreachable — dropping an event beats blocking a review.
-            provider.force_flush(2000)
+        with _pending_lock:
+            queued = list(_pending_events)
+            _pending_events.clear()
+        batches: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for endpoint, api_key, event in queued:
+            batches.setdefault((endpoint, api_key), []).append(event)
+        for (endpoint, api_key), events in batches.items():
+            body = json.dumps({"api_key": api_key, "batch": events}, separators=(",", ":")).encode(
+                "utf-8"
+            )
+            request = Request(
+                endpoint,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                # Bounded so a worker/poll never hangs long on exit when
+                # PostHog is unreachable. Dropping analytics beats blocking a
+                # review, and avoids ambiguous retries after response loss.
+                with urlopen(request, timeout=3):
+                    pass
+            except Exception:
+                continue
     except Exception:
         return
+
+
+# Backstop for short-lived commands whose caller forgets an explicit flush.
+atexit.register(flush)
 
 
 __all__ = [

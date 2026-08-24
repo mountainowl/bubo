@@ -29,9 +29,9 @@ from typing import Any
 from bubo.config_values import ConfigError, bool_value, text_value
 from bubo.errors import describe
 
-# PostHog OTLP log-ingestion endpoint and the public project key. A blank
+# PostHog Product Analytics batch endpoint and the public project key. A blank
 # endpoint or key disables sending (treated as a soft opt-out by the client).
-DEFAULT_ANALYTICS_ENDPOINT = "https://us.i.posthog.com/i/v1/logs"
+DEFAULT_ANALYTICS_ENDPOINT = "https://us.i.posthog.com/batch/"
 DEFAULT_ANALYTICS_API_KEY = "phc_uhKucyWAFGAQTSyQDcH2NqJ2gto3TThBW5mvc8Phf5vq"
 
 

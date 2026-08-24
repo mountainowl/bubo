@@ -169,7 +169,7 @@ findings, tokens, repo names, or paths are ever sent.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | boolean | `true` | Send anonymous usage counts. Set `false` to opt out. |
-| `endpoint` | string | built-in | OTLP log-ingestion endpoint. Blank disables sending. |
+| `endpoint` | string | built-in | PostHog Product Analytics batch endpoint. Blank disables sending. |
 | `api_key` | string | built-in | Project key for the endpoint. Blank disables sending. |
 
 Two environment kill-switches override the config: `BUBO_ANALYTICS=0` (also

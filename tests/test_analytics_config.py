@@ -17,7 +17,7 @@ def test_analytics_defaults_to_enabled() -> None:
 
     assert cfg == AnalyticsConfig()
     assert cfg.enabled is True
-    assert cfg.endpoint == "https://us.i.posthog.com/i/v1/logs"
+    assert cfg.endpoint == "https://us.i.posthog.com/batch/"
     assert cfg.endpoint == DEFAULT_ANALYTICS_ENDPOINT
     assert cfg.api_key == DEFAULT_ANALYTICS_API_KEY
 
@@ -29,9 +29,9 @@ def test_analytics_opt_out_parses() -> None:
 
 def test_analytics_endpoint_and_key_overridable() -> None:
     cfg = analytics_config_from_dict(
-        {"analytics": {"endpoint": "https://self.host/otlp/v1/logs", "api_key": "phc_other"}}
+        {"analytics": {"endpoint": "https://self.host/batch/", "api_key": "phc_other"}}
     )
-    assert cfg.endpoint == "https://self.host/otlp/v1/logs"
+    assert cfg.endpoint == "https://self.host/batch/"
     assert cfg.api_key == "phc_other"
 
 

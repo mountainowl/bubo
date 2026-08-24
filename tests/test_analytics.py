@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -12,9 +13,7 @@ from bubo.analytics_config import AnalyticsConfig
 @pytest.fixture(autouse=True)
 def _reset_analytics_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
     """Each test starts with a clean module state and no env opt-outs."""
-    monkeypatch.setattr(analytics, "_otlp_provider", None)
-    monkeypatch.setattr(analytics, "_logger", None)
-    monkeypatch.setattr(analytics, "_logger_failed", False)
+    monkeypatch.setattr(analytics, "_pending_events", [])
     monkeypatch.setattr(analytics, "_install_id", None)
     monkeypatch.delenv("BUBO_ANALYTICS", raising=False)
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
@@ -173,34 +172,20 @@ def test_provider_normalization() -> None:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end shaping through a fake logger — no PII, only allowlisted fields.
+# End-to-end shaping in the Product Analytics queue — no PII.
 # ---------------------------------------------------------------------------
 
 
-class _FakeLogger:
-    """Stand-in for an OTel SDK Logger — captures emit kwargs."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, object]]] = []
-
-    def emit(
-        self,
-        *,
-        body: str,
-        event_name: str | None = None,
-        severity_number: object = None,
-        severity_text: str | None = None,
-        attributes: dict[str, object],
-    ) -> None:
-        self.calls.append((body, attributes))
+def _only_queued_event() -> tuple[str, dict[str, object]]:
+    assert len(analytics._pending_events) == 1
+    _, _, event = analytics._pending_events[0]
+    return event["event"], event["properties"]
 
 
 def test_record_review_completed_emits_only_allowlisted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
-    fake = _FakeLogger()
-    monkeypatch.setattr(analytics, "_get_logger", lambda cfg: fake)
 
     analytics.record_review_completed(
         AnalyticsConfig(),
@@ -224,8 +209,7 @@ def test_record_review_completed_emits_only_allowlisted(
         lines_changed=120,
     )
 
-    assert len(fake.calls) == 1
-    event, attrs = fake.calls[0]
+    event, attrs = _only_queued_event()
     assert event == "review_completed"
     # Every emitted key must be in the allowlist (the structural guarantee).
     assert set(attrs).issubset(analytics._ALLOWED_ATTRS)
@@ -241,12 +225,9 @@ def test_record_review_completed_emits_only_allowlisted(
 def test_record_finding_outcome_emits_allowlisted_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake = _FakeLogger()
-    monkeypatch.setattr(analytics, "_get_logger", lambda cfg: fake)
-
     analytics.record_finding_outcome(AnalyticsConfig(), scm_provider="gitlab", outcome="resolved")
 
-    event, attrs = fake.calls[0]
+    event, attrs = _only_queued_event()
     assert event == "finding_outcome"
     assert attrs["outcome"] == "resolved"
     assert attrs["scm_provider"] == "gitlab"
@@ -258,31 +239,21 @@ def test_record_finding_outcome_normalizes_unknown_values(
 ) -> None:
     # Defense in depth: an outcome name outside the known set (and a junk
     # provider) collapse to "other" rather than leaking an arbitrary string.
-    fake = _FakeLogger()
-    monkeypatch.setattr(analytics, "_get_logger", lambda cfg: fake)
-
     analytics.record_finding_outcome(
         AnalyticsConfig(), scm_provider="weird-scm", outcome="merged_unresolved"
     )
 
-    _, attrs = fake.calls[0]
+    _, attrs = _only_queued_event()
     assert attrs["outcome"] == "other"
     assert attrs["scm_provider"] == "other"
 
 
 def test_emit_is_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A disabled config must never even construct the logger."""
-    called = False
-
-    def _boom(cfg: AnalyticsConfig) -> None:
-        nonlocal called
-        called = True
-
-    monkeypatch.setattr(analytics, "_get_logger", _boom)
+    """A disabled config must never queue an event."""
     analytics.record_session_start(
         AnalyticsConfig(enabled=False), scm_provider="gitlab", projects_count=1
     )
-    assert called is False
+    assert analytics._pending_events == []
 
 
 # ---------------------------------------------------------------------------
@@ -290,40 +261,77 @@ def test_emit_is_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_resource_ignores_otel_env_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Regression guard: Resource.create() would merge these env vars (which bubo
-    # operators set for their own [telemetry] OTLP exporter) and they would ride
-    # past the _clean allowlist to PostHog. We must use the raw constructor.
+def test_otel_env_attributes_never_enter_event(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "OTEL_RESOURCE_ATTRIBUTES", "host.name=secret-host,deployment.environment=acme-prod"
     )
     monkeypatch.setenv("OTEL_SERVICE_NAME", "acme-svc")
-    attrs = dict(analytics._resource().attributes)
-    assert attrs == {"service.name": "bubo"}
+    analytics.record_session_start(AnalyticsConfig(), scm_provider="gitlab", projects_count=1)
+    _, attrs = _only_queued_event()
     assert "host.name" not in attrs
     assert "deployment.environment" not in attrs
 
 
-def test_distinct_id_equals_install_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_distinct_id_equals_install_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
-    fake = _FakeLogger()
-    monkeypatch.setattr(analytics, "_get_logger", lambda cfg: fake)
     analytics.record_session_start(AnalyticsConfig(), scm_provider="gitlab", projects_count=1)
-    _, attrs = fake.calls[0]
+    _, attrs = _only_queued_event()
     assert attrs["distinct_id"] == attrs["install_id"]
     assert attrs["distinct_id"] == analytics.install_id()
 
 
-def test_build_pipeline_uses_no_stdlib_logging() -> None:
+class _FakeResponse:
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def test_flush_posts_product_analytics_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests: list[tuple[object, int]] = []
+
+    def _urlopen(request: object, timeout: int) -> _FakeResponse:
+        requests.append((request, timeout))
+        return _FakeResponse()
+
+    monkeypatch.setattr(analytics, "urlopen", _urlopen)
+    cfg = AnalyticsConfig(endpoint="https://example.test/batch/", api_key="phc_test")
+    analytics.record_session_start(cfg, scm_provider="gitlab", projects_count=1)
+    analytics.record_finding_outcome(cfg, scm_provider="gitlab", outcome="resolved")
+
+    analytics.flush()
+
+    assert len(requests) == 1
+    request, timeout = requests[0]
+    assert request.full_url == "https://example.test/batch/"
+    assert request.headers["Content-type"] == "application/json"
+    assert timeout == 3
+    body = json.loads(request.data)
+    assert body["api_key"] == "phc_test"
+    assert [event["event"] for event in body["batch"]] == [
+        "session_start",
+        "finding_outcome",
+    ]
+    assert analytics._pending_events == []
+
+
+def test_flush_failure_is_nonfatal(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fail(request: object, timeout: int) -> None:
+        raise OSError("offline")
+
+    monkeypatch.setattr(analytics, "urlopen", _fail)
+    analytics.record_session_start(AnalyticsConfig(), scm_provider="gitlab", projects_count=1)
+    analytics.flush()
+    assert analytics._pending_events == []
+
+
+def test_product_analytics_transport_uses_no_stdlib_logging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     root = logging.getLogger()
     before = list(root.handlers)
-    built = analytics._build_pipeline(AnalyticsConfig())
-    assert built is not None
-    _, logger = built
-    # Emits via the OTel logs API (has .emit), not a stdlib logging.Logger.
-    assert hasattr(logger, "emit")
-    assert not isinstance(logger, logging.Logger)
-    # Building the pipeline must not have attached anything to the root logger.
+    monkeypatch.setattr(analytics, "urlopen", lambda request, timeout: _FakeResponse())
+    analytics.record_session_start(AnalyticsConfig(), scm_provider="gitlab", projects_count=1)
+    analytics.flush()
     assert root.handlers == before
