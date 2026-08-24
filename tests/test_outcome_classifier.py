@@ -44,6 +44,38 @@ def test_parse_verdict_garbage_is_unclear() -> None:
     assert oc.parse_verdict("no json here") == {"verdict": "unclear", "false_positive": False}
 
 
+def test_classifier_env_strips_credentials_without_custom_endpoint() -> None:
+    env = oc.classifier_env(
+        {
+            "PATH": "/usr/bin",
+            "LLM_API_KEY": "llm-secret",
+            "LLM_BASE_URL": "https://llm.example/v1",
+            "GITLAB_TOKEN": "gitlab-secret",
+        },
+        ReviewConfig(),
+    )
+
+    assert "LLM_API_KEY" not in env
+    assert "LLM_BASE_URL" not in env
+    assert "GITLAB_TOKEN" not in env
+
+
+def test_classifier_env_forwards_only_custom_endpoint_credential() -> None:
+    env = oc.classifier_env(
+        {
+            "PATH": "/usr/bin",
+            "LLM_API_KEY": "llm-secret",
+            "LLM_BASE_URL": "https://llm.example/v1",
+            "GITLAB_TOKEN": "gitlab-secret",
+        },
+        ReviewConfig(llm_base_url="https://llm.example/v1"),
+    )
+
+    assert env["LLM_API_KEY"] == "llm-secret"
+    assert env["LLM_BASE_URL"] == "https://llm.example/v1"
+    assert "GITLAB_TOKEN" not in env
+
+
 def test_classify_developer_reply_empty_reply_skips_agent() -> None:
     with patch("bubo.outcome_classifier.run_bounded") as mocked:
         out = oc.classify_developer_reply(ReviewConfig(), "finding", "   ")

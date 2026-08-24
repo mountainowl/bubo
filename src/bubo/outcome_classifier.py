@@ -88,8 +88,16 @@ def _error() -> JsonObject:
     return dict(_ERROR)
 
 
-def classifier_env(source: Mapping[str, str]) -> dict[str, str]:
-    """Build the (secret-stripped) env for the classifier subprocess."""
+def classifier_env(
+    source: Mapping[str, str], cfg: ReviewConfig | None = None
+) -> dict[str, str]:
+    """Build the env for the classifier subprocess.
+
+    Credentials remain stripped by default. As with the main reviewer, a
+    configured OpenAI-compatible endpoint needs exactly ``LLM_API_KEY`` and
+    ``LLM_BASE_URL`` at request time, so forward only those two values when
+    the operator explicitly configured ``llm_base_url``.
+    """
     env = {key: value for key, value in source.items() if key in _ENV_ALLOWLIST}
     path = _EXTRA_PATH + ":" + env.get("PATH", "")
     home = source.get("HOME")
@@ -97,6 +105,10 @@ def classifier_env(source: Mapping[str, str]) -> dict[str, str]:
         path = path + ":" + os.path.join(home, ".local", "bin")
     env["PATH"] = path
     env["BUBO_ROOT"] = str(ROOT)
+    if cfg is not None and cfg.llm_base_url:
+        for name in ("LLM_API_KEY", "LLM_BASE_URL"):
+            if source.get(name):
+                env[name] = source[name]
     return env
 
 
@@ -167,7 +179,7 @@ def classify_developer_reply(cfg: ReviewConfig, finding_text: str, reply_text: s
     try:
         result = run_bounded(
             [*command, prompt],
-            env=classifier_env(os.environ),
+            env=classifier_env(os.environ, cfg),
             timeout=CLASSIFY_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # spawn / timeout / OS error — retry later
