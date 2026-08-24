@@ -62,6 +62,7 @@ _ALLOWED_ATTRS = frozenset(
         "schema_version",
         # fixed PostHog privacy controls
         "$geoip_disable",
+        "$ip",
         "$process_person_profile",
         "scm_provider",
         "agent",
@@ -199,6 +200,7 @@ def _base_attrs() -> dict[str, Any]:
         # The capture API otherwise derives and stores location from the
         # request IP and creates a person profile for the anonymous install.
         "$geoip_disable": True,
+        "$ip": "0.0.0.0",
         "$process_person_profile": False,
     }
 
@@ -235,6 +237,7 @@ def _emit(cfg: AnalyticsConfig, event: str, attrs: dict[str, Any]) -> None:
         # These controls are fixed after cleaning so no caller can override
         # them while adding event-specific attributes.
         payload["$geoip_disable"] = True
+        payload["$ip"] = "0.0.0.0"
         payload["$process_person_profile"] = False
         with _pending_lock:
             _pending_events.append(

@@ -221,6 +221,7 @@ def test_record_review_completed_emits_only_allowlisted(
     assert "bubo_version" in attrs
     assert "os" in attrs
     assert attrs["$geoip_disable"] is True
+    assert attrs["$ip"] == "0.0.0.0"
     assert attrs["$process_person_profile"] is False
 
 
@@ -228,11 +229,12 @@ def test_posthog_privacy_controls_cannot_be_overridden() -> None:
     analytics._emit(
         AnalyticsConfig(),
         "session_start",
-        {"$geoip_disable": False, "$process_person_profile": True},
+        {"$geoip_disable": False, "$ip": "203.0.113.10", "$process_person_profile": True},
     )
 
     _, attrs = _only_queued_event()
     assert attrs["$geoip_disable"] is True
+    assert attrs["$ip"] == "0.0.0.0"
     assert attrs["$process_person_profile"] is False
 
 

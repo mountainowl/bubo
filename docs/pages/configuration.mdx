@@ -164,8 +164,9 @@ Controls OpenTelemetry and cost estimation.
 ## `[analytics]`
 
 Anonymous, aggregate usage analytics — on by default, opt-out. No code, diffs,
-findings, tokens, repo names, paths, IP-derived location, or person profiles are
-ever sent or created.
+findings, tokens, repo names, or paths are ever sent. PostHog GeoIP enrichment
+and person-profile processing are disabled, and the source-IP event property is
+replaced with `0.0.0.0`.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
