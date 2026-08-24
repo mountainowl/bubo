@@ -163,6 +163,18 @@ def parse_verdict(stdout: str) -> JsonObject:
     return {"verdict": verdict, "false_positive": bool(found.get("false_positive", False))}
 
 
+def _failure_reason(output: str) -> str:
+    """Map agent output to a safe, low-cardinality diagnostic label."""
+    lowered = output.lower()
+    if "missing environment variable" in lowered:
+        return "missing_environment_variable"
+    if "unauthorized" in lowered or "status 401" in lowered:
+        return "unauthorized"
+    if "rate limit" in lowered or "status 429" in lowered:
+        return "rate_limited"
+    return "agent_nonzero"
+
+
 def classify_developer_reply(cfg: ReviewConfig, finding_text: str, reply_text: str) -> JsonObject:
     """Classify a developer reply as accept/reject via the configured agent.
 
@@ -186,6 +198,11 @@ def classify_developer_reply(cfg: ReviewConfig, finding_text: str, reply_text: s
         log("reply_classify_failed", error=type(exc).__name__)
         return _error()
     if result.returncode:
-        log("reply_classify_nonzero", returncode=result.returncode)
+        diagnostic = f"{result.stdout or ''}\n{result.stderr or ''}"
+        log(
+            "reply_classify_nonzero",
+            returncode=result.returncode,
+            reason=_failure_reason(diagnostic),
+        )
         return _error()
     return parse_verdict(result.stdout or "")

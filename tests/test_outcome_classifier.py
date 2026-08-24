@@ -44,6 +44,15 @@ def test_parse_verdict_garbage_is_unclear() -> None:
     assert oc.parse_verdict("no json here") == {"verdict": "unclear", "false_positive": False}
 
 
+def test_failure_reason_returns_safe_labels() -> None:
+    assert oc._failure_reason("ERROR: Missing environment variable: SECRET_KEY") == (
+        "missing_environment_variable"
+    )
+    assert oc._failure_reason("request failed: status 401") == "unauthorized"
+    assert oc._failure_reason("rate limit exceeded") == "rate_limited"
+    assert oc._failure_reason("private prompt text") == "agent_nonzero"
+
+
 def test_classifier_env_strips_credentials_without_custom_endpoint() -> None:
     env = oc.classifier_env(
         {
