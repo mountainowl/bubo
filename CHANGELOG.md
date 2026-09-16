@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.25.4](https://github.com/mountainowl/bubo/compare/v0.25.3...v0.25.4) (2026-09-11)
+
+
+### Bug Fixes
+
+* **analytics:** correct PostHog OTLP logs endpoint ([7a274fa](https://github.com/mountainowl/bubo/commit/7a274fa92ce1e0e504a167182d1a3c002e388dee))
+* **analytics:** disable posthog geoip enrichment ([111bf2b](https://github.com/mountainowl/bubo/commit/111bf2b4b72b99711e39d95ba0ad0c87366696e9))
+* **analytics:** send events to product analytics ([59f579f](https://github.com/mountainowl/bubo/commit/59f579fe220286e330ae31f93cedc408aa839226))
+* **analytics:** suppress source ip property ([1d03cb1](https://github.com/mountainowl/bubo/commit/1d03cb130882528c50d7ca0d5baa9eab987cf8d7))
+* **outcomes:** forward configured LLM credentials ([22bd7aa](https://github.com/mountainowl/bubo/commit/22bd7aaaae843d13f0f0e518cdf7e220ef3bc40f))
+* **outcomes:** report safe classifier failure reasons ([ab3985b](https://github.com/mountainowl/bubo/commit/ab3985bc0c84174f1fdc5f9dea7adb5b42e7f80e))
+
 ## [0.25.3](https://github.com/mountainowl/bubo/compare/v0.25.2...v0.25.3) (2026-08-10)
 
 
