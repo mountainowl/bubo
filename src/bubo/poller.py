@@ -44,9 +44,21 @@ import urllib.error
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from bubo import analytics, github, gitlab, paths
+from bubo.backfill import (
+    BackfilledComment as _BackfilledComment,
+)
+from bubo.backfill import (
+    finding_from_comment as _finding_from_backfilled_comment,
+)
+from bubo.backfill import (
+    first_bot_note as _first_bot_note,
+)
+from bubo.backfill import (
+    record_backfilled_comment as _record_backfilled_comment,
+)
 from bubo.config_values import ConfigError
 from bubo.db import (
     already_seen,
@@ -65,6 +77,7 @@ from bubo.db import (
     record_provenance,
     record_review_run_finish,
     record_review_run_start,
+    review_health,
     review_run_id,
     status_age_seconds,
 )
@@ -98,6 +111,7 @@ from bubo.prompt import write_rendered_meta_prompt as write_rendered_prompt_file
 from bubo.provenance import ProvenanceSignal, compile_patterns, compute_provenance
 from bubo.review_config import ReviewConfig, load_review_config, review_config_from_dict
 from bubo.scm import ScmProvider, get_provider
+from bubo.scm.base import native_changed_lines
 from bubo.secrets import redact_secrets
 from bubo.signals import (
     install_signal_handlers as _install_signal_handlers,
@@ -118,9 +132,7 @@ from bubo.types import JsonObject
 from bubo.verification import (
     Verdict,
     build_verification_prompt,
-    decide,
     parse_verdict,
-    votes_summary,
 )
 
 # In-flight backpressure: a cycle backs off when running+queued already
@@ -606,6 +618,7 @@ def changed_loc(
     token: str,
     project: str,
     number: int,
+    changed: dict[str, JsonObject] | None = None,
 ) -> tuple[int | None, int | None]:
     """Best-effort ``(files_changed, lines_changed)`` for anonymous analytics.
 
@@ -614,10 +627,11 @@ def changed_loc(
     — analytics must never break a review, and an unknown count must not
     masquerade as zero.
     """
-    try:
-        changed = provider.changed_lines(cfg, token, project, number)
-    except Exception:
-        return None, None
+    if changed is None:
+        try:
+            changed = provider.changed_lines(cfg, token, project, number)
+        except Exception:
+            return None, None
     files = len(changed)
     lines = sum(len(entry.get("new_lines") or ()) for entry in changed.values())
     return files, lines
@@ -708,6 +722,7 @@ def capture_provenance(
     run_id: str,
     provider: ScmProvider,
     telemetry: ReviewTelemetry | None = None,
+    changed: dict[str, JsonObject] | None = None,
 ) -> tuple[ProvenanceSignal, str] | None:
     """Capture provenance + evaluate governance policy (opt-in, off by default).
 
@@ -730,7 +745,8 @@ def capture_provenance(
     try:
         commits = provider.list_commits(cfg, token, project, number)
         messages = [str(commit.get("message") or "") for commit in commits]
-        changed = provider.changed_lines(cfg, token, project, number)
+        if changed is None:
+            changed = provider.changed_lines(cfg, token, project, number)
         signal = compute_provenance(
             messages,
             changed.keys(),
@@ -810,37 +826,48 @@ def post_or_plan_findings(
     telemetry: ReviewTelemetry | None = None,
     provider: ScmProvider | None = None,
     repo: Path | None = None,
+    changed: dict[str, JsonObject] | None = None,
 ) -> tuple[int, int, int]:
-    """Parse, filter, and post (or plan) findings for one change.
+    """Compatibility facade for the dedicated finding posting pipeline."""
+    from bubo.finding_pipeline import FindingPipelineDeps
+    from bubo.finding_pipeline import post_or_plan_findings as run_pipeline
 
-    Provider-agnostic: change fetch, diff parsing, position mapping, and
-    posting all go through ``provider`` (defaulting to the one configured
-    in ``cfg``). Returns ``(posted, planned, skipped)``. Steps in order:
+    resolved_provider = provider or get_provider(cfg)
+    deps = FindingPipelineDeps(
+        extract_findings=lambda review: extract_findings(
+            review, max_findings=cfg.max_findings_per_merge_request
+        ),
+        prepare_findings=_prepare_findings_for_posting,
+        sha_for=sha_for,
+        fingerprint=finding_fingerprint,
+        finding_seen=finding_seen,
+        record_finding=record_finding,
+        emit_metric=emit_finding_metric,
+        log=log,
+        run_verification=run_verification,
+        position_file=_position_file,
+        position_line=_position_line,
+        comment_body=finding_comment_body,
+    )
+    return run_pipeline(
+        deps,
+        cfg=cfg,
+        token=token,
+        project=project,
+        mr=mr,
+        raw_review=raw_review,
+        run_id=run_id,
+        telemetry=telemetry,
+        provider=resolved_provider,
+        repo=repo,
+        changed=changed,
+    )
 
-    1. Parse the agent's raw stdout into structured findings.
-    2. Apply the operator policy filter (confidence threshold + kind
-       whitelist) BEFORE any API call — dropped findings emit a
-       ``finding_filtered`` log event with the reason.
-    3. Map each finding's line to a diff position. Findings whose file/line
-       isn't part of the change diff are recorded ``SKIPPED``.
-    4. **Opt-in verification (off by default):** for an in-diff,
-       non-duplicate survivor, run independent "is this real?" lenses; a
-       finding a majority refute is recorded ``REFUTED`` and dropped instead
-       of posted. Capped at ``cfg.verify_max_findings`` — findings past the
-       cap post unverified-but-logged, never silently suppressed.
-    5. In dry-run, record ``PLANNED``; otherwise post and record
-       ``POSTED`` (or ``PENDING_EXTERNAL_ID`` if the post returned no ID).
 
-    ``mr`` is the change payload (kept named ``mr`` for call-site
-    compatibility). ``repo`` is the checked-out worktree path the verifier
-    subprocess runs in (``cwd``); only used when verification is enabled.
-    """
-    provider = provider or get_provider(cfg)
-    number = provider.change_number(mr)
-    sha = sha_for(mr)
-    findings = extract_findings(raw_review, max_findings=cfg.max_findings_per_merge_request)
-    if not findings:
-        return (0, 0, 0)
+def _prepare_findings_for_posting(
+    cfg: ReviewConfig, project: str, number: int, findings: list[JsonObject]
+) -> list[JsonObject]:
+    """Normalize and filter findings before the provider diff calls."""
     # Map each free-form `category` onto the canonical taxonomy, stored in a
     # separate `category_canonical` field; the original label is preserved for
     # the body, fingerprint, and audit row. The surface-mode filter below reads
@@ -900,245 +927,81 @@ def post_or_plan_findings(
             category_canonical=finding.get("category_canonical"),
             type=finding.get("type"),
         )
-    if not findings:
-        return (0, 0, 0)
-    change = provider.get_change(cfg, token, project, number)
-    changed = provider.changed_lines(cfg, token, project, number)
-    posted = planned = skipped = 0
-    # Verification accounting (opt-in; counts logged at the end — no silent
-    # caps). ``verified_attempts`` is the count of findings the cap has let
-    # through to a verification pass so far.
-    verified_count = refuted_count = capped_count = verified_attempts = 0
-    for finding in findings:
-        fp = finding_fingerprint(project, number, sha, finding)
-        if finding_seen(project, number, sha, fp):
-            skipped += 1
-            continue
-        position = provider.build_position(change, changed, finding)
-        if not position:
-            record_finding(
-                project=project,
-                iid=number,
-                sha=sha,
-                fingerprint=fp,
-                finding=finding,
-                status=FindingStatus.SKIPPED,
-                run_id=run_id,
-            )
-            emit_finding_metric(
-                telemetry,
-                repo=project,
-                status=FindingStatus.SKIPPED,
-                finding=finding,
-                dry_run=cfg.dry_run,
-            )
-            log(
-                "finding_skipped",
-                project=project,
-                iid=number,
-                file=finding.get("file") or finding.get("path"),
-                line=finding.get("line") or finding.get("new_line"),
-                reason="line_not_in_diff",
-            )
-            skipped += 1
-            continue
-        # Opt-in verification (off by default): only reached for an in-diff,
-        # non-duplicate survivor we are otherwise about to post/plan. Runs N
-        # independent refute-it lenses and drops a finding a majority refute.
-        # Verdict columns default to None so a verify-off run records nothing.
-        verified_flag: bool | None = None
-        verify_votes_json: str | None = None
-        if cfg.verify_findings:
-            if verified_attempts >= cfg.verify_max_findings:
-                # Cap reached: post unverified-but-logged (never silently drop).
-                capped_count += 1
-                log(
-                    "finding_verify_capped",
-                    project=project,
-                    iid=number,
-                    file=_position_file(position),
-                    line=_position_line(position),
-                    cap=cfg.verify_max_findings,
-                )
-            else:
-                verified_attempts += 1
-                verdicts = run_verification(finding, repo, cfg)
-                outcome = decide(
-                    verdicts,
-                    min_votes=cfg.verify_min_votes,
-                    confidence_floor=cfg.verify_confidence_floor,
-                )
-                # Number of lenses that actually produced a verdict. A
-                # "not survives" result is only a genuine refutation when
-                # enough lenses *ran* to reach min_votes; otherwise the
-                # non-survival is an artifact of a verifier outage, not a
-                # refutation, so we must NOT drop the finding (partial-outage
-                # safety — mirrors the total-outage case below).
-                ran_count = sum(1 for verdict in verdicts if verdict.ok)
-                verify_votes_json = votes_summary(verdicts)
-                if outcome.survives:
-                    # A majority confirmed it (survives implies ran_count >=
-                    # min_votes) — post as verified.
-                    verified_flag = True
-                    verified_count += 1
-                    if telemetry is not None:
-                        telemetry.record_verification(repo=project, outcome="verified")
-                    log(
-                        "finding_verified",
-                        project=project,
-                        iid=number,
-                        file=_position_file(position),
-                        line=_position_line(position),
-                        votes=f"{outcome.real_votes}/{outcome.total}",
-                    )
-                elif ran_count >= cfg.verify_min_votes:
-                    # Enough lenses ran and a majority did NOT affirm — a
-                    # genuine refutation. Drop + record for audit.
-                    refuted_count += 1
-                    record_finding(
-                        project=project,
-                        iid=number,
-                        sha=sha,
-                        fingerprint=fp,
-                        finding=finding,
-                        status=FindingStatus.REFUTED,
-                        run_id=run_id,
-                        verified=False,
-                        verify_votes=verify_votes_json,
-                    )
-                    emit_finding_metric(
-                        telemetry,
-                        repo=project,
-                        status=FindingStatus.REFUTED,
-                        finding=finding,
-                        dry_run=cfg.dry_run,
-                    )
-                    if telemetry is not None:
-                        telemetry.record_verification(repo=project, outcome="refuted")
-                    log(
-                        "finding_refuted",
-                        project=project,
-                        iid=number,
-                        file=_position_file(position),
-                        line=_position_line(position),
-                        votes=f"{outcome.real_votes}/{outcome.total}",
-                        min_votes=cfg.verify_min_votes,
-                    )
-                    skipped += 1
-                    continue
-                else:
-                    # Too few lenses ran to decide (verifier outage, partial
-                    # or total): post unverified-but-logged, never dropped.
-                    capped_count += 1
-                    verify_votes_json = None
-                    log(
-                        "finding_verify_unavailable",
-                        project=project,
-                        iid=number,
-                        file=_position_file(position),
-                        line=_position_line(position),
-                        ran=ran_count,
-                        min_votes=cfg.verify_min_votes,
-                    )
-        # Posted body honors [review].tone; the DB/fingerprint stay canonical.
-        body = finding_comment_body(finding, cfg.tone)
-        if cfg.dry_run:
-            record_finding(
-                project=project,
-                iid=number,
-                sha=sha,
-                fingerprint=fp,
-                finding=finding,
-                status=FindingStatus.PLANNED,
-                run_id=run_id,
-                verified=verified_flag,
-                verify_votes=verify_votes_json,
-            )
-            emit_finding_metric(
-                telemetry,
-                repo=project,
-                status=FindingStatus.PLANNED,
-                finding=finding,
-                dry_run=True,
-            )
-            log(
-                "finding_planned",
-                project=project,
-                iid=number,
-                file=_position_file(position),
-                line=_position_line(position),
-            )
-            planned += 1
-        else:
-            comment_id = provider.post_inline_comment(cfg, token, project, number, body, position)
-            if not comment_id:
-                record_finding(
-                    project=project,
-                    iid=number,
-                    sha=sha,
-                    fingerprint=fp,
-                    finding=finding,
-                    status=FindingStatus.PENDING_EXTERNAL_ID,
-                    run_id=run_id,
-                    verified=verified_flag,
-                    verify_votes=verify_votes_json,
-                )
-                emit_finding_metric(
-                    telemetry,
-                    repo=project,
-                    status=FindingStatus.PENDING_EXTERNAL_ID,
-                    finding=finding,
-                    dry_run=False,
-                )
-                log(
-                    "finding_pending_external_id",
-                    project=project,
-                    iid=number,
-                    file=_position_file(position),
-                    line=_position_line(position),
-                )
-                skipped += 1
-                continue
-            record_finding(
-                project=project,
-                iid=number,
-                sha=sha,
-                fingerprint=fp,
-                finding=finding,
-                status=FindingStatus.POSTED,
-                discussion_id=comment_id,
-                run_id=run_id,
-                verified=verified_flag,
-                verify_votes=verify_votes_json,
-            )
-            emit_finding_metric(
-                telemetry,
-                repo=project,
-                status=FindingStatus.POSTED,
-                finding=finding,
-                dry_run=False,
-            )
-            log(
-                "finding_posted",
-                project=project,
-                iid=number,
-                file=_position_file(position),
-                line=_position_line(position),
-                discussion_id=comment_id,
-            )
-            posted += 1
-    if cfg.verify_findings:
-        log(
-            "verification_summary",
-            project=project,
-            iid=number,
-            verified=verified_count,
-            refuted=refuted_count,
-            capped=capped_count,
-            max_findings=cfg.verify_max_findings,
-            lenses=len(cfg.verify_lenses),
+    return findings
+
+
+def _finalize_worker(
+    *,
+    cfg: ReviewConfig | None,
+    telemetry: ReviewTelemetry | None,
+    run_id: str,
+    project: str,
+    model: str,
+    status: ReviewStatus,
+    started: float,
+    tokens: TokenUsage,
+    cost_usd: float,
+    lines_reviewed: int,
+    files_changed: int | None,
+    lines_changed: int | None,
+    identity: analytics.AnalyticsIdentity | None,
+    error: str | None,
+    error_type: str | None,
+    posted: int,
+    planned: int,
+    skipped: int,
+) -> None:
+    """Write the shared terminal DB, telemetry, and analytics state."""
+    duration_seconds = round(time.monotonic() - started, 2)
+    if cfg is not None:
+        record_review_run_finish(
+            run_id=run_id,
+            status=status,
+            tokens=tokens,
+            cost_usd=cost_usd,
+            error=error,
+            lines_reviewed=lines_reviewed,
         )
-    return (posted, planned, skipped)
+    if telemetry is not None:
+        if error is not None:
+            telemetry.record_failure(
+                repo=project, error_type=error_type or "UnknownError", operation="review"
+            )
+        telemetry.record_review_done(
+            repo=project,
+            model=model,
+            status=status,
+            review_mode=ReviewMode.DIFF,
+            dry_run=cfg.dry_run if cfg is not None else True,
+            duration_seconds=duration_seconds,
+            tokens=tokens,
+            cost_usd=cost_usd,
+            tone=cfg.tone if cfg is not None else None,
+            lines_reviewed=lines_reviewed,
+        )
+    if cfg is not None:
+        analytics.record_review_completed(
+            cfg.analytics_config,
+            scm_provider=cfg.provider,
+            agent=analytics.agent_label(cfg.reviewer_command),
+            model=model,
+            status=str(status),
+            dry_run=cfg.dry_run,
+            review_mode=str(ReviewMode.DIFF),
+            tone=cfg.tone,
+            duration_seconds=duration_seconds,
+            tokens_input=tokens.input,
+            tokens_output=tokens.output,
+            tokens_cached=tokens.cached,
+            tokens_total=tokens.total,
+            cost_usd=cost_usd,
+            findings_posted=posted,
+            findings_planned=planned,
+            findings_skipped=skipped,
+            files_changed=files_changed,
+            lines_changed=lines_changed,
+            identity=identity,
+        )
 
 
 def worker(job: Path) -> int:
@@ -1168,6 +1031,7 @@ def worker(job: Path) -> int:
     repo: Path | None = None
     files_changed: int | None = None
     lines_changed: int | None = None
+    changed: dict[str, JsonObject] | None = None
     identity: analytics.AnalyticsIdentity | None = None
     try:
         cfg = read_config()
@@ -1205,21 +1069,24 @@ def worker(job: Path) -> int:
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
             with telemetry.span("llm_review.checkout", repo=project, sha=sha):
                 provider.checkout(cfg, project, mr, repo)
+            changed = native_changed_lines(mr, repo)
+            if changed is None:
+                try:
+                    changed = provider.changed_lines(cfg, token, project, iid)
+                except Exception as exc:
+                    log("lines_reviewed_failed", project=project, iid=iid, error=type(exc).__name__)
             # Lines of code reviewed: added lines across the change's diff,
             # captured for EVERY review (independent of whether findings exist,
             # so a clean review still records its size). Soft-fail — a metric
             # must never break a review (mirrors capture_provenance).
-            try:
-                lines_reviewed = count_added_lines(
-                    provider.changed_lines(cfg, token, project, iid)
-                )
-            except Exception as exc:
-                log("lines_reviewed_failed", project=project, iid=iid, error=type(exc).__name__)
-                lines_reviewed = 0
+            if changed is not None:
+                lines_reviewed = count_added_lines(changed)
             # Anonymous LoC for analytics — computed ONLY when analytics is
             # enabled, so an opted-out user pays no extra API round-trip.
             if analytics.analytics_enabled(cfg.analytics_config):
-                files_changed, lines_changed = changed_loc(provider, cfg, token, project, iid)
+                files_changed, lines_changed = changed_loc(
+                    provider, cfg, token, project, iid, changed
+                )
             # Opt-in governance (off by default). Captures provenance and
             # evaluates the policy gate; returns a heightened-scrutiny directive
             # to inject into the prompt when the change escalates. No-op + no API
@@ -1234,6 +1101,7 @@ def worker(job: Path) -> int:
                     run_id=run_id,
                     provider=provider,
                     telemetry=telemetry,
+                    changed=changed,
                 )
             extra_directive = governance[1] if governance else ""
             env = reviewer_env(os.environ, cfg)
@@ -1282,6 +1150,7 @@ def worker(job: Path) -> int:
                     telemetry=telemetry,
                     provider=provider,
                     repo=repo,
+                    changed=changed,
                 )
                 telemetry.set_span_attrs(
                     post_span,
@@ -1295,13 +1164,29 @@ def worker(job: Path) -> int:
                 else ReviewStatus.SUCCESS
             )
             if status == ReviewStatus.NO_FINDINGS:
-                no_findings_verdict, no_findings_detail = post_no_findings_comment(
-                    cfg=cfg,
-                    token=token,
-                    project=project,
-                    number=iid,
-                    provider=provider,
+                # This is another real provider write, so it needs the same
+                # last-moment head check as inline findings.
+                should_post_no_findings = (
+                    cfg.post_no_findings_comment
+                    and bool(cfg.no_findings_comment_body.strip())
+                    and not cfg.dry_run
                 )
+                current = (
+                    provider.get_change(cfg, token, project, iid)
+                    if should_post_no_findings
+                    else None
+                )
+                current_sha = sha_for(current) if current is not None else sha
+                if current_sha and current_sha != sha:
+                    no_findings_verdict, no_findings_detail = "skipped_superseded", current_sha
+                else:
+                    no_findings_verdict, no_findings_detail = post_no_findings_comment(
+                        cfg=cfg,
+                        token=token,
+                        project=project,
+                        number=iid,
+                        provider=provider,
+                    )
                 log(
                     "no_findings_comment",
                     project=project,
@@ -1312,47 +1197,25 @@ def worker(job: Path) -> int:
                     run_id=run_id,
                 )
             record(project, iid, sha, status, str(report))
-            record_review_run_finish(
+            _finalize_worker(
+                cfg=cfg,
+                telemetry=telemetry,
                 run_id=run_id,
-                status=status,
-                tokens=tokens,
-                cost_usd=cost_usd,
-                error=None,
-                lines_reviewed=lines_reviewed,
-            )
-            telemetry.record_review_done(
-                repo=project,
+                project=project,
                 model=model,
                 status=status,
-                review_mode=ReviewMode.DIFF,
-                dry_run=cfg.dry_run,
-                duration_seconds=round(time.monotonic() - started, 2),
+                started=started,
                 tokens=tokens,
                 cost_usd=cost_usd,
-                tone=cfg.tone,
                 lines_reviewed=lines_reviewed,
-            )
-            analytics.record_review_completed(
-                cfg.analytics_config,
-                scm_provider=cfg.provider,
-                agent=analytics.agent_label(cfg.reviewer_command),
-                model=model,
-                status=str(status),
-                dry_run=cfg.dry_run,
-                review_mode=str(ReviewMode.DIFF),
-                tone=cfg.tone,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens_input=tokens.input,
-                tokens_output=tokens.output,
-                tokens_cached=tokens.cached,
-                tokens_total=tokens.total,
-                cost_usd=cost_usd,
-                findings_posted=posted,
-                findings_planned=planned,
-                findings_skipped=skipped,
+                posted=posted,
+                planned=planned,
+                skipped=skipped,
                 files_changed=files_changed,
                 lines_changed=lines_changed,
                 identity=identity,
+                error=None,
+                error_type=None,
             )
             log(
                 "review_done",
@@ -1373,6 +1236,7 @@ def worker(job: Path) -> int:
             return 0
     except Exception as exc:
         error = redact_secrets(str(exc))
+        error_type = type(exc).__name__
         # Preserve the agent transcript if we already wrote one; put the
         # error in a sibling `.error` file so debug info survives a
         # failure mid-write.
@@ -1381,54 +1245,26 @@ def worker(job: Path) -> int:
         else:
             report.with_suffix(report.suffix + ".error").write_text(error, encoding="utf-8")
         record(project, iid, sha, ReviewStatus.FAILED, str(report), error)
-        if cfg is not None:
-            record_review_run_finish(
-                run_id=run_id,
-                status=ReviewStatus.FAILED,
-                tokens=tokens,
-                cost_usd=cost_usd,
-                error=error,
-                lines_reviewed=lines_reviewed,
-            )
-        if telemetry is not None:
-            telemetry.record_failure(
-                repo=project, error_type=type(exc).__name__, operation="review"
-            )
-            telemetry.record_review_done(
-                repo=project,
-                model=model,
-                status=ReviewStatus.FAILED,
-                review_mode=ReviewMode.DIFF,
-                dry_run=cfg.dry_run if cfg is not None else True,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens=tokens,
-                cost_usd=cost_usd,
-                tone=cfg.tone if cfg is not None else None,
-                lines_reviewed=lines_reviewed,
-            )
-        if cfg is not None:
-            analytics.record_review_completed(
-                cfg.analytics_config,
-                scm_provider=cfg.provider,
-                agent=analytics.agent_label(cfg.reviewer_command),
-                model=model,
-                status=str(ReviewStatus.FAILED),
-                dry_run=cfg.dry_run,
-                review_mode=str(ReviewMode.DIFF),
-                tone=cfg.tone,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens_input=tokens.input,
-                tokens_output=tokens.output,
-                tokens_cached=tokens.cached,
-                tokens_total=tokens.total,
-                cost_usd=cost_usd,
-                findings_posted=0,
-                findings_planned=0,
-                findings_skipped=0,
-                files_changed=files_changed,
-                lines_changed=lines_changed,
-                identity=identity,
-            )
+        _finalize_worker(
+            cfg=cfg,
+            telemetry=telemetry,
+            run_id=run_id,
+            project=project,
+            model=model,
+            status=ReviewStatus.FAILED,
+            started=started,
+            tokens=tokens,
+            cost_usd=cost_usd,
+            lines_reviewed=lines_reviewed,
+            files_changed=files_changed,
+            lines_changed=lines_changed,
+            identity=identity,
+            error=error,
+            error_type=error_type,
+            posted=0,
+            planned=0,
+            skipped=0,
+        )
         log(
             "review_failed",
             project=project,
@@ -1466,30 +1302,25 @@ def check_health() -> int:
     except ConfigError as exc:
         log("health_check", verdict="config_error", error=str(exc))
         return 2
-    threshold_seconds = cfg.timeout_seconds * 3
-    latest = latest_reviewed_row()
-    if latest is None:
+    health = review_health(cfg.timeout_seconds)
+    if health["status"] == "empty":
         log(
             "health_check",
             verdict="empty",
-            threshold_seconds=threshold_seconds,
-            note="no rows yet — newly installed or never run",
+            threshold_seconds=health["threshold_seconds"],
+            note=health["message"],
         )
         # Empty state is not failure on a fresh install; cron will create
         # rows on the first cycle.
         return 0
-    status, updated_at = latest
-    from bubo.db import status_age_seconds as _status_age_seconds
-
-    age = _status_age_seconds(updated_at)
-    verdict = "ok" if age <= threshold_seconds else "stale"
+    verdict = "ok" if health["fresh"] else "stale"
     log(
         "health_check",
         verdict=verdict,
-        last_status=status,
-        last_updated_at=str(updated_at),
-        age_seconds=age,
-        threshold_seconds=threshold_seconds,
+        last_status=health["last_status"],
+        last_updated_at=health["last_updated_at"],
+        age_seconds=health["age_seconds"],
+        threshold_seconds=health["threshold_seconds"],
     )
     return 0 if verdict == "ok" else 1
 
@@ -1656,106 +1487,34 @@ def backfill_gitlab_bot_comments(updated_after: str, limit: int = 500) -> int:
                 note = _first_bot_note(discussion, bot_username)
                 if note is None or str(note.get("created_at") or "") < updated_after:
                     continue
-                discussion_id = str(discussion.get("id") or "")
-                existing = _existing_finding_for_discussion(project, iid, discussion_id)
                 outcome = gitlab.classify_discussion_outcome(
                     discussion, bot_username=bot_username, mr_state=str(mr.get("state") or "")
                 )
-                if existing is not None:
-                    record_finding_outcome(
-                        project=project,
-                        iid=iid,
-                        sha=existing["sha"],
-                        fingerprint=existing["fingerprint"],
-                        discussion_id=discussion_id,
-                        outcome=outcome,
-                    )
-                    continue
                 position = note.get("position") or {}
-                finding = _finding_from_bot_note(note, position)
-                sha = str(position.get("head_sha") or provider.head_sha(mr))
-                fingerprint = stable_hash(
-                    {
-                        "project": project,
-                        "iid": iid,
-                        "sha": sha,
-                        "discussion_id": discussion.get("id"),
-                        "note_id": note.get("id"),
-                    }
-                )
-                _db_record_finding(
-                    project=project,
-                    iid=iid,
-                    sha=sha,
-                    fingerprint=fingerprint,
-                    finding=finding,
-                    status=FindingStatus.POSTED,
-                    body=str(note.get("body") or ""),
-                    discussion_id=discussion_id,
+                comment = _BackfilledComment(
+                    discussion_id=str(discussion.get("id") or ""),
                     note_id=str(note.get("id") or ""),
+                    sha=str(position.get("head_sha") or provider.head_sha(mr)),
+                    body=str(note.get("body") or ""),
+                    file=str(position.get("new_path") or position.get("old_path") or ""),
+                    line=position.get("new_line") or position.get("old_line"),
                 )
-                record_finding_outcome(
-                    project=project,
-                    iid=iid,
-                    sha=sha,
-                    fingerprint=fingerprint,
-                    discussion_id=discussion_id,
-                    outcome=outcome,
-                )
-                imported += 1
+                imported += _record_backfilled_comment(project, iid, comment, outcome)
     log("backfill_done", imported=imported)
     return imported
 
 
-def _existing_finding_for_discussion(
-    project: str, iid: int, discussion_id: str
-) -> JsonObject | None:
-    with connect_db() as db:
-        row = db.execute(
-            """
-            select sha,fingerprint from review_findings
-            where project=? and iid=? and discussion_id=? and status=?
-            order by case when run_id is null then 1 else 0 end
-            limit 1
-            """,
-            (project, iid, discussion_id, FindingStatus.POSTED),
-        ).fetchone()
-    if row is None:
-        return None
-    return {"sha": str(row[0]), "fingerprint": str(row[1])}
-
-
-def _first_bot_note(discussion: JsonObject, bot_username: str) -> JsonObject | None:
-    for item in discussion.get("notes") or []:
-        if not isinstance(item, dict):
-            continue
-        note = cast(JsonObject, item)
-        if ((note.get("author") or {}).get("username") or "") == bot_username:
-            return note
-    return None
-
-
 def _finding_from_bot_note(note: JsonObject, position: JsonObject) -> JsonObject:
-    body = str(note.get("body") or "")
-    first_line = body.splitlines()[0] if body else ""
-    match = _NOTE_HEADER.match(first_line)
-    confidence_match = _NOTE_CONFIDENCE.search(body)
-    finding: JsonObject = {
-        "file": position.get("new_path") or position.get("old_path") or "",
-        "line": position.get("new_line") or position.get("old_line"),
-        "body": body,
-        "confidence": float(confidence_match.group(1)) if confidence_match else None,
-    }
-    if match:
-        finding.update(
-            {
-                "type": match.group(1).lower(),
-                "severity": match.group(2).lower(),
-                "category": match.group(3).lower(),
-                "title": match.group(4).strip(),
-            }
+    return _finding_from_backfilled_comment(
+        _BackfilledComment(
+            discussion_id="",
+            note_id="",
+            sha="",
+            body=str(note.get("body") or ""),
+            file=str(position.get("new_path") or position.get("old_path") or ""),
+            line=position.get("new_line") or position.get("old_line"),
         )
-    return finding
+    )
 
 
 def backfill_github_bot_comments(updated_after: str, limit: int = 500) -> int:
@@ -1797,48 +1556,15 @@ def backfill_github_bot_comments(updated_after: str, limit: int = 500) -> int:
                 if not discussion_id:
                     continue
                 outcome = github.classify_graphql_thread_outcome(thread, bot_username, pr_state)
-                existing = _existing_finding_for_discussion(project, number, discussion_id)
-                if existing is not None:
-                    record_finding_outcome(
-                        project=project,
-                        iid=number,
-                        sha=existing["sha"],
-                        fingerprint=existing["fingerprint"],
-                        discussion_id=discussion_id,
-                        outcome=outcome,
-                    )
-                    continue
-                node_id = str(root.get("node_id") or "")
-                finding = _finding_from_github_comment(root)
-                fingerprint = stable_hash(
-                    {
-                        "project": project,
-                        "iid": number,
-                        "sha": head_sha,
-                        "discussion_id": discussion_id,
-                        "note_id": node_id,
-                    }
-                )
-                _db_record_finding(
-                    project=project,
-                    iid=number,
+                comment = _BackfilledComment(
+                    discussion_id=discussion_id,
+                    note_id=str(root.get("node_id") or ""),
                     sha=head_sha,
-                    fingerprint=fingerprint,
-                    finding=finding,
-                    status=FindingStatus.POSTED,
                     body=str(root.get("body") or ""),
-                    discussion_id=discussion_id,
-                    note_id=node_id,
+                    file=str(root.get("path") or ""),
+                    line=root.get("line"),
                 )
-                record_finding_outcome(
-                    project=project,
-                    iid=number,
-                    sha=head_sha,
-                    fingerprint=fingerprint,
-                    discussion_id=discussion_id,
-                    outcome=outcome,
-                )
-                imported += 1
+                imported += _record_backfilled_comment(project, number, comment, outcome)
     log("backfill_done", imported=imported)
     return imported
 
@@ -1849,26 +1575,16 @@ def _finding_from_github_comment(comment: JsonObject) -> JsonObject:
     Mirrors :func:`_finding_from_bot_note` for GitHub's review-comment shape
     (``path``/``line`` instead of GitLab's ``position``).
     """
-    body = str(comment.get("body") or "")
-    first_line = body.splitlines()[0] if body else ""
-    match = _NOTE_HEADER.match(first_line)
-    confidence_match = _NOTE_CONFIDENCE.search(body)
-    finding: JsonObject = {
-        "file": comment.get("path") or "",
-        "line": comment.get("line"),
-        "body": body,
-        "confidence": float(confidence_match.group(1)) if confidence_match else None,
-    }
-    if match:
-        finding.update(
-            {
-                "type": match.group(1).lower(),
-                "severity": match.group(2).lower(),
-                "category": match.group(3).lower(),
-                "title": match.group(4).strip(),
-            }
+    return _finding_from_backfilled_comment(
+        _BackfilledComment(
+            discussion_id="",
+            note_id="",
+            sha="",
+            body=str(comment.get("body") or ""),
+            file=str(comment.get("path") or ""),
+            line=comment.get("line"),
         )
-    return finding
+    )
 
 
 # ---------------------------------------------------------------------------

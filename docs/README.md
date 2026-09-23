@@ -1,23 +1,22 @@
-# Nextra Docs Template 
+# Bubo documentation
 
-This is a template for creating documentation with [Nextra](https://nextra.site).
+The documentation site is built with Nextra and published to GitHub Pages by
+the repository's `.github/workflows/deploy-docs.yml` workflow.
 
-[**Live Demo →**](https://nextra-docs-template.vercel.app)
+## Local development
 
-[![](.github/screenshot.png)](https://nextra-docs-template.vercel.app)
+From this directory, install the lockfile-pinned dependencies and run the site:
 
-## Quick Start
+```sh
+npm ci
+npm run dev
+```
 
-Click the button to clone this repository and deploy it on Vercel:
+Visit <http://localhost:3000>. Run `npm run build` to create the static site
+in `out/`, matching the deployment workflow.
+# Operator UI audit detail
 
-[![](https://vercel.com/button)](https://vercel.com/new/clone?s=https%3A%2F%2Fgithub.com%2Fshuding%2Fnextra-docs-template&showOptionalTeamCreation=false)
-
-## Local Development
-
-First, run `pnpm i` to install the dependencies.
-
-Then, run `pnpm dev` to start the development server and visit localhost:3000.
-
-## License
-
-This project is licensed under the MIT License.
+`bubo ui-export` keeps report aggregates over the full selected window. To keep
+the static export responsive, each report includes only the newest 1,000 audit
+rows and exposes `audit_total` plus `audit_truncated`; the Reports view shows
+this disclosure when detail is truncated.

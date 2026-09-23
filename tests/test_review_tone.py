@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from bubo import db, paths
+from bubo import db
 from bubo.config_values import ConfigError
 from bubo.findings import finding_body, finding_comment_body, finding_fingerprint
 from bubo.review_config import VALID_TONES, ReviewConfig, review_config_from_dict
@@ -72,9 +72,7 @@ def test_terse_omits_voice_directive() -> None:
 
 def test_each_mood_injects_its_voice_and_keeps_the_cap() -> None:
     for tone in ("collaborative", "socratic", "formal", "casual"):
-        contract = build_review_contract(
-            ReviewConfig(tone=tone, max_findings_per_merge_request=8)
-        )
+        contract = build_review_contract(ReviewConfig(tone=tone, max_findings_per_merge_request=8))
         assert VOICE_SENTINEL in contract
         assert "at most 8 findings" in contract  # cap survives the voice append
 
@@ -134,50 +132,38 @@ def test_fingerprint_is_mood_invariant() -> None:
 # --- per-run tone tracking (Gap D: measure mood effectiveness) ----------
 
 
-def test_run_start_persists_tone_into_audit_trail(tmp_path: Path) -> None:
+def test_run_start_persists_tone_into_audit_trail(initialized_db: Path) -> None:
     # The active [review].tone is recorded on the review_runs row so accept/
     # dispute rates can later be A/B'd by tone. It surfaces in the audit trail.
-    original = paths.DB
-    try:
-        paths.DB = tmp_path / "reviewer.sqlite"
-        db.init_db()
-        run_id = db.review_run_id("o/r", 5, "deadbeef")
-        db.record_review_run_start(
-            run_id=run_id,
-            project="o/r",
-            iid=5,
-            sha="deadbeef",
-            model="gpt-5.5",
-            prompt_version="v1",
-            review_mode="diff",
-            dry_run=True,
-            tone="collaborative",
-        )
-        rows = db.audit_rows(since_hours=720, project="o/r")
-        assert len(rows) == 1
-        assert rows[0]["tone"] == "collaborative"
-    finally:
-        paths.DB = original
+    run_id = db.review_run_id("o/r", 5, "deadbeef")
+    db.record_review_run_start(
+        run_id=run_id,
+        project="o/r",
+        iid=5,
+        sha="deadbeef",
+        model="gpt-5.5",
+        prompt_version="v1",
+        review_mode="diff",
+        dry_run=True,
+        tone="collaborative",
+    )
+    rows = db.audit_rows(since_hours=720, project="o/r")
+    assert len(rows) == 1
+    assert rows[0]["tone"] == "collaborative"
 
 
-def test_run_start_tone_defaults_to_terse(tmp_path: Path) -> None:
+def test_run_start_tone_defaults_to_terse(initialized_db: Path) -> None:
     # A caller that omits tone (and legacy rows) read back as the terse default.
-    original = paths.DB
-    try:
-        paths.DB = tmp_path / "reviewer.sqlite"
-        db.init_db()
-        run_id = db.review_run_id("o/r", 6, "cafe")
-        db.record_review_run_start(
-            run_id=run_id,
-            project="o/r",
-            iid=6,
-            sha="cafe",
-            model="m",
-            prompt_version="v",
-            review_mode="diff",
-            dry_run=True,
-        )
-        rows = db.audit_rows(since_hours=720, project="o/r")
-        assert rows[0]["tone"] == "terse"
-    finally:
-        paths.DB = original
+    run_id = db.review_run_id("o/r", 6, "cafe")
+    db.record_review_run_start(
+        run_id=run_id,
+        project="o/r",
+        iid=6,
+        sha="cafe",
+        model="m",
+        prompt_version="v",
+        review_mode="diff",
+        dry_run=True,
+    )
+    rows = db.audit_rows(since_hours=720, project="o/r")
+    assert rows[0]["tone"] == "terse"

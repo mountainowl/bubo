@@ -27,14 +27,6 @@ dev = [
   "pytest>=9.0.1",
   "ruff>=0.15.17",
 ]
-# Documentation site published to GitHub Pages from docs/ via
-# .github/workflows/deploy-docs.yml. Pinned loosely — the docs are
-# rendered, not type-checked, so freshness > reproducibility here.
-docs = [
-  "mkdocs>=1.6",
-  "mkdocs-material>=9.5",
-  "pymdown-extensions>=10.7",
-]
 
 [tool.uv]
 package = true
@@ -128,6 +120,16 @@ packages = ["src/bubo"]
 # Hatchling's sdist defaults already pick up src/, pyproject.toml,
 # README.md, LICENSE, CHANGELOG.md — we explicitly include the rest.
 [tool.hatch.build.targets.sdist]
+# The docs source is shipped, but local Nextra dependencies and build caches
+# must never leak into a source distribution.
+exclude = [
+  "docs/node_modules/**",
+  "docs/.next/**",
+  "docs/out/**",
+  "docs/.turbo/**",
+  "docs/.cache/**",
+  "docs/.vercel/**",
+]
 include = [
   "src/",
   "bin/",

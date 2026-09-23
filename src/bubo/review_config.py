@@ -154,8 +154,6 @@ class ReviewConfig:
         to :data:`DEFAULT_REVIEWER_COMMAND`, a ``codex exec`` invocation).
     model:
         Model identifier used for cost-attribution metric labels.
-    post_summary:
-        Reserved for a future "post one summary comment per MR" path.
     telemetry_config:
         Parsed :class:`TelemetryConfig` block.
     analytics_config:
@@ -310,7 +308,6 @@ class ReviewConfig:
     model: str | None = None
     model_effort: str | None = None
     llm_base_url: str | None = None
-    post_summary: bool = False
     telemetry_config: TelemetryConfig = field(default_factory=TelemetryConfig)
     analytics_config: AnalyticsConfig = field(default_factory=AnalyticsConfig)
     governance_config: GovernanceConfig = field(default_factory=GovernanceConfig)
