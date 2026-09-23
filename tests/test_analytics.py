@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from bubo import analytics
+from bubo import analytics, poller
 from bubo.analytics_config import AnalyticsConfig
+from bubo.review_config import ReviewConfig
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +17,7 @@ def _reset_analytics_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(analytics, "_logger", None)
     monkeypatch.setattr(analytics, "_logger_failed", False)
     monkeypatch.setattr(analytics, "_install_id", None)
+    monkeypatch.setattr(analytics, "_identity_secret", None)
     monkeypatch.delenv("BUBO_ANALYTICS", raising=False)
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
 
@@ -146,6 +148,51 @@ def test_install_id_is_stable_and_persisted(
 def test_install_id_falls_back_when_unwritable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(analytics.paths, "DB", Path("/proc/nonexistent/reviewer.sqlite"))
     assert len(analytics.install_id()) == 32  # ephemeral, no crash
+
+
+def test_scm_identity_is_stable_and_provider_separated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
+    github = analytics.scm_identity("github", 42)
+    assert github is not None
+    assert github == analytics.scm_identity("github", 42)
+    assert github != analytics.scm_identity("gitlab", 42)
+    assert "42" not in github.distinct_id
+    assert len((tmp_path / "state" / "analytics_identity_secret").read_bytes()) == 32
+
+    monkeypatch.setattr(analytics, "_identity_secret", None)
+    assert github == analytics.scm_identity("github", 42)
+
+
+@pytest.mark.parametrize("subject", [None, True, 0, -1, "42"])
+def test_scm_identity_rejects_malformed_subject(subject: object) -> None:
+    assert analytics.scm_identity("github", subject) is None
+
+
+def test_poller_identity_resolution_is_best_effort_and_calls_provider_once() -> None:
+    class Provider:
+        name = "github"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def authenticated_subject(self, cfg: object, token: str) -> int:
+            self.calls += 1
+            return 42
+
+    provider = Provider()
+    identity = poller.analytics_identity(ReviewConfig(provider="github"), provider, "token")  # type: ignore[arg-type]
+    assert identity is not None
+    assert provider.calls == 1
+
+    class BrokenProvider:
+        name = "github"
+
+        def authenticated_subject(self, cfg: object, token: str) -> int:
+            raise RuntimeError("unavailable")
+
+    assert poller.analytics_identity(ReviewConfig(provider="github"), BrokenProvider(), "token") is None  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +351,7 @@ def test_resource_ignores_otel_env_attributes(monkeypatch: pytest.MonkeyPatch) -
     assert "deployment.environment" not in attrs
 
 
-def test_distinct_id_equals_install_id(
+def test_install_identity_is_used_when_scm_identity_is_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
@@ -314,6 +361,51 @@ def test_distinct_id_equals_install_id(
     _, attrs = fake.calls[0]
     assert attrs["distinct_id"] == attrs["install_id"]
     assert attrs["distinct_id"] == analytics.install_id()
+    assert attrs["identity_source"] == "install"
+
+
+def test_scm_identity_threads_to_each_analytics_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
+    fake = _FakeLogger()
+    monkeypatch.setattr(analytics, "_get_logger", lambda cfg: fake)
+    identity = analytics.scm_identity("gitlab", 123)
+    assert identity is not None
+
+    analytics.record_session_start(
+        AnalyticsConfig(), scm_provider="gitlab", projects_count=1, identity=identity
+    )
+    analytics.record_finding_outcome(
+        AnalyticsConfig(), scm_provider="gitlab", outcome="resolved", identity=identity
+    )
+    analytics.record_review_completed(
+        AnalyticsConfig(),
+        scm_provider="gitlab",
+        agent="codex",
+        model="gpt-5.5",
+        status="success",
+        dry_run=False,
+        review_mode="diff",
+        tone="terse",
+        duration_seconds=1,
+        tokens_input=1,
+        tokens_output=1,
+        tokens_cached=0,
+        tokens_total=2,
+        cost_usd=0,
+        findings_posted=0,
+        findings_planned=0,
+        findings_skipped=0,
+        files_changed=1,
+        lines_changed=1,
+        identity=identity,
+    )
+
+    assert [attrs["distinct_id"] for _, attrs in fake.calls] == [identity.distinct_id] * 3
+    assert all(attrs["identity_source"] == "scm" for _, attrs in fake.calls)
+    assert all("subject_id" not in attrs for _, attrs in fake.calls)
+    assert all("123" not in attrs.values() for _, attrs in fake.calls)
 
 
 def test_build_pipeline_uses_no_stdlib_logging() -> None:

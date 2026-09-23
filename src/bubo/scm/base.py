@@ -213,6 +213,10 @@ class ScmProvider(Protocol):
         """Return the bot account username (for outcome-sync attribution)."""
         ...
 
+    def authenticated_subject(self, cfg: ReviewConfig, token: str) -> int | None:
+        """Return the authenticated numeric SCM subject for analytics, if valid."""
+        ...
+
     def list_open_changes(self, cfg: ReviewConfig, project: str, token: str) -> list[JsonObject]:
         """List open MRs / PRs for ``project``."""
         ...

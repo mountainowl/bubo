@@ -22,17 +22,23 @@ Design — privacy is the whole point, so it is enforced structurally:
 * **Best-effort, never fatal.** Every public function swallows all
   exceptions. Analytics must never slow, block, or break a review. The OTLP
   exporter uses a short timeout and a background batch processor.
-* **Anonymous, not identified.** A random install id (see :func:`install_id`)
-  lets us count distinct installs without identifying anyone; it is a UUID
-  with no link to user, host, or repo.
+* **Pseudonymous, not identified.** A random install id (see
+  :func:`install_id`) remains attached to every event. When available, the
+  analytics actor is an HMAC of the authenticated SCM account id, scoped by
+  provider and keyed by a local random secret; no raw SCM identity leaves the
+  machine.
 """
 
 from __future__ import annotations
 
 import atexit
+import hashlib
+import hmac
 import os
 import platform
 import uuid
+from contextlib import suppress
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -40,7 +46,7 @@ from bubo import paths
 from bubo.analytics_config import AnalyticsConfig
 
 # Bump when the event field set changes in a way PostHog dashboards care about.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Every key that is permitted to leave the machine. Default-deny: anything not
 # here is dropped by `_clean`. Keep this list to NUMBERS and low-cardinality
@@ -52,6 +58,7 @@ _ALLOWED_ATTRS = frozenset(
         # install context (anonymous)
         "distinct_id",
         "install_id",
+        "identity_source",
         "bubo_version",
         "python_version",
         "os",
@@ -110,6 +117,15 @@ _otlp_provider: Any = None
 _logger: Any = None
 _logger_failed: bool = False
 _install_id: str | None = None
+_identity_secret: bytes | None = None
+
+
+@dataclass(frozen=True)
+class AnalyticsIdentity:
+    """A pseudonymous analytics actor derived from an SCM account id."""
+
+    distinct_id: str
+    source: str = "scm"
 
 
 def _truthy(value: str) -> bool:
@@ -161,6 +177,54 @@ def install_id() -> str:
     return _install_id
 
 
+def _identity_secret_value() -> bytes:
+    """Return the per-install HMAC secret, creating it if necessary.
+
+    This secret never leaves the machine. As with :func:`install_id`, a
+    read-only state directory degrades to a process-local value rather than
+    affecting review execution.
+    """
+    global _identity_secret
+    if _identity_secret is not None:
+        return _identity_secret
+    path = paths.DB.parent / "analytics_identity_secret"
+    try:
+        if path.exists():
+            existing = path.read_bytes()
+            if len(existing) == 32:
+                _identity_secret = existing
+                return _identity_secret
+        secret = os.urandom(32)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(secret)
+        with suppress(OSError):
+            path.chmod(0o600)
+        _identity_secret = secret
+    except OSError:
+        _identity_secret = os.urandom(32)
+    return _identity_secret
+
+
+def scm_identity(scm_provider: str, subject_id: object) -> AnalyticsIdentity | None:
+    """Return a stable pseudonym for a numeric authenticated SCM subject.
+
+    The provider namespace is part of the HMAC input, so equal numeric ids on
+    GitHub and GitLab cannot become the same PostHog person. Invalid values
+    deliberately return ``None`` and let callers retain install identity.
+    """
+    provider = _provider(scm_provider)
+    if provider == "other" or isinstance(subject_id, bool) or not isinstance(subject_id, int):
+        return None
+    if subject_id <= 0:
+        return None
+    digest = hmac.new(
+        _identity_secret_value(),
+        f"{provider}:{subject_id}".encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return AnalyticsIdentity(distinct_id=digest)
+
+
 def _bubo_version() -> str:
     try:
         return version("bubo")
@@ -180,15 +244,17 @@ def agent_label(reviewer_command: list[str]) -> str:
     return name if name in _KNOWN_AGENTS else "other"
 
 
-def _base_attrs() -> dict[str, Any]:
+def _base_attrs(identity: AnalyticsIdentity | None = None) -> dict[str, Any]:
     py = platform.python_version_tuple()
     iid = install_id()
+    actor = identity or AnalyticsIdentity(distinct_id=iid, source="install")
     return {
-        # PostHog keys events on `distinct_id`; setting it to the anonymous
-        # install id is what lets "count distinct installs" actually work
-        # (without it, every install collapses into one anonymous actor).
-        "distinct_id": iid,
+        # PostHog keys events on `distinct_id`. Authenticated SCM operators
+        # use their HMAC pseudonym; unavailable identity resolution falls back
+        # to the persisted install id without changing review behavior.
+        "distinct_id": actor.distinct_id,
         "install_id": iid,
+        "identity_source": actor.source,
         "bubo_version": _bubo_version(),
         "python_version": f"{py[0]}.{py[1]}",
         "os": platform.system() or "unknown",
@@ -273,7 +339,13 @@ def _get_logger(cfg: AnalyticsConfig) -> Any:
     return _logger
 
 
-def _emit(cfg: AnalyticsConfig, event: str, attrs: dict[str, Any]) -> None:
+def _emit(
+    cfg: AnalyticsConfig,
+    event: str,
+    attrs: dict[str, Any],
+    *,
+    identity: AnalyticsIdentity | None = None,
+) -> None:
     """Emit one anonymized event. Best-effort: never raises."""
     try:
         if not analytics_enabled(cfg):
@@ -283,7 +355,7 @@ def _emit(cfg: AnalyticsConfig, event: str, attrs: dict[str, Any]) -> None:
             return
         from opentelemetry._logs import SeverityNumber
 
-        payload = _clean({**_base_attrs(), **attrs})
+        payload = _clean({**_base_attrs(identity), **attrs})
         # The event name is both the log body and event_name; PostHog maps it.
         logger.emit(
             body=event,
@@ -296,12 +368,19 @@ def _emit(cfg: AnalyticsConfig, event: str, attrs: dict[str, Any]) -> None:
         return
 
 
-def record_session_start(cfg: AnalyticsConfig, *, scm_provider: str, projects_count: int) -> None:
+def record_session_start(
+    cfg: AnalyticsConfig,
+    *,
+    scm_provider: str,
+    projects_count: int,
+    identity: AnalyticsIdentity | None = None,
+) -> None:
     """One event per poll cycle start — liveness + install context."""
     _emit(
         cfg,
         "session_start",
         {"scm_provider": _provider(scm_provider), "projects_count": projects_count},
+        identity=identity,
     )
 
 
@@ -326,6 +405,7 @@ def record_review_completed(
     findings_skipped: int,
     files_changed: int | None,
     lines_changed: int | None,
+    identity: AnalyticsIdentity | None = None,
 ) -> None:
     """The primary signal: one anonymized event per completed review."""
     _emit(
@@ -351,10 +431,17 @@ def record_review_completed(
             "files_changed": files_changed,
             "lines_changed": lines_changed,
         },
+        identity=identity,
     )
 
 
-def record_finding_outcome(cfg: AnalyticsConfig, *, scm_provider: str, outcome: str) -> None:
+def record_finding_outcome(
+    cfg: AnalyticsConfig,
+    *,
+    scm_provider: str,
+    outcome: str,
+    identity: AnalyticsIdentity | None = None,
+) -> None:
     """One event per developer-engagement outcome — emitted at sync time.
 
     The caller (``bubo.poller.sync_outcomes``) emits this only on the
@@ -370,6 +457,7 @@ def record_finding_outcome(cfg: AnalyticsConfig, *, scm_provider: str, outcome: 
         cfg,
         "finding_outcome",
         {"scm_provider": _provider(scm_provider), "outcome": _outcome(outcome)},
+        identity=identity,
     )
 
 
@@ -401,6 +489,7 @@ def flush() -> None:
 
 __all__ = [
     "AnalyticsConfig",
+    "AnalyticsIdentity",
     "agent_label",
     "analytics_enabled",
     "flush",
@@ -408,4 +497,5 @@ __all__ = [
     "record_finding_outcome",
     "record_review_completed",
     "record_session_start",
+    "scm_identity",
 ]

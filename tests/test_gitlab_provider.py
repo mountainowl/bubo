@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+from bubo import gitlab
 from bubo.review_config import ReviewConfig
 from bubo.scm import get_provider
 from bubo.scm.gitlab import GitLabProvider
@@ -25,6 +26,27 @@ def test_get_provider_returns_gitlab() -> None:
     provider = get_provider(ReviewConfig(provider="gitlab"))
     assert provider.name == "gitlab"
     assert isinstance(provider, GitLabProvider)
+
+
+def test_authenticated_subject_uses_user_endpoint_and_returns_numeric_id() -> None:
+    cfg = _cfg()
+    with patch("bubo.gitlab.api", return_value=({"id": 42, "username": "private"}, {})) as api:
+        assert gitlab.authenticated_subject(cfg, "token") == 42
+    api.assert_called_once_with(cfg.gitlab_url, "token", "GET", "/user")
+
+
+def test_authenticated_subject_rejects_malformed_user_response() -> None:
+    cfg = _cfg()
+    for payload in ({}, {"id": "42"}, {"id": 0}, {"id": True}, []):
+        with patch("bubo.gitlab.api", return_value=(payload, {})):
+            assert gitlab.authenticated_subject(cfg, "token") is None
+
+
+def test_provider_authenticated_subject_delegates_to_client() -> None:
+    provider = GitLabProvider()
+    with patch("bubo.gitlab.authenticated_subject", return_value=42) as subject:
+        assert provider.authenticated_subject(_cfg(), "token") == 42
+    subject.assert_called_once()
 
 
 def test_post_inline_comment_reuses_existing_discussion() -> None:
