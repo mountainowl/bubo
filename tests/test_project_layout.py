@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import tarfile
 import tomllib
 from pathlib import Path
 
@@ -72,6 +74,8 @@ def test_docs_site_present() -> None:
     # published to GitHub Pages via .github/workflows/deploy-docs.yml.
     docs = ROOT / "docs"
     assert (docs / "package.json").is_file()
+    assert (docs / "package-lock.json").is_file()
+    assert not (docs / "pnpm-lock.yaml").exists()
     assert (docs / "next.config.mjs").is_file()
     assert (docs / "theme.config.tsx").is_file()
     for page in ("configuration", "operate", "telemetry", "troubleshooting", "mcp"):
@@ -88,6 +92,34 @@ def test_docs_site_present() -> None:
     assert "NEXT_PUBLIC_BUBO_VERSION" in theme_config
     assert "v0.24.2" not in theme_config
     assert "pyproject.toml" in deploy_workflow
+
+    docs_readme = (docs / "README.md").read_text()
+    assert "npm ci" in docs_readme
+    assert "pnpm" not in docs_readme
+
+
+def test_sdist_excludes_generated_docs_trees(tmp_path: Path) -> None:
+    subprocess.run(
+        ["uv", "build", "--sdist", "--out-dir", str(tmp_path)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    sdist = next(tmp_path.glob("*.tar.gz"))
+    with tarfile.open(sdist, "r:gz") as archive:
+        names = archive.getnames()
+
+    generated_dirs = (
+        "/docs/node_modules/",
+        "/docs/.next/",
+        "/docs/out/",
+        "/docs/.turbo/",
+        "/docs/.cache/",
+        "/docs/.vercel/",
+    )
+    assert not any(generated in name for name in names for generated in generated_dirs)
+    assert any(name.endswith("/docs/README.md") for name in names)
 
 
 def test_meta_prompt_includes_concise_review_style_example() -> None:

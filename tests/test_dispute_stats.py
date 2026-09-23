@@ -13,24 +13,13 @@ exercised against the production schema (no stubbed DB layer).
 from __future__ import annotations
 
 import sqlite3
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path
+from contextlib import nullcontext
+
+import pytest
 
 from bubo import db, paths
 
-
-@contextmanager
-def _temp_db() -> Iterator[None]:
-    original = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            db.init_db()
-            yield
-    finally:
-        paths.DB = original
+pytestmark = pytest.mark.usefixtures("initialized_db")
 
 
 def _outcome(*, disputed: bool = False, false_positive: bool = False) -> dict[str, object]:
@@ -100,7 +89,7 @@ def _seed_sync_failure(*, project: str, category: str, index: int) -> None:
 
 
 def test_rejected_vs_not_yields_raw_rate() -> None:
-    with _temp_db():
+    with nullcontext():
         # 3 disputed + 2 accepted documentation findings → 3/5 = 0.6.
         for i in range(3):
             _seed_finding(project="g/r", category="documentation", index=i, disputed=True)
@@ -118,7 +107,7 @@ def test_rejected_vs_not_yields_raw_rate() -> None:
 
 
 def test_false_positive_counts_as_rejected() -> None:
-    with _temp_db():
+    with nullcontext():
         for i in range(2):
             _seed_finding(project="g/r", category="style", index=i, false_positive=True)
         for i in range(2, 4):
@@ -131,7 +120,7 @@ def test_false_positive_counts_as_rejected() -> None:
 
 
 def test_sync_failure_rows_dilute_the_denominator() -> None:
-    with _temp_db():
+    with nullcontext():
         # 3 genuine disputes + 5 sync-failure rows → 3/8 = 0.375 (diluted).
         for i in range(3):
             _seed_finding(project="g/r", category="documentation", index=i, disputed=True)
@@ -146,7 +135,7 @@ def test_sync_failure_rows_dilute_the_denominator() -> None:
 
 
 def test_min_samples_gate_drops_thin_classes() -> None:
-    with _temp_db():
+    with nullcontext():
         # documentation: 5 rows (kept); performance: 3 rows (gated out at 5).
         for i in range(5):
             _seed_finding(project="g/r", category="documentation", index=i, disputed=True)
@@ -161,7 +150,7 @@ def test_min_samples_gate_drops_thin_classes() -> None:
 
 
 def test_ordering_is_rate_desc_then_category() -> None:
-    with _temp_db():
+    with nullcontext():
         # security: 1/2 = 0.5 ; documentation: 3/3 = 1.0 ; style: 1/2 = 0.5.
         _seed_finding(project="g/r", category="security", index=0, disputed=True)
         _seed_finding(project="g/r", category="security", index=1)
@@ -177,14 +166,14 @@ def test_ordering_is_rate_desc_then_category() -> None:
 
 
 def test_empty_project_returns_empty_list() -> None:
-    with _temp_db():
+    with nullcontext():
         # No findings/outcomes for this project at all.
         stats = db.disputed_class_stats("nobody/here", min_samples=1)
     assert stats == []
 
 
 def test_scoped_per_project() -> None:
-    with _temp_db():
+    with nullcontext():
         for i in range(3):
             _seed_finding(project="a/repo", category="documentation", index=i, disputed=True)
         for i in range(3):
@@ -198,22 +187,18 @@ def test_scoped_per_project() -> None:
 
 
 def test_reader_does_not_mutate_schema() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed_finding(project="g/r", category="documentation", index=0, disputed=True)
         with sqlite3.connect(paths.DB) as con:
             before = {
                 r[0]
-                for r in con.execute(
-                    "select name from sqlite_master where type='table'"
-                ).fetchall()
+                for r in con.execute("select name from sqlite_master where type='table'").fetchall()
             }
         db.disputed_class_stats("g/r", min_samples=1)
         with sqlite3.connect(paths.DB) as con:
             after = {
                 r[0]
-                for r in con.execute(
-                    "select name from sqlite_master where type='table'"
-                ).fetchall()
+                for r in con.execute("select name from sqlite_master where type='table'").fetchall()
             }
     assert before == after
 
@@ -224,7 +209,7 @@ def test_matches_disputed_finding_classes_predicate() -> None:
     For the same data + thresholds, applying the suppression predicate to the
     raw stats must reproduce ``disputed_finding_classes`` exactly.
     """
-    with _temp_db():
+    with nullcontext():
         # documentation 0.6 (suppressed at 0.5/5); security 0.4 (kept).
         for i in range(3):
             _seed_finding(project="g/r", category="documentation", index=i, disputed=True)
@@ -238,9 +223,5 @@ def test_matches_disputed_finding_classes_predicate() -> None:
         stats = db.disputed_class_stats("g/r", min_samples=1)
         suppressed = db.disputed_finding_classes("g/r", min_samples=5, threshold=0.5)
 
-    derived = {
-        r["category"]
-        for r in stats
-        if r["total"] >= 5 and r["dispute_rate"] >= 0.5
-    }
+    derived = {r["category"] for r in stats if r["total"] >= 5 and r["dispute_rate"] >= 0.5}
     assert derived == suppressed == {"documentation"}

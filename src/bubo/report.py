@@ -35,8 +35,11 @@ from __future__ import annotations
 import csv
 import io
 import json
+import sqlite3
+from collections.abc import Sequence
 
 from bubo import db
+from bubo.db_reporting import _report_window
 from bubo.errors import describe
 from bubo.events import now
 from bubo.types import JsonObject
@@ -125,7 +128,7 @@ def _seconds(value: float) -> float:
     return round(value, 2)
 
 
-def build_report(
+def _build_report(
     *,
     since_hours: int = 24,
     since: str | None = None,
@@ -135,6 +138,8 @@ def build_report(
     generated_at: str | None = None,
     suppress_threshold: float | None = None,
     suppress_min_samples: int | None = None,
+    connection: sqlite3.Connection | None = None,
+    audit_history: Sequence[JsonObject] | None = None,
 ) -> JsonObject:
     """Assemble the full governance report from the :mod:`bubo.db` readers.
 
@@ -200,23 +205,28 @@ def build_report(
     # Pass since/until + readonly so the `reviews` section covers the SAME
     # window as every other section (not metrics_summary's legacy 30-day path).
     metrics = db.metrics_summary(
-        since_hours=since_hours, project=project, since=since, until=until, readonly=True
+        since_hours=since_hours,
+        project=project,
+        since=since,
+        until=until,
+        readonly=True,
+        connection=connection,
     )
     window = {"since_hours": since_hours, "since": since, "until": until}
     provenance = db.provenance_summary(
-        since_hours=since_hours, since=since, until=until, project=project
+        since_hours=since_hours, since=since, until=until, project=project, connection=connection
     )
     outcomes_raw = db.outcomes_summary(
-        since_hours=since_hours, since=since, until=until, project=project
+        since_hours=since_hours, since=since, until=until, project=project, connection=connection
     )
     noise = db.noise_trend(
-        since_hours=since_hours, since=since, until=until, project=project
+        since_hours=since_hours, since=since, until=until, project=project, connection=connection
     )
     roi_raw = db.roi_proxy(
-        since_hours=since_hours, since=since, until=until, project=project
+        since_hours=since_hours, since=since, until=until, project=project, connection=connection
     )
     latency_raw = db.latency_summary(
-        since_hours=since_hours, since=since, until=until, project=project
+        since_hours=since_hours, since=since, until=until, project=project, connection=connection
     )
     # Per-project only: suppression is a per-repo signal, and the reader takes a
     # required `project: str`. With no project filter there is no meaningful
@@ -224,14 +234,45 @@ def build_report(
     dispute_stats = (
         []
         if project is None
-        else db.disputed_class_stats(project, min_samples=1)
+        else db.disputed_class_stats(project, min_samples=1, connection=connection)
     )
     policy = db.policy_decisions_summary(
-        since_hours=since_hours, since=since, until=until, project=project
+        since_hours=since_hours, since=since, until=until, project=project, connection=connection
     )
-    audit = db.audit_rows(
-        since_hours=since_hours, since=since, until=until, project=project, limit=limit
-    )
+    audit_total: int | None = None
+    if audit_history is None:
+        audit_total = (
+            db.audit_rows_count(
+                since_hours=since_hours,
+                since=since,
+                until=until,
+                project=project,
+                connection=connection,
+            )
+            if limit is not None
+            else None
+        )
+        audit = db.audit_rows(
+            since_hours=since_hours,
+            since=since,
+            until=until,
+            project=project,
+            limit=limit,
+            connection=connection,
+        )
+    else:
+        start, end = _report_window(since_hours, since, until)
+        audit = [
+            row
+            for row in audit_history
+            if start <= str(row["started_at"]) <= end
+            and (project is None or row["project"] == project)
+        ]
+    if audit_total is None:
+        audit_total = len(audit)
+    audit_truncated = limit is not None and audit_total > max(0, int(limit))
+    if limit is not None:
+        audit = audit[: max(0, int(limit))]
 
     outcomes_total = outcomes_raw["total"]
     outcomes = {
@@ -276,8 +317,7 @@ def build_report(
         }
         if suppress_threshold is not None and suppress_min_samples is not None:
             row["would_suppress"] = (
-                stat["total"] >= suppress_min_samples
-                and stat["dispute_rate"] >= suppress_threshold
+                stat["total"] >= suppress_min_samples and stat["dispute_rate"] >= suppress_threshold
             )
         dispute_classes_rows.append(row)
 
@@ -307,7 +347,57 @@ def build_report(
         "dispute_classes": dispute_classes_rows,
         "policy_decisions": policy,
         "audit": audit,
+        "audit_total": audit_total,
+        "audit_truncated": audit_truncated,
     }
+
+
+def build_report(
+    *,
+    since_hours: int = 24,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+    limit: int | None = None,
+    generated_at: str | None = None,
+    suppress_threshold: float | None = None,
+    suppress_min_samples: int | None = None,
+    connection: sqlite3.Connection | None = None,
+    audit_history: Sequence[JsonObject] | None = None,
+) -> JsonObject:
+    """Build one report from a supplied connection or one read-only snapshot.
+
+    A caller-provided connection remains untouched. Otherwise the report owns
+    a single explicit read transaction, keeping every rollup, audit count, and
+    paged audit row consistent if a writer commits during assembly.
+    """
+    if connection is not None:
+        return _build_report(
+            since_hours=since_hours,
+            since=since,
+            until=until,
+            project=project,
+            limit=limit,
+            generated_at=generated_at,
+            suppress_threshold=suppress_threshold,
+            suppress_min_samples=suppress_min_samples,
+            connection=connection,
+            audit_history=audit_history,
+        )
+    with db.connect_db(readonly=True) as snapshot:
+        snapshot.execute("begin")
+        return _build_report(
+            since_hours=since_hours,
+            since=since,
+            until=until,
+            project=project,
+            limit=limit,
+            generated_at=generated_at,
+            suppress_threshold=suppress_threshold,
+            suppress_min_samples=suppress_min_samples,
+            connection=snapshot,
+            audit_history=audit_history,
+        )
 
 
 def to_json(report: JsonObject) -> str:
@@ -317,9 +407,7 @@ def to_json(report: JsonObject) -> str:
     set by :func:`build_report` survives into the output; a trailing newline
     is appended for clean file/stream concatenation.
     """
-    return (
-        json.dumps(report, indent=2, sort_keys=False, ensure_ascii=False) + "\n"
-    )
+    return json.dumps(report, indent=2, sort_keys=False, ensure_ascii=False) + "\n"
 
 
 # Leading characters a spreadsheet (Excel/Sheets) treats as a formula start.

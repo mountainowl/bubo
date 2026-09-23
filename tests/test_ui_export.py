@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from bubo import cli, db, paths, ui_export
+from bubo.statuses import ReviewStatus
 
 # The contract the SPA depends on: these keys are always present, in any DB state.
 _TOP_LEVEL_KEYS = {
@@ -68,8 +70,19 @@ def _seed_one_review() -> None:
             """insert into review_findings(project,iid,sha,fingerprint,file,line,
                status,body,updated_at,severity,category)
                values(?,?,?,?,?,?,?,?,?,?,?)""",
-            ("g/r", 1, "sha1", "fp0", "f.py", 1, "posted", "**Issue**: bug", when,
-             "blocking", "correctness"),
+            (
+                "g/r",
+                1,
+                "sha1",
+                "fp0",
+                "f.py",
+                1,
+                "posted",
+                "**Issue**: bug",
+                when,
+                "blocking",
+                "correctness",
+            ),
         )
         con.execute(
             """insert into finding_outcomes(finding_id,project,iid,sha,fingerprint,
@@ -138,6 +151,155 @@ def test_build_data_populated_db_carries_review_detail(isolated_root: Path) -> N
     assert finding["outcome"]["resolved"] is True
 
 
+def test_dashboard_schema_matches_empty_and_populated_exports(isolated_root: Path) -> None:
+    empty = ui_export.build_data()
+    db.init_db()
+    _seed_one_review()
+    populated = ui_export.build_data()
+
+    assert set(empty["dashboard"]) == set(populated["dashboard"]) == {"recent"}
+
+
+def test_build_data_shares_one_readonly_connection(
+    isolated_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The export must not reopen/copy the DB for each review/report section."""
+    db.init_db()
+    _seed_one_review()
+    connect = db.connect_db
+    calls: list[bool] = []
+
+    def tracked_connect(*, readonly: bool = False) -> sqlite3.Connection:
+        calls.append(readonly)
+        return connect(readonly=readonly)
+
+    monkeypatch.setattr(db, "connect_db", tracked_connect)
+
+    data = ui_export.build_data()
+
+    assert data["reviews"][0]["project"] == "g/r"
+    assert calls == [True]
+
+
+def test_init_db_creates_indexes_for_export_query_shapes(isolated_root: Path) -> None:
+    db.init_db()
+    with sqlite3.connect(paths.DB) as connection:
+        names = {
+            row[1]
+            for table in (
+                "reviewed_mrs",
+                "review_runs",
+                "review_findings",
+                "finding_outcomes",
+                "governance_decisions",
+            )
+            for row in connection.execute(f"pragma index_list({table})")
+        }
+        recent_plan = " ".join(
+            row[3]
+            for row in connection.execute(
+                "explain query plan "
+                "select project,iid,sha from reviewed_mrs "
+                "order by updated_at desc limit 50"
+            )
+        )
+        finding_plan = " ".join(
+            row[3]
+            for row in connection.execute(
+                "explain query plan "
+                "select fingerprint from review_findings "
+                "where project=? and iid=? and sha=? order by updated_at asc",
+                ("g/r", 1, "sha1"),
+            )
+        )
+        audit_order_plan = " ".join(
+            row[3]
+            for row in connection.execute(
+                "explain query plan "
+                "select run_id from review_runs "
+                "where started_at>=? and started_at<=? "
+                "order by started_at desc, run_id desc",
+                ("2026-01-01", "2026-12-31"),
+            )
+        )
+        outcomes_plan = " ".join(
+            row[3]
+            for row in connection.execute(
+                "explain query plan select count(*) from finding_outcomes "
+                "where project=? and last_checked_at>=? and last_checked_at<=?",
+                ("g/r", "2026-01-01", "2026-12-31"),
+            )
+        )
+        governance_plan = " ".join(
+            row[3]
+            for row in connection.execute(
+                "explain query plan select count(*) from governance_decisions "
+                "where created_at>=? and created_at<=?",
+                ("2026-01-01", "2026-12-31"),
+            )
+        )
+        governance_project_plan = " ".join(
+            row[3]
+            for row in connection.execute(
+                "explain query plan select count(*) from governance_decisions "
+                "where project=? and created_at>=? and created_at<=?",
+                ("g/r", "2026-01-01", "2026-12-31"),
+            )
+        )
+
+    assert {
+        "reviewed_mrs_updated_at_idx",
+        "review_runs_started_at_run_id_idx",
+        "review_findings_review_updated_at_idx",
+        "finding_outcomes_review_checked_at_idx",
+        "finding_outcomes_checked_at_idx",
+        "finding_outcomes_project_checked_at_idx",
+        "governance_decisions_review_created_at_idx",
+        "governance_decisions_created_at_idx",
+        "governance_decisions_project_created_at_idx",
+    } <= names
+    assert "reviewed_mrs_updated_at_idx" in recent_plan
+    assert "review_findings_review_updated_at_idx" in finding_plan
+    assert "review_runs_started_at_run_id_idx" in audit_order_plan
+    assert "finding_outcomes_project_checked_at_idx" in outcomes_plan
+    assert "governance_decisions_created_at_idx" in governance_plan
+    assert "governance_decisions_project_created_at_idx" in governance_project_plan
+    assert "USE TEMP B-TREE" not in audit_order_plan
+
+
+def test_export_uses_one_snapshot_when_a_writer_commits_mid_build(
+    isolated_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db.init_db()
+    when = datetime.now(UTC).isoformat(timespec="seconds")
+    db.record("g/r", 1, "sha1", ReviewStatus.SUCCESS)
+    db.record_review_run_start(
+        run_id="run1",
+        project="g/r",
+        iid=1,
+        sha="sha1",
+        model="m",
+        prompt_version="v",
+        review_mode="diff",
+        dry_run=False,
+    )
+    original = ui_export._reports
+
+    def write_then_report(
+        connection: sqlite3.Connection, history: list[dict[str, object]]
+    ) -> list[dict[str, object]]:
+        with sqlite3.connect(paths.DB) as writer:
+            writer.execute(
+                "insert into reviewed_mrs(project,iid,sha,status,updated_at) values(?,?,?,?,?)",
+                ("g/r", 2, "sha2", "success", when),
+            )
+        return original(connection, history)
+
+    monkeypatch.setattr(ui_export, "_reports", write_then_report)
+    data = ui_export.build_data()
+    assert data["reports"][0]["report"]["reviews"]["reviews_total"] == 1
+
+
 def test_build_data_config_descriptions_populated(isolated_root: Path) -> None:
     data = ui_export.build_data()
     by_name = {row["name"]: row for row in data["config"]}
@@ -170,7 +332,9 @@ def test_cmd_ui_export_writes_valid_json_to_out(isolated_root: Path, tmp_path: P
 def test_cmd_ui_export_writes_file_protocol_fallback(isolated_root: Path, tmp_path: Path) -> None:
     out = tmp_path / "out"
     cli.cmd_ui_export(
-        cli.build_parser().parse_args(["ui-export", "--root", str(isolated_root), "--out", str(out)])
+        cli.build_parser().parse_args(
+            ["ui-export", "--root", str(isolated_root), "--out", str(out)]
+        )
     )
     # data.js inlines the same payload as a window global for file:// loads.
     data_js = (out / "data.js").read_text()
@@ -183,7 +347,9 @@ def test_cmd_ui_export_writes_file_protocol_fallback(isolated_root: Path, tmp_pa
 def test_cmd_ui_export_copies_spa_assets(isolated_root: Path, tmp_path: Path) -> None:
     out = tmp_path / "out"
     cli.cmd_ui_export(
-        cli.build_parser().parse_args(["ui-export", "--root", str(isolated_root), "--out", str(out)])
+        cli.build_parser().parse_args(
+            ["ui-export", "--root", str(isolated_root), "--out", str(out)]
+        )
     )
     # The built SPA ships committed under ui/dist (editable fallback) / the
     # wheel's bubo/_assets/ui — either way index.html lands next to data.json.
@@ -195,7 +361,9 @@ def test_cmd_ui_export_does_not_create_db_on_fresh_root(
 ) -> None:
     out = tmp_path / "out"
     cli.cmd_ui_export(
-        cli.build_parser().parse_args(["ui-export", "--root", str(isolated_root), "--out", str(out)])
+        cli.build_parser().parse_args(
+            ["ui-export", "--root", str(isolated_root), "--out", str(out)]
+        )
     )
     # Read-only: exporting must never initialize the operator's DB.
     assert not paths.DB.exists()

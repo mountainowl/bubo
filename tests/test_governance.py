@@ -9,29 +9,18 @@ rigor modulation + policy gates (②b). The pure policy logic lives in
 
 from __future__ import annotations
 
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path
+from contextlib import nullcontext
 from unittest.mock import patch
 
-from bubo import db, paths
+import pytest
+
+from bubo import db
 from bubo.governance_config import DEFAULT_AI_TRAILER_PATTERNS
 from bubo.provenance import ProvenanceSignal
 from bubo.review_config import ReviewConfig, review_config_from_dict
 from bubo.statuses import ReviewMode
 
-
-@contextmanager
-def _temp_db() -> Iterator[None]:
-    original = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            db.init_db()
-            yield
-    finally:
-        paths.DB = original
+pytestmark = pytest.mark.usefixtures("initialized_db")
 
 
 def _seed_run(run_id: str = "rid", project: str = "g/r") -> None:
@@ -77,7 +66,7 @@ def test_governance_config_parses_block_preserving_case() -> None:
 
 
 def test_record_and_read_provenance_round_trips() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed_run()
         db.record_provenance(
             "rid",
@@ -101,7 +90,7 @@ def test_record_and_read_provenance_round_trips() -> None:
 
 
 def test_record_provenance_is_write_once() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed_run()
         db.record_provenance("rid", ProvenanceSignal(band="likely_ai", source="trailer"))
         # A second write must NOT overwrite — audit integrity.
@@ -113,7 +102,7 @@ def test_record_provenance_is_write_once() -> None:
 
 
 def test_provenance_for_absent_run_is_none() -> None:
-    with _temp_db():
+    with nullcontext():
         # No run row at all, and a seeded run with no provenance, both -> None.
         assert db.provenance_for("missing") is None
         _seed_run()
@@ -170,7 +159,7 @@ def test_capture_provenance_disabled_consults_nothing() -> None:
     from bubo import poller
 
     cfg = ReviewConfig()  # capture_provenance defaults False
-    with _temp_db():
+    with nullcontext():
         _seed_run()
         poller.capture_provenance(
             cfg,
@@ -204,7 +193,7 @@ def test_capture_provenance_enabled_records_and_logs() -> None:
     def _capture(event: str, **fields: object) -> None:
         events.append((event, fields))
 
-    with _temp_db():
+    with nullcontext():
         _seed_run()
         with patch.object(poller, "log", _capture):
             poller.capture_provenance(
@@ -242,7 +231,7 @@ def test_capture_provenance_failure_is_soft() -> None:
             return {}
 
     events: list[tuple[str, dict]] = []
-    with _temp_db():
+    with nullcontext():
         _seed_run()
         with patch.object(poller, "log", lambda e, **f: events.append((e, f))):
             # Must NOT raise — provenance is additive.
@@ -325,11 +314,9 @@ def _decision(action="flag", triggered=True, mode="soft"):
 
 
 def test_record_and_read_governance_decision_round_trips() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed_run()
-        db.record_governance_decision(
-            "rid", project="g/r", iid=1, sha="sha", decision=_decision()
-        )
+        db.record_governance_decision("rid", project="g/r", iid=1, sha="sha", decision=_decision())
         got = db.governance_decision_for("rid")
 
     assert got is not None
@@ -345,7 +332,7 @@ def test_record_and_read_governance_decision_round_trips() -> None:
 
 
 def test_record_governance_decision_is_write_once() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed_run()
         db.record_governance_decision(
             "rid", project="g/r", iid=1, sha="sha", decision=_decision(action="flag")
@@ -365,11 +352,9 @@ def test_record_governance_decision_is_write_once() -> None:
 
 
 def test_governance_decisions_for_returns_rows() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed_run()
-        db.record_governance_decision(
-            "rid", project="g/r", iid=1, sha="sha", decision=_decision()
-        )
+        db.record_governance_decision("rid", project="g/r", iid=1, sha="sha", decision=_decision())
         rows = db.governance_decisions_for("g/r", 1, "sha")
 
     assert len(rows) == 1
@@ -397,7 +382,7 @@ def test_rigor_only_config_fetches_and_returns_directive() -> None:
             rigor_modulation=True, sensitive_path_globs=["payments/**"]
         )
     )
-    with _temp_db():
+    with nullcontext():
         _seed_run()
         with patch.object(poller, "log", lambda e, **f: None):
             result = poller.capture_provenance(
@@ -427,11 +412,16 @@ def test_no_directive_when_not_escalated() -> None:
     )
     # No AI trailer + no sensitive path → band unknown → not escalated.
     provider = _FakeProvider(commits=[{"message": "plain commit"}], paths_=["src/util.py"])
-    with _temp_db():
+    with nullcontext():
         _seed_run()
         with patch.object(poller, "log", lambda e, **f: None):
             result = poller.capture_provenance(
-                cfg, token="t", project="g/r", number=1, sha="sha", run_id="rid",
+                cfg,
+                token="t",
+                project="g/r",
+                number=1,
+                sha="sha",
+                run_id="rid",
                 provider=provider,  # type: ignore[arg-type]
             )
     assert result is not None
@@ -448,11 +438,16 @@ def test_policy_mode_records_decision_and_logs() -> None:
         )
     )
     events: list[tuple[str, dict]] = []
-    with _temp_db():
+    with nullcontext():
         _seed_run()
         with patch.object(poller, "log", lambda e, **f: events.append((e, f))):
             poller.capture_provenance(
-                cfg, token="t", project="g/r", number=1, sha="sha", run_id="rid",
+                cfg,
+                token="t",
+                project="g/r",
+                number=1,
+                sha="sha",
+                run_id="rid",
                 provider=_gov_provider(),  # type: ignore[arg-type]
             )
         decision = db.governance_decision_for("rid")

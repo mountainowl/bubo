@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import sqlite3
 import subprocess
-import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -33,9 +32,7 @@ def _seed_two_reviews(tmp_db: Path) -> None:
     second-precision ``db.record()`` path, so the "newest-first" ordering
     test does not depend on wall-clock spacing between writes.
     """
-    paths.DB = tmp_db
-    db.init_db()
-    with sqlite3.connect(paths.DB) as conn:
+    with sqlite3.connect(tmp_db) as conn:
         conn.execute(
             "insert into reviewed_mrs(project,iid,sha,status,report,error,updated_at)"
             " values(?,?,?,?,?,?,?)",
@@ -100,164 +97,100 @@ def _seed_two_reviews(tmp_db: Path) -> None:
     )
 
 
-def test_health_reports_empty_when_no_reviews_recorded() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            db.init_db()
-            result = mcp_server.health()
-            assert result["status"] == "empty"
-            assert "message" in result
-    finally:
-        paths.DB = original_db
+def test_health_reports_empty_when_no_reviews_recorded(initialized_db: Path) -> None:
+    result = mcp_server.health()
+    assert result["status"] == "empty"
+    assert "message" in result
 
 
-def test_health_reports_ok_with_age_when_state_present() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            _seed_two_reviews(paths.DB)
-            result = mcp_server.health()
-            assert result["status"] == "ok"
-            # The most recent row wins — that is project=group/proj iid=8
-            # (recorded after iid=7), with status no_findings.
-            assert result["last_status"] == ReviewStatus.NO_FINDINGS
-            assert isinstance(result["age_seconds"], float)
-            assert result["age_seconds"] >= 0.0
-    finally:
-        paths.DB = original_db
+def test_health_reports_ok_with_age_when_state_present(initialized_db: Path) -> None:
+    _seed_two_reviews(initialized_db)
+    result = mcp_server.health()
+    assert result["status"] == "ok"
+    # The most recent row wins — that is project=group/proj iid=8
+    # (recorded after iid=7), with status no_findings.
+    assert result["last_status"] == ReviewStatus.NO_FINDINGS
+    assert isinstance(result["age_seconds"], float)
+    assert result["age_seconds"] >= 0.0
 
 
-def test_list_recent_reviews_returns_rows_newest_first() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            _seed_two_reviews(paths.DB)
-            rows = mcp_server.list_recent_reviews()
-            assert len(rows) == 2
-            # The second seed (iid=8) was written last → newest first.
-            assert rows[0]["iid"] == 8
-            assert rows[1]["iid"] == 7
-            # status filter
-            successes = mcp_server.list_recent_reviews(status=ReviewStatus.SUCCESS)
-            assert len(successes) == 1
-            assert successes[0]["iid"] == 7
-            # project filter — non-matching → empty
-            assert mcp_server.list_recent_reviews(project="someone/else") == []
-    finally:
-        paths.DB = original_db
+def test_list_recent_reviews_returns_rows_newest_first(initialized_db: Path) -> None:
+    _seed_two_reviews(initialized_db)
+    rows = mcp_server.list_recent_reviews()
+    assert len(rows) == 2
+    # The second seed (iid=8) was written last → newest first.
+    assert rows[0]["iid"] == 8
+    assert rows[1]["iid"] == 7
+    # status filter
+    successes = mcp_server.list_recent_reviews(status=ReviewStatus.SUCCESS)
+    assert len(successes) == 1
+    assert successes[0]["iid"] == 7
+    # project filter — non-matching → empty
+    assert mcp_server.list_recent_reviews(project="someone/else") == []
 
 
-def test_list_recent_reviews_clamps_limit_to_safe_bounds() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            _seed_two_reviews(paths.DB)
-            # limit=0 must not return zero rows silently; clamped to 1.
-            assert len(mcp_server.list_recent_reviews(limit=0)) == 1
-            # limit > 200 must not blow up memory; clamped to 200.
-            assert len(mcp_server.list_recent_reviews(limit=10_000)) == 2
-    finally:
-        paths.DB = original_db
+def test_list_recent_reviews_clamps_limit_to_safe_bounds(initialized_db: Path) -> None:
+    _seed_two_reviews(initialized_db)
+    # limit=0 must not return zero rows silently; clamped to 1.
+    assert len(mcp_server.list_recent_reviews(limit=0)) == 1
+    # limit > 200 must not blow up memory; clamped to 200.
+    assert len(mcp_server.list_recent_reviews(limit=10_000)) == 2
 
 
-def test_get_review_resolves_latest_sha_when_unspecified() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            _seed_two_reviews(paths.DB)
-            result = mcp_server.get_review("group/proj", 7)
-            assert result["found"] is True
-            assert result["sha"] == "deadbeef"
-            assert result["status"] == ReviewStatus.SUCCESS
-            assert result["report"] == "findings emitted"
-    finally:
-        paths.DB = original_db
+def test_get_review_resolves_latest_sha_when_unspecified(initialized_db: Path) -> None:
+    _seed_two_reviews(initialized_db)
+    result = mcp_server.get_review("group/proj", 7)
+    assert result["found"] is True
+    assert result["sha"] == "deadbeef"
+    assert result["status"] == ReviewStatus.SUCCESS
+    assert result["report"] == "findings emitted"
 
 
-def test_get_review_returns_not_found_marker_when_missing() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            db.init_db()
-            result = mcp_server.get_review("nobody/nothing", 1)
-            assert result == {
-                "found": False,
-                "project": "nobody/nothing",
-                "iid": 1,
-                "sha": None,
-            }
-    finally:
-        paths.DB = original_db
+def test_get_review_returns_not_found_marker_when_missing(initialized_db: Path) -> None:
+    result = mcp_server.get_review("nobody/nothing", 1)
+    assert result == {
+        "found": False,
+        "project": "nobody/nothing",
+        "iid": 1,
+        "sha": None,
+    }
 
 
-def test_get_findings_returns_seeded_row_for_latest_sha() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            _seed_two_reviews(paths.DB)
-            findings = mcp_server.get_findings("group/proj", 7)
-            assert len(findings) == 1
-            row = findings[0]
-            assert row["fingerprint"] == "fp-1"
-            assert row["file"] == "src/foo.py"
-            assert row["line"] == 42
-            assert row["severity"] == "blocking"
-            assert row["category"] == "correctness"
-            assert row["confidence"] == 0.95
-            assert row["status"] == FindingStatus.POSTED
-            assert row["discussion_id"] == "d-1"
-            assert row["note_id"] == "n-1"
-    finally:
-        paths.DB = original_db
+def test_get_findings_returns_seeded_row_for_latest_sha(initialized_db: Path) -> None:
+    _seed_two_reviews(initialized_db)
+    findings = mcp_server.get_findings("group/proj", 7)
+    assert len(findings) == 1
+    row = findings[0]
+    assert row["fingerprint"] == "fp-1"
+    assert row["file"] == "src/foo.py"
+    assert row["line"] == 42
+    assert row["severity"] == "blocking"
+    assert row["category"] == "correctness"
+    assert row["confidence"] == 0.95
+    assert row["status"] == FindingStatus.POSTED
+    assert row["discussion_id"] == "d-1"
+    assert row["note_id"] == "n-1"
 
 
-def test_get_findings_empty_for_unknown_mr() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            db.init_db()
-            assert mcp_server.get_findings("nope", 1) == []
-    finally:
-        paths.DB = original_db
+def test_get_findings_empty_for_unknown_mr(initialized_db: Path) -> None:
+    assert mcp_server.get_findings("nope", 1) == []
 
 
-def test_get_finding_outcomes_coerces_int_flags_to_bool() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            _seed_two_reviews(paths.DB)
-            outcomes = mcp_server.get_finding_outcomes("group/proj", 7)
-            assert len(outcomes) == 1
-            o = outcomes[0]
-            assert o["resolved"] is True
-            assert o["developer_replied"] is True
-            assert o["deleted"] is False
-            assert o["merged_unresolved"] is False
-            assert o["resolved_at"] == "2026-05-30T10:00:00+00:00"
-    finally:
-        paths.DB = original_db
+def test_get_finding_outcomes_coerces_int_flags_to_bool(initialized_db: Path) -> None:
+    _seed_two_reviews(initialized_db)
+    outcomes = mcp_server.get_finding_outcomes("group/proj", 7)
+    assert len(outcomes) == 1
+    o = outcomes[0]
+    assert o["resolved"] is True
+    assert o["developer_replied"] is True
+    assert o["deleted"] is False
+    assert o["merged_unresolved"] is False
+    assert o["resolved_at"] == "2026-05-30T10:00:00+00:00"
 
 
-def test_get_finding_outcomes_empty_when_no_sync_yet() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            db.init_db()
-            db.record("p", 1, "s", ReviewStatus.SUCCESS)
-            assert mcp_server.get_finding_outcomes("p", 1) == []
-    finally:
-        paths.DB = original_db
+def test_get_finding_outcomes_empty_when_no_sync_yet(initialized_db: Path) -> None:
+    db.record("p", 1, "s", ReviewStatus.SUCCESS)
+    assert mcp_server.get_finding_outcomes("p", 1) == []
 
 
 def test_server_exposes_expected_tool_names() -> None:
@@ -285,24 +218,18 @@ def test_server_exposes_expected_tool_names() -> None:
     }.issubset(names)
 
 
-def test_seeded_db_row_count_matches_writer_path() -> None:
+def test_seeded_db_row_count_matches_writer_path(initialized_db: Path) -> None:
     """Anchor test: verifies the seed helper actually wrote what we expect.
 
     Catches the class of bug where a schema migration changes column
     counts and a tuple-based fixture silently shifts under everyone.
     """
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            _seed_two_reviews(paths.DB)
-            with sqlite3.connect(paths.DB) as conn:
-                mr_count = conn.execute("select count(*) from reviewed_mrs").fetchone()[0]
-                f_count = conn.execute("select count(*) from review_findings").fetchone()[0]
-                o_count = conn.execute("select count(*) from finding_outcomes").fetchone()[0]
-            assert (mr_count, f_count, o_count) == (2, 1, 1)
-    finally:
-        paths.DB = original_db
+    _seed_two_reviews(initialized_db)
+    with sqlite3.connect(initialized_db) as conn:
+        mr_count = conn.execute("select count(*) from reviewed_mrs").fetchone()[0]
+        f_count = conn.execute("select count(*) from review_findings").fetchone()[0]
+        o_count = conn.execute("select count(*) from finding_outcomes").fetchone()[0]
+    assert (mr_count, f_count, o_count) == (2, 1, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -520,61 +447,36 @@ def _seed_metrics_data(tmp_db: Path) -> None:
             )
 
 
-def test_get_metrics_aggregates_within_window_excluding_stale_rows() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            _seed_metrics_data(paths.DB)
-            metrics = mcp_server.get_metrics(since_hours=24)
-            # Token sum should only include the two recent runs
-            # (1000 + 2500 = 3500), not the 99999 stale one.
-            assert metrics["tokens_total_sum"] == 3500
-            assert metrics["cost_usd_sum"] == pytest.approx(0.35)
-            assert metrics["window_hours"] == 24
-            assert metrics["project"] is None
-    finally:
-        paths.DB = original_db
+def test_get_metrics_aggregates_within_window_excluding_stale_rows(initialized_db: Path) -> None:
+    _seed_metrics_data(initialized_db)
+    metrics = mcp_server.get_metrics(since_hours=24)
+    # Token sum should only include the two recent runs
+    # (1000 + 2500 = 3500), not the 99999 stale one.
+    assert metrics["tokens_total_sum"] == 3500
+    assert metrics["cost_usd_sum"] == pytest.approx(0.35)
+    assert metrics["window_hours"] == 24
+    assert metrics["project"] is None
 
 
-def test_get_metrics_includes_stale_rows_when_window_widens() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            _seed_metrics_data(paths.DB)
-            metrics = mcp_server.get_metrics(since_hours=720)
-            # With a one-month window, the stale run lands in scope too.
-            assert metrics["tokens_total_sum"] == 3500 + 99999
-    finally:
-        paths.DB = original_db
+def test_get_metrics_includes_stale_rows_when_window_widens(initialized_db: Path) -> None:
+    _seed_metrics_data(initialized_db)
+    metrics = mcp_server.get_metrics(since_hours=720)
+    # With a one-month window, the stale run lands in scope too.
+    assert metrics["tokens_total_sum"] == 3500 + 99999
 
 
-def test_get_metrics_clamps_extreme_since_hours_inputs() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            db.init_db()
-            # since_hours=0 must not silently match nothing; clamped to 1h.
-            assert mcp_server.get_metrics(since_hours=0)["window_hours"] == 1
-            # Far-future input clamped to 720h (one month).
-            assert mcp_server.get_metrics(since_hours=10_000_000)["window_hours"] == 720
-    finally:
-        paths.DB = original_db
+def test_get_metrics_clamps_extreme_since_hours_inputs(initialized_db: Path) -> None:
+    # since_hours=0 must not silently match nothing; clamped to 1h.
+    assert mcp_server.get_metrics(since_hours=0)["window_hours"] == 1
+    # Far-future input clamped to 720h (one month).
+    assert mcp_server.get_metrics(since_hours=10_000_000)["window_hours"] == 720
 
 
-def test_get_metrics_project_filter_excludes_other_projects() -> None:
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            _seed_metrics_data(paths.DB)
-            other = mcp_server.get_metrics(since_hours=720, project="someone/else")
-            assert other["reviews_total"] == 0
-            assert other["tokens_total_sum"] == 0
-    finally:
-        paths.DB = original_db
+def test_get_metrics_project_filter_excludes_other_projects(initialized_db: Path) -> None:
+    _seed_metrics_data(initialized_db)
+    other = mcp_server.get_metrics(since_hours=720, project="someone/else")
+    assert other["reviews_total"] == 0
+    assert other["tokens_total_sum"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -584,8 +486,6 @@ def test_get_metrics_project_filter_excludes_other_projects() -> None:
 
 def _seed_dispute_classes(tmp_db: Path) -> None:
     """documentation: 3/5 disputed (0.6); security: 2/5 disputed (0.4)."""
-    paths.DB = tmp_db
-    db.init_db()
     for category, n_disputed in [("documentation", 3), ("security", 2)]:
         for i in range(5):
             fp = f"{category}-{i}"
@@ -617,58 +517,47 @@ def _seed_dispute_classes(tmp_db: Path) -> None:
             )
 
 
-def test_get_dispute_classes_flags_would_suppress_from_config() -> None:
+def test_get_dispute_classes_flags_would_suppress_from_config(initialized_db: Path) -> None:
     cfg = ReviewConfig(dispute_suppress_threshold=0.5, dispute_suppress_min_samples=5)
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            _seed_dispute_classes(Path(tmp) / "reviewer.sqlite")
-            with patch("bubo.mcp_server.load_review_config", return_value=cfg):
-                out = mcp_server.get_dispute_classes(project="g/r")
-    finally:
-        paths.DB = original_db
+    _seed_dispute_classes(initialized_db)
+    with patch("bubo.mcp_server.load_review_config", return_value=cfg):
+        out = mcp_server.get_dispute_classes(project="g/r")
     classes = {c["category"]: c for c in out["classes"]}
     assert classes["documentation"]["dispute_rate"] == 0.6
     assert classes["documentation"]["would_suppress"] is True
     assert classes["security"]["would_suppress"] is False  # 0.4 < 0.5
 
 
-def test_get_dispute_classes_falls_back_to_raw_when_config_unreadable() -> None:
+def test_get_dispute_classes_falls_back_to_raw_when_config_unreadable(initialized_db: Path) -> None:
     from bubo.config_values import ConfigError
 
-    original_db = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            _seed_dispute_classes(Path(tmp) / "reviewer.sqlite")
-            with patch(
-                "bubo.mcp_server.load_review_config",
-                side_effect=ConfigError("no config"),
-            ):
-                out = mcp_server.get_dispute_classes(project="g/r")
-    finally:
-        paths.DB = original_db
+    _seed_dispute_classes(initialized_db)
+    with patch(
+        "bubo.mcp_server.load_review_config",
+        side_effect=ConfigError("no config"),
+    ):
+        out = mcp_server.get_dispute_classes(project="g/r")
     # No config → raw stats only, no would_suppress flag anywhere.
     assert all("would_suppress" not in c for c in out["classes"])
     doc = next(c for c in out["classes"] if c["category"] == "documentation")
     assert doc["dispute_rate"] == 0.6
 
 
-def test_get_dispute_classes_does_not_init_db() -> None:
+def test_get_dispute_classes_does_not_init_db(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Mirrors get_governance_report: read-only, must not create the DB file.
-    original_db = paths.DB
-    try:
-        paths.DB = Path(paths.WORK) / "missing-dispute" / "reviewer.sqlite"
-        with (
-            patch(
-                "bubo.mcp_server.load_review_config",
-                return_value=ReviewConfig(),
-            ),
-            pytest.raises(sqlite3.OperationalError),
-        ):
-            mcp_server.get_dispute_classes(project="g/r")
-        assert not paths.DB.exists()  # mode=ro never creates the file
-    finally:
-        paths.DB = original_db
+    missing_db = isolated_db.parent / "missing-dispute" / "reviewer.sqlite"
+    monkeypatch.setattr(paths, "DB", missing_db)
+    with (
+        patch(
+            "bubo.mcp_server.load_review_config",
+            return_value=ReviewConfig(),
+        ),
+        pytest.raises(sqlite3.OperationalError),
+    ):
+        mcp_server.get_dispute_classes(project="g/r")
+    assert not missing_db.exists()  # mode=ro never creates the file
 
 
 # ---------------------------------------------------------------------------

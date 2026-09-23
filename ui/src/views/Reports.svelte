@@ -41,6 +41,11 @@
       <input type="checkbox" bind:checked={exec} /> exec rollup
     </label>
   </div>
+  {#if current?.audit_truncated}
+    <p class="text-sm text-muted">
+      Showing the newest {num(current.audit.length)} of {num(current.audit_total)} audit rows; report totals cover the full window.
+    </p>
+  {/if}
 
   {#if exec}
     <!-- Exec rollup preset: big numbers + sparklines. -->

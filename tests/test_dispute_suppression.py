@@ -7,25 +7,14 @@ The pure filter behaviour lives in ``test_inline_review.py``.
 
 from __future__ import annotations
 
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path
+from contextlib import nullcontext
 from unittest.mock import patch
 
-from bubo import db, paths
+import pytest
 
+from bubo import db
 
-@contextmanager
-def _temp_db() -> Iterator[None]:
-    original = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            db.init_db()
-            yield
-    finally:
-        paths.DB = original
+pytestmark = pytest.mark.usefixtures("initialized_db")
 
 
 def _outcome(*, disputed: bool = False, false_positive: bool = False) -> dict[str, object]:
@@ -99,7 +88,7 @@ def _seed_sync_failure(*, project: str, category: str, index: int) -> None:
 
 
 def test_disputed_class_crossing_threshold_is_suppressed() -> None:
-    with _temp_db():
+    with nullcontext():
         # 5 documentation findings, 3 disputed → rate 0.6 ≥ 0.5.
         for i in range(3):
             _seed_finding(project="g/r", category="documentation", index=i, disputed=True)
@@ -112,7 +101,7 @@ def test_disputed_class_crossing_threshold_is_suppressed() -> None:
 
 
 def test_false_positive_counts_as_a_dispute() -> None:
-    with _temp_db():
+    with nullcontext():
         # 3 marked false_positive (without `disputed`) + 2 accepted → 0.6.
         for i in range(3):
             _seed_finding(project="g/r", category="style", index=i, false_positive=True)
@@ -125,7 +114,7 @@ def test_false_positive_counts_as_a_dispute() -> None:
 
 
 def test_class_below_threshold_is_kept() -> None:
-    with _temp_db():
+    with nullcontext():
         # 5 security findings, 2 disputed → rate 0.4 < 0.5.
         for i in range(2):
             _seed_finding(project="g/r", category="security", index=i, disputed=True)
@@ -138,7 +127,7 @@ def test_class_below_threshold_is_kept() -> None:
 
 
 def test_class_below_min_samples_is_kept_even_at_full_dispute() -> None:
-    with _temp_db():
+    with nullcontext():
         # 4 performance findings, all disputed → rate 1.0 but only 4 samples.
         for i in range(4):
             _seed_finding(project="g/r", category="performance", index=i, disputed=True)
@@ -149,7 +138,7 @@ def test_class_below_min_samples_is_kept_even_at_full_dispute() -> None:
 
 
 def test_sync_failure_rows_dilute_the_denominator() -> None:
-    with _temp_db():
+    with nullcontext():
         # 3 genuine disputes (≥ min_samples) but 5 sync-failure rows drag the
         # rate to 3/8 = 0.375 < 0.5, so the class is NOT suppressed. This
         # pins the conservative, under-suppressing bias.
@@ -164,7 +153,7 @@ def test_sync_failure_rows_dilute_the_denominator() -> None:
 
 
 def test_suppression_is_scoped_per_project() -> None:
-    with _temp_db():
+    with nullcontext():
         # Project A disputes "documentation" hard; project B never does.
         for i in range(5):
             _seed_finding(project="a/repo", category="documentation", index=i, disputed=True)
@@ -211,8 +200,11 @@ def test_post_or_plan_does_not_consult_db_when_disabled() -> None:
             return None  # forces SKIPPED, no real API calls
 
     # The poller imports the symbol by name, so patch it on the poller module.
-    with _temp_db(), patch.object(
-        poller, "disputed_finding_classes", side_effect=AssertionError("must not be consulted")
+    with (
+        nullcontext(),
+        patch.object(
+            poller, "disputed_finding_classes", side_effect=AssertionError("must not be consulted")
+        ),
     ):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
@@ -271,7 +263,7 @@ def test_post_or_plan_suppresses_a_disputed_class_when_enabled() -> None:
     def _capture(event: str, **fields: object) -> None:
         events.append((event, fields))
 
-    with _temp_db():
+    with nullcontext():
         # Build outcome history: 3 of 5 documentation findings disputed → 0.6.
         for i in range(3):
             _seed_finding(project="g/r", category="documentation", index=i, disputed=True)
@@ -291,7 +283,8 @@ def test_post_or_plan_suppresses_a_disputed_class_when_enabled() -> None:
     # Dropped before any provider call (the _Provider methods all raise).
     assert (posted, planned, skipped) == (0, 0, 0)
     filtered = [
-        fields for name, fields in events
+        fields
+        for name, fields in events
         if name == "finding_filtered" and fields.get("reason") == "disputed_class_suppressed"
     ]
     assert len(filtered) == 1

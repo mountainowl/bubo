@@ -16,31 +16,18 @@ Covers the load-bearing guarantees:
 
 from __future__ import annotations
 
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import pytest
 
-from bubo import db, paths, poller
+from bubo import db, poller
 from bubo.config_values import ConfigError
 from bubo.review_config import DEFAULT_VERIFY_LENSES, ReviewConfig, review_config_from_dict
 from bubo.statuses import FindingStatus
 from bubo.verification import Verdict
 
-
-@contextmanager
-def _temp_db() -> Iterator[None]:
-    original = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            db.init_db()
-            yield
-    finally:
-        paths.DB = original
+pytestmark = pytest.mark.usefixtures("initialized_db")
 
 
 def _finding(line: int = 1) -> str:
@@ -103,8 +90,11 @@ def _refute_verdicts() -> list[Verdict]:
 
 def test_verify_off_never_calls_seam_and_plans_normally() -> None:
     cfg = ReviewConfig(dry_run=True, verify_findings=False)
-    with _temp_db(), patch.object(
-        poller, "run_verification", side_effect=AssertionError("verifier must not run")
+    with (
+        nullcontext(),
+        patch.object(
+            poller, "run_verification", side_effect=AssertionError("verifier must not run")
+        ),
     ):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
@@ -128,9 +118,11 @@ def test_verify_refute_drops_and_records_refuted() -> None:
     cfg = ReviewConfig(dry_run=True, verify_findings=True, verify_min_votes=2)
     events: list[tuple[str, dict[str, object]]] = []
 
-    with _temp_db(), patch.object(
-        poller, "run_verification", return_value=_refute_verdicts()
-    ), patch.object(poller, "log", lambda e, **f: events.append((e, f))):
+    with (
+        nullcontext(),
+        patch.object(poller, "run_verification", return_value=_refute_verdicts()),
+        patch.object(poller, "log", lambda e, **f: events.append((e, f))),
+    ):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
             token="t",
@@ -152,7 +144,7 @@ def test_verify_refute_drops_and_records_refuted() -> None:
 def test_verify_refute_does_not_post() -> None:
     cfg = ReviewConfig(dry_run=False, verify_findings=True, verify_min_votes=2)
     provider = _PostProvider()
-    with _temp_db(), patch.object(poller, "run_verification", return_value=_refute_verdicts()):
+    with nullcontext(), patch.object(poller, "run_verification", return_value=_refute_verdicts()):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
             token="t",
@@ -171,7 +163,7 @@ def test_verify_refute_does_not_post() -> None:
 def test_verify_real_posts_and_persists_verdict() -> None:
     cfg = ReviewConfig(dry_run=False, verify_findings=True, verify_min_votes=2)
     provider = _PostProvider()
-    with _temp_db(), patch.object(poller, "run_verification", return_value=_real_verdicts()):
+    with nullcontext(), patch.object(poller, "run_verification", return_value=_real_verdicts()):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
             token="t",
@@ -205,8 +197,10 @@ def test_verify_cap_posts_extra_findings_unverified() -> None:
         return _real_verdicts()
 
     events: list[tuple[str, dict[str, object]]] = []
-    with _temp_db(), patch.object(poller, "run_verification", side_effect=_fake), patch.object(
-        poller, "log", lambda e, **f: events.append((e, f))
+    with (
+        nullcontext(),
+        patch.object(poller, "run_verification", side_effect=_fake),
+        patch.object(poller, "log", lambda e, **f: events.append((e, f))),
     ):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
@@ -240,7 +234,7 @@ def test_verify_partial_outage_does_not_refute() -> None:
         Verdict(lens="in_diff", real=False, confidence=0.0, reason="", ok=False),
         Verdict(lens="reproduce", real=False, confidence=0.0, reason="", ok=False),
     ]
-    with _temp_db(), patch.object(poller, "run_verification", return_value=mixed):
+    with nullcontext(), patch.object(poller, "run_verification", return_value=mixed):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
             token="t",
@@ -261,7 +255,7 @@ def test_verify_all_checks_failed_posts_unverified() -> None:
         Verdict(lens="correctness", real=False, confidence=0.0, reason="", ok=False),
         Verdict(lens="in_diff", real=False, confidence=0.0, reason="", ok=False),
     ]
-    with _temp_db(), patch.object(poller, "run_verification", return_value=failed):
+    with nullcontext(), patch.object(poller, "run_verification", return_value=failed):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
             token="t",

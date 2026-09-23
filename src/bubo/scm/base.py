@@ -13,6 +13,7 @@ requests and GitHub pull requests.
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 from typing import Protocol
 
@@ -21,6 +22,122 @@ from bubo.review_config import ReviewConfig
 from bubo.secrets import redact_secrets
 from bubo.subproc import run_bounded
 from bubo.types import JsonObject
+
+_DIFF_GIT_HEADER = re.compile(r"^diff --git a/(.+) b/(.+)$")
+
+
+def change_base_sha(change: JsonObject) -> str:
+    """Return the immutable base SHA supplied by either SCM provider."""
+    base = change.get("base")
+    value = base.get("sha") if isinstance(base, dict) else None
+    if isinstance(value, str):
+        return value
+    refs = change.get("diff_refs")
+    value = refs.get("base_sha") if isinstance(refs, dict) else None
+    if isinstance(value, str):
+        return value
+    return ""
+
+
+def change_head_sha(change: JsonObject) -> str:
+    """Return the immutable head SHA supplied by either SCM provider."""
+    head = change.get("head")
+    value = head.get("sha") if isinstance(head, dict) else None
+    if isinstance(value, str):
+        return value
+    refs = change.get("diff_refs")
+    value = refs.get("head_sha") if isinstance(refs, dict) else None
+    if isinstance(value, str):
+        return value
+    sha = change.get("sha")
+    return sha if isinstance(sha, str) else ""
+
+
+def native_changed_lines(change: JsonObject, repo: Path) -> dict[str, JsonObject] | None:
+    """Build the added-line map from a checked-out immutable base/head diff.
+
+    ``None`` deliberately means callers must use their provider API fallback.
+    The native path is valid only when both advertised commit objects are
+    present locally; it never invokes MCP or attempts a remote fetch.
+    """
+    base_sha = change_base_sha(change)
+    head_sha = change_head_sha(change)
+    if not base_sha or not head_sha or not (repo / ".git").exists():
+        return None
+    try:
+        for sha in (base_sha, head_sha):
+            object_check = run_bounded(
+                ["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo, timeout=30
+            )
+            if object_check.returncode:
+                return None
+        result = run_bounded(
+            [
+                "git",
+                "diff",
+                "--unified=0",
+                "--no-ext-diff",
+                "--no-color",
+                base_sha,
+                head_sha,
+            ],
+            cwd=repo,
+            timeout=60,
+        )
+        if result.returncode:
+            return None
+        return _changed_lines_from_native_diff(result.stdout)
+    except Exception:
+        return None
+
+
+def _changed_lines_from_native_diff(diff: str) -> dict[str, JsonObject] | None:
+    """Parse native ``git diff`` output into the provider-neutral line map."""
+    entries: list[tuple[str | None, str | None, str]] = []
+    old_path: str | None = None
+    new_path: str | None = None
+    chunk: list[str] = []
+    saw_header = False
+
+    def finish() -> None:
+        if new_path is not None:
+            entries.append((new_path, old_path, "\n".join(chunk)))
+
+    for line in diff.splitlines():
+        # Git quotes paths needing escapes. Parsing those formats partially
+        # could silently anchor a finding to the wrong file, so use the
+        # provider diff fallback until a complete decoder is available.
+        if line.startswith("diff --git "):
+            match = _DIFF_GIT_HEADER.match(line)
+            if not match:
+                return None
+            finish()
+            saw_header = True
+            old_path, new_path = match.group(1), match.group(2)
+            chunk = []
+            continue
+        if not saw_header:
+            continue
+        if line.startswith("rename from "):
+            old_path = line.removeprefix("rename from ")
+        elif line.startswith("rename to "):
+            new_path = line.removeprefix("rename to ")
+        elif line == "+++ /dev/null":
+            # Providers retain the removed filename in their file map too;
+            # it has no anchorable new lines but still counts as changed.
+            new_path = old_path
+        elif line.startswith("+++ b/"):
+            new_path = line[6:]
+        elif line.startswith("--- a/"):
+            old_path = line[6:]
+        chunk.append(line)
+    finish()
+    if diff and not saw_header:
+        return None
+    from bubo.findings import changed_lines_from_files
+
+    return changed_lines_from_files(entries)
+
 
 # The finding-output contract shared by every provider's review prompt. Only
 # the change-specific header differs per provider; the JSON shape the agent

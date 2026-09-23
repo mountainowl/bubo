@@ -8,25 +8,16 @@ explicit timestamps for determinism), and the assembly + formatters in
 from __future__ import annotations
 
 import sqlite3
-import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from bubo import db, paths
 
-
-@contextmanager
-def _temp_db() -> Iterator[None]:
-    original = paths.DB
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            paths.DB = Path(tmp) / "reviewer.sqlite"
-            db.init_db()
-            yield
-    finally:
-        paths.DB = original
+pytestmark = pytest.mark.usefixtures("initialized_db")
 
 
 def _ts(hours_ago: float = 1.0) -> str:
@@ -35,7 +26,7 @@ def _ts(hours_ago: float = 1.0) -> str:
     return (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
 
 
-def _seed() -> None:
+def _seed() -> str:
     """Seed one realistic window: 1 run (likely_ai+sensitive), 3 findings, outcomes, a decision."""
     when = _ts(1.0)
     with sqlite3.connect(paths.DB) as con:
@@ -45,13 +36,32 @@ def _seed() -> None:
                provenance_band,provenance_source,provenance_confidence,
                provenance_signals,sensitive_paths)
                values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("run1", "g/r", 1, "sha1", "success", "gpt-5.5", "diff", 1, when, when,
-             1000, 0.5, "likely_ai", "trailer", "declared",
-             '["Generated-by: GPT-4"]', '["payments/charge.py"]'),
+            (
+                "run1",
+                "g/r",
+                1,
+                "sha1",
+                "success",
+                "gpt-5.5",
+                "diff",
+                1,
+                when,
+                when,
+                1000,
+                0.5,
+                "likely_ai",
+                "trailer",
+                "declared",
+                '["Generated-by: GPT-4"]',
+                '["payments/charge.py"]',
+            ),
         )
         # 3 findings on the SAME run — the audit-row no-double-count case.
-        for i, sev, status in [(0, "blocking", "posted"), (1, "non-blocking", "posted"),
-                               (2, "blocking", "skipped")]:
+        for i, sev, status in [
+            (0, "blocking", "posted"),
+            (1, "non-blocking", "posted"),
+            (2, "blocking", "skipped"),
+        ]:
             con.execute(
                 """insert into review_findings(project,iid,sha,fingerprint,file,line,
                    status,body,updated_at,severity)
@@ -70,16 +80,30 @@ def _seed() -> None:
             """insert into governance_decisions(run_id,project,iid,sha,mode,action,
                triggered,matched_rule,rigor_injected,band,sensitive_paths,reason,created_at)
                values(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("run1", "g/r", 1, "sha1", "soft", "flag", 1, "band+sensitive", 1,
-             "likely_ai", '["payments/charge.py"]', "test", when),
+            (
+                "run1",
+                "g/r",
+                1,
+                "sha1",
+                "soft",
+                "flag",
+                1,
+                "band+sensitive",
+                1,
+                "likely_ai",
+                '["payments/charge.py"]',
+                "test",
+                when,
+            ),
         )
+    return when
 
 
 # --- DB readers (run against bubo.db directly) ------------------------------
 
 
 def test_provenance_summary_counts_by_band_and_source() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed()
         out = db.provenance_summary(since_hours=24, project="g/r")
     assert out["runs_total"] == 1
@@ -89,7 +113,7 @@ def test_provenance_summary_counts_by_band_and_source() -> None:
 
 
 def test_outcomes_summary_raw_counts() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed()
         out = db.outcomes_summary(since_hours=24)
     assert out["total"] == 3
@@ -99,7 +123,7 @@ def test_outcomes_summary_raw_counts() -> None:
 
 
 def test_noise_trend_daily_buckets() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed()
         rows = db.noise_trend(since_hours=24)
     assert len(rows) == 1
@@ -108,7 +132,7 @@ def test_noise_trend_daily_buckets() -> None:
 
 
 def test_roi_proxy_counts_accepted() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed()
         out = db.roi_proxy(since_hours=24)
     assert out["findings_total"] == 3
@@ -118,7 +142,7 @@ def test_roi_proxy_counts_accepted() -> None:
 
 
 def test_policy_decisions_summary_reads_table() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed()
         out = db.policy_decisions_summary(since_hours=24)
     assert out["available"] is True
@@ -127,25 +151,83 @@ def test_policy_decisions_summary_reads_table() -> None:
     assert out["by_mode"] == {"soft": 1}
 
 
-def test_audit_rows_one_per_run_no_double_count() -> None:
-    with _temp_db():
-        _seed()
+def test_audit_rows_preserve_correlated_count_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bubo import db_reporting
+
+    with nullcontext():
+        seeded_at = _seed()
+        # A run without child rows was returned as zeroes by the prior
+        # correlated subqueries; the grouped-query rewrite must preserve that.
+        with sqlite3.connect(paths.DB) as connection:
+            empty_at = _ts(0.5)
+            connection.execute(
+                """insert into review_runs(run_id,project,iid,sha,status,dry_run,
+                   started_at) values(?,?,?,?,?,?,?)""",
+                ("empty", "g/r", 2, "sha2", "success", 0, empty_at),
+            )
+        monkeypatch.setattr(db_reporting, "_AUDIT_PAGE_SIZE", 1)
         rows = db.audit_rows(since_hours=24)
-    # One run with three findings → exactly one audit row, tokens counted once.
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["tokens_total"] == 1000  # NOT 3000
-    assert row["findings_total"] == 3
-    assert row["findings_posted"] == 2
-    assert row["outcomes_resolved"] == 2
-    assert row["outcomes_disputed"] == 1
-    assert row["sensitive_paths_count"] == 1
-    assert row["policy_action"] == "flag"
-    assert row["provenance_band"] == "likely_ai"
+    # Reference output from the pre-pagination correlated-query contract.
+    assert rows == [
+        {
+            "run_id": "empty",
+            "project": "g/r",
+            "iid": 2,
+            "sha": "sha2",
+            "started_at": empty_at,
+            "finished_at": None,
+            "status": "success",
+            "model": None,
+            "review_mode": None,
+            "dry_run": False,
+            "provenance_band": None,
+            "provenance_source": None,
+            "provenance_confidence": None,
+            "sensitive_paths_count": 0,
+            "tokens_total": 0,
+            "cost_usd": 0.0,
+            "findings_total": 0,
+            "findings_posted": 0,
+            "outcomes_resolved": 0,
+            "outcomes_disputed": 0,
+            "outcomes_false_positive": 0,
+            "policy_action": None,
+            "policy_mode": None,
+            "tone": "terse",
+        },
+        {
+            "run_id": "run1",
+            "project": "g/r",
+            "iid": 1,
+            "sha": "sha1",
+            "started_at": seeded_at,
+            "finished_at": seeded_at,
+            "status": "success",
+            "model": "gpt-5.5",
+            "review_mode": "diff",
+            "dry_run": True,
+            "provenance_band": "likely_ai",
+            "provenance_source": "trailer",
+            "provenance_confidence": "declared",
+            "sensitive_paths_count": 1,
+            "tokens_total": 1000,
+            "cost_usd": 0.5,
+            "findings_total": 3,
+            "findings_posted": 2,
+            "outcomes_resolved": 2,
+            "outcomes_disputed": 1,
+            "outcomes_false_positive": 0,
+            "policy_action": "flag",
+            "policy_mode": "soft",
+            "tone": "terse",
+        },
+    ]
 
 
 def test_window_excludes_old_rows() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed()
         # A 1-hour window excludes the ~1h-old seed (seeded at now-1h).
         narrow = db.provenance_summary(since_hours=1)
@@ -159,19 +241,21 @@ def test_window_excludes_old_rows() -> None:
 
 def test_readers_do_not_mutate_schema() -> None:
     # Reporting must be read-only: running readers creates no tables/columns.
-    with _temp_db():
+    with nullcontext():
         _seed()
         with sqlite3.connect(paths.DB) as con:
-            before = {r[0] for r in con.execute(
-                "select name from sqlite_master where type='table'"
-            ).fetchall()}
+            before = {
+                r[0]
+                for r in con.execute("select name from sqlite_master where type='table'").fetchall()
+            }
         db.provenance_summary(since_hours=24)
         db.audit_rows(since_hours=24)
         db.policy_decisions_summary(since_hours=24)
         with sqlite3.connect(paths.DB) as con:
-            after = {r[0] for r in con.execute(
-                "select name from sqlite_master where type='table'"
-            ).fetchall()}
+            after = {
+                r[0]
+                for r in con.execute("select name from sqlite_master where type='table'").fetchall()
+            }
     assert before == after
 
 
@@ -181,21 +265,65 @@ def test_readers_do_not_mutate_schema() -> None:
 def test_build_report_assembles_all_sections_with_derived_rates() -> None:
     from bubo import report
 
-    with _temp_db():
+    with nullcontext():
         _seed()
         rep = report.build_report(since_hours=24, project="g/r", generated_at="fixed")
 
     assert rep["meta"]["generated_at"] == "fixed"
     assert rep["meta"]["schema_version"] == report.SCHEMA_VERSION
     assert set(rep) >= {
-        "meta", "reviews", "provenance", "outcomes", "noise_trend",
-        "roi", "policy_decisions", "audit",
+        "meta",
+        "reviews",
+        "provenance",
+        "outcomes",
+        "noise_trend",
+        "roi",
+        "policy_decisions",
+        "audit",
     }
     assert rep["provenance"]["by_band"] == {"likely_ai": 1}
     # Derived rate: 2 resolved / 3 outcomes.
     assert rep["outcomes"]["accept_rate"] == round(2 / 3, 4)
     assert rep["policy_decisions"]["available"] is True
     assert len(rep["audit"]) == 1
+
+
+def test_build_report_reuses_supplied_readonly_connection() -> None:
+    from bubo import report
+
+    with nullcontext():
+        _seed()
+        expected = report.build_report(since_hours=24, project="g/r", generated_at="fixed")
+        with db.connect_db(readonly=True) as connection:
+            actual = report.build_report(
+                since_hours=24,
+                project="g/r",
+                generated_at="fixed",
+                connection=connection,
+            )
+
+    assert actual == expected
+
+
+def test_build_report_preloaded_audit_is_byte_equivalent() -> None:
+    from bubo import report
+
+    with nullcontext():
+        _seed()
+        expected = report.to_json(
+            report.build_report(since_hours=24, project="g/r", generated_at="fixed")
+        )
+        history = db.audit_rows(since_hours=24 * 366)
+        actual = report.to_json(
+            report.build_report(
+                since_hours=24,
+                project="g/r",
+                generated_at="fixed",
+                audit_history=history,
+            )
+        )
+
+    assert actual == expected
 
 
 def test_to_json_is_deterministic() -> None:
@@ -276,7 +404,7 @@ def test_cli_report_missing_db_exits_nonzero(tmp_path: Path, capsys) -> None:  #
 def test_mcp_get_governance_report_returns_sections() -> None:
     from bubo import mcp_server
 
-    with _temp_db():
+    with nullcontext():
         _seed()
         rep = mcp_server.get_governance_report(since_hours=24)
     assert "meta" in rep
@@ -312,7 +440,7 @@ def test_parse_bound_rejects_garbage() -> None:
 
 def test_until_date_only_includes_whole_day() -> None:
     # B1: a run at 18:30 on the 16th must be inside `--until 2026-06-16`.
-    with _temp_db():
+    with nullcontext():
         _seed_run_at("2026-06-16T18:30:00+00:00", run_id="rwin")
         out = db.provenance_summary(since="2026-06-16", until="2026-06-16")
     assert out["runs_total"] == 1
@@ -321,7 +449,7 @@ def test_until_date_only_includes_whole_day() -> None:
 def test_reviews_section_honors_long_explicit_window() -> None:
     # M2: a reviewed_mr 5 months old must appear in a Q1 report's `reviews`
     # section (metrics_summary used to clamp to 30 days and ignore since/until).
-    with _temp_db():
+    with nullcontext():
         with sqlite3.connect(paths.DB) as con:
             con.execute(
                 "insert into reviewed_mrs(project,iid,sha,status,updated_at) values(?,?,?,?,?)",
@@ -334,12 +462,112 @@ def test_reviews_section_honors_long_explicit_window() -> None:
 
 
 def test_audit_rows_limit_keeps_newest() -> None:
-    with _temp_db():
+    with nullcontext():
         _seed_run_at("2026-06-01T00:00:00+00:00", run_id="old")
         _seed_run_at("2026-06-20T00:00:00+00:00", run_id="new")
         rows = db.audit_rows(since="2026-05-01", until="2026-06-30", limit=1)
     assert len(rows) == 1
     assert rows[0]["run_id"] == "new"  # newest kept, not oldest
+
+
+def test_build_report_limit_reports_full_audit_total_and_newest_row() -> None:
+    from bubo import report
+
+    with nullcontext():
+        _seed_run_at("2026-06-01T00:00:00+00:00", run_id="old")
+        _seed_run_at("2026-06-20T00:00:00+00:00", run_id="new")
+        rep = report.build_report(
+            since="2026-05-01", until="2026-06-30", limit=1, generated_at="fixed"
+        )
+        with sqlite3.connect(paths.DB) as connection:
+            plan = " ".join(
+                row[3]
+                for row in connection.execute(
+                    "explain query plan select count(*) from review_runs "
+                    "where started_at >= ? and started_at <= ? "
+                    "and (? is null or project = ?)",
+                    ("2026-05-01", "2026-06-30", None, None),
+                )
+            )
+
+    assert rep["audit_total"] == 2
+    assert rep["audit_truncated"] is True
+    assert [row["run_id"] for row in rep["audit"]] == ["new"]
+    assert "review_runs_started_at_run_id_idx" in plan
+
+
+def test_build_report_owned_connection_keeps_count_and_rows_in_one_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bubo import report
+
+    with nullcontext():
+        _seed_run_at("2026-06-01T00:00:00+00:00", run_id="old")
+        _seed_run_at("2026-06-20T00:00:00+00:00", run_id="new")
+        original_count = db.audit_rows_count
+
+        def count_then_insert(
+            *,
+            since_hours: int = 24,
+            since: str | None = None,
+            until: str | None = None,
+            project: str | None = None,
+            connection: sqlite3.Connection | None = None,
+        ) -> int:
+            total = original_count(
+                since_hours=since_hours,
+                since=since,
+                until=until,
+                project=project,
+                connection=connection,
+            )
+            with sqlite3.connect(paths.DB) as writer:
+                writer.execute(
+                    "insert into review_runs(run_id,project,iid,sha,status,dry_run,started_at) "
+                    "values(?,?,?,?,?,?,?)",
+                    ("concurrent", "g/r", 10, "newsha", "success", 1, "2026-06-25T00:00:00+00:00"),
+                )
+            return total
+
+        monkeypatch.setattr(db, "audit_rows_count", count_then_insert)
+        rep = report.build_report(
+            since="2026-05-01", until="2026-06-30", limit=1, generated_at="fixed"
+        )
+
+    assert rep["audit_total"] == 2
+    assert rep["audit_truncated"] is True
+    assert [row["run_id"] for row in rep["audit"]] == ["new"]
+
+
+def test_cli_report_limit_reports_full_audit_total(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    import json as _json
+
+    from bubo import cli
+    from bubo.cli import _retarget_paths
+
+    with _restore_paths():
+        _retarget_paths(tmp_path)
+        db.init_db()
+        _seed_run_at("2026-06-01T00:00:00+00:00", run_id="old")
+        _seed_run_at("2026-06-20T00:00:00+00:00", run_id="new")
+        rc = cli.main(
+            [
+                "report",
+                "--root",
+                str(tmp_path),
+                "--since",
+                "2026-05-01",
+                "--until",
+                "2026-06-30",
+                "--limit",
+                "1",
+            ]
+        )
+    payload = _json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["audit_total"] == 2
+    assert payload["audit_truncated"] is True
+    assert [row["run_id"] for row in payload["audit"]] == ["new"]
 
 
 def test_readonly_readers_do_not_create_db() -> None:
@@ -412,7 +640,7 @@ def test_latency_summary_percentiles_from_fixed_rows() -> None:
         ("2026-06-16T12:00:40+00:00", 40),
         ("2026-06-16T12:01:40+00:00", 100),
     ]
-    with _temp_db():
+    with nullcontext():
         for i, (fin, _secs) in enumerate(fins):
             _seed_run_with_duration(run_id=f"r{i}", started_at=base, finished_at=fin)
         out = db.latency_summary(since="2026-06-01", until="2026-06-30")
@@ -425,7 +653,7 @@ def test_latency_summary_percentiles_from_fixed_rows() -> None:
 
 def test_latency_summary_ignores_unfinished_runs() -> None:
     base = "2026-06-16T12:00:00+00:00"
-    with _temp_db():
+    with nullcontext():
         _seed_run_with_duration(
             run_id="done", started_at=base, finished_at="2026-06-16T12:00:30+00:00"
         )
@@ -436,7 +664,7 @@ def test_latency_summary_ignores_unfinished_runs() -> None:
 
 
 def test_latency_summary_empty_window_is_all_zero() -> None:
-    with _temp_db():
+    with nullcontext():
         out = db.latency_summary(since="2026-06-01", until="2026-06-30")
     assert out == {
         "count": 0,
@@ -454,7 +682,7 @@ def test_build_report_has_latency_section_rounded_2dp() -> None:
     from bubo import report
 
     base = "2026-06-16T12:00:00+00:00"
-    with _temp_db():
+    with nullcontext():
         # One run of exactly 1.5s so 2dp rounding is observable end-to-end.
         _seed_run_with_duration(
             run_id="r", started_at=base, finished_at="2026-06-16T12:00:01.5+00:00"
@@ -470,6 +698,7 @@ def test_build_report_has_latency_section_rounded_2dp() -> None:
 
 def _seed_dispute_history(project: str = "g/r") -> None:
     """documentation: 3/5 disputed (0.6); security: 2/5 disputed (0.4)."""
+
     def _add(category: str, index: int, *, disputed: bool) -> None:
         fp = f"{category}-{index}"
         db.record_finding(
@@ -512,7 +741,7 @@ def _seed_dispute_history(project: str = "g/r") -> None:
 def test_dispute_classes_raw_when_no_thresholds() -> None:
     from bubo import report
 
-    with _temp_db():
+    with nullcontext():
         _seed_dispute_history()
         rep = report.build_report(project="g/r", generated_at="fixed")
     classes = rep["dispute_classes"]
@@ -526,7 +755,7 @@ def test_dispute_classes_raw_when_no_thresholds() -> None:
 def test_dispute_classes_would_suppress_is_truthful() -> None:
     from bubo import report
 
-    with _temp_db():
+    with nullcontext():
         _seed_dispute_history()
         rep = report.build_report(
             project="g/r",
@@ -549,7 +778,7 @@ def test_dispute_classes_thin_class_not_suppressed_despite_full_rate() -> None:
     """
     from bubo import report
 
-    with _temp_db():
+    with nullcontext():
         # 3/3 documentation findings disputed → rate 1.0 but only 3 samples.
         for i in range(3):
             db.record_finding(
@@ -557,8 +786,7 @@ def test_dispute_classes_thin_class_not_suppressed_despite_full_rate() -> None:
                 iid=1,
                 sha="sha",
                 fingerprint=f"doc-{i}",
-                finding={"category": "documentation", "file": "f.py", "line": 1,
-                         "confidence": 0.9},
+                finding={"category": "documentation", "file": "f.py", "line": 1, "confidence": 0.9},
                 status=db.FindingStatus.POSTED,
                 body="b",
                 discussion_id=f"d-doc-{i}",
@@ -595,7 +823,7 @@ def test_dispute_classes_thin_class_not_suppressed_despite_full_rate() -> None:
 def test_dispute_classes_empty_when_project_none() -> None:
     from bubo import report
 
-    with _temp_db():
+    with nullcontext():
         _seed_dispute_history()
         rep = report.build_report(project=None, generated_at="fixed")
     # Per-project section is empty for the all-projects report.
@@ -605,7 +833,7 @@ def test_dispute_classes_empty_when_project_none() -> None:
 def test_acknowledgements_mirror_by_status() -> None:
     from bubo import report
 
-    with _temp_db():
+    with nullcontext():
         with sqlite3.connect(paths.DB) as con:
             for status, n in [("no_findings", 2), ("success", 1), ("failed", 3)]:
                 for i in range(n):
@@ -628,11 +856,10 @@ def test_acknowledgements_mirror_by_status() -> None:
 def test_acknowledgements_zero_for_absent_status() -> None:
     from bubo import report
 
-    with _temp_db():
+    with nullcontext():
         with sqlite3.connect(paths.DB) as con:
             con.execute(
-                "insert into reviewed_mrs(project,iid,sha,status,updated_at)"
-                " values(?,?,?,?,?)",
+                "insert into reviewed_mrs(project,iid,sha,status,updated_at) values(?,?,?,?,?)",
                 ("g/r", 1, "s", "success", "2026-06-16T12:00:00+00:00"),
             )
         rep = report.build_report(
@@ -646,12 +873,22 @@ def test_acknowledgements_zero_for_absent_status() -> None:
 def test_section_order_is_fixed() -> None:
     from bubo import report
 
-    with _temp_db():
+    with nullcontext():
         _seed()
         rep = report.build_report(since_hours=24, project="g/r", generated_at="fixed")
     assert list(rep) == [
-        "meta", "reviews", "provenance", "outcomes", "noise_trend",
-        "roi", "latency", "dispute_classes", "policy_decisions", "audit",
+        "meta",
+        "reviews",
+        "provenance",
+        "outcomes",
+        "noise_trend",
+        "roi",
+        "latency",
+        "dispute_classes",
+        "policy_decisions",
+        "audit",
+        "audit_total",
+        "audit_truncated",
     ]
 
 
@@ -660,8 +897,13 @@ def test_to_csv_dispute_classes_section() -> None:
 
     rep = {
         "dispute_classes": [
-            {"category": "documentation", "total": 5, "rejected": 3,
-             "dispute_rate": 0.6, "would_suppress": True},
+            {
+                "category": "documentation",
+                "total": 5,
+                "rejected": 3,
+                "dispute_rate": 0.6,
+                "would_suppress": True,
+            },
             {"category": "security", "total": 5, "rejected": 2, "dispute_rate": 0.4},
         ]
     }

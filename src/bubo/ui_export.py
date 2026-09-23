@@ -33,14 +33,9 @@ The document's top-level sections, in fixed emission order: ``meta``,
 from __future__ import annotations
 
 import re
-import shutil
 import sqlite3
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import fields, is_dataclass
 from importlib import metadata
-from pathlib import Path
 from typing import Any
 
 from bubo import db, paths, report
@@ -76,82 +71,42 @@ def _installed_version() -> str:
         return "unknown"
 
 
-def _health(timeout_seconds: int) -> JsonObject:
-    """Derive the dashboard health pill without mutating state.
-
-    Reimplements :func:`bubo.poller.check_health`'s verdict logic against
-    :func:`bubo.db.latest_reviewed_row` so we never call the MCP
-    ``health()`` (which runs ``init_db``). ``stale`` when the freshest row is
-    older than ``timeout_seconds * 3`` (one cycle plus jitter), ``ok`` when
-    fresh, ``empty`` on a fresh install with no rows yet.
-    """
-    threshold = timeout_seconds * 3
-    latest = db.latest_reviewed_row()
-    if latest is None:
-        return {"status": "empty", "threshold_seconds": threshold}
-    status, updated_at = latest
-    age = db.status_age_seconds(updated_at)
-    return {
-        "status": "ok" if age <= threshold else "stale",
-        "last_status": status,
-        "last_updated_at": updated_at,
-        "age_seconds": age,
-        "threshold_seconds": threshold,
-    }
+def _health(timeout_seconds: int, connection: sqlite3.Connection) -> JsonObject:
+    """Return the shared poller/UI health calculation without mutating state."""
+    return db.review_health(timeout_seconds, connection=connection)
 
 
-def _review_detail(project: str, iid: int, sha: str, run: JsonObject | None) -> JsonObject:
-    """Embed one review's findings + outcomes + governance + run for offline detail.
-
-    Keyed by ``(project, iid, sha)`` so the detail matches the exact row in
-    the recent-reviews list (never resolving to a different "current" SHA).
-    Outcomes are folded onto each finding by ``fingerprint`` so the SPA does
-    not have to join client-side. ``run`` is the matching audit row (tokens,
-    cost, provenance band/source, started_at/finished_at for the timeline), or
-    ``None`` if no run was recorded for this exact SHA. The readers here SELECT
-    only; some use the writer connection, so :func:`build_data` runs them
-    against a read-only snapshot copy of the DB (never the operator's file).
-    """
-    findings = db.findings_for(project, iid, sha)
-    outcomes = db.outcomes_for(project, iid, sha)
-    by_fp = {o["fingerprint"]: o for o in outcomes}
-    enriched = [{**f, "outcome": by_fp.get(f["fingerprint"])} for f in findings]
-    return {
-        "findings": enriched,
-        "governance": db.governance_decisions_for(project, iid, sha),
-        "run": run,
-    }
-
-
-def _recent_reviews() -> list[JsonObject]:
+def _recent_reviews(
+    connection: sqlite3.Connection, audit_history: list[JsonObject]
+) -> list[JsonObject]:
     """Recent ``reviewed_mrs`` rows, each enriched with embedded detail.
 
     The audit trail (tokens/cost/provenance/run-span per run) is pulled ONCE
     over a wide window and indexed by ``(project, iid, sha)`` so each review's
     detail can carry its run summary without a per-review query.
     """
-    rows = db.list_recent_reviews(limit=RECENT_REVIEWS_LIMIT)
+    rows = db.list_recent_reviews(limit=RECENT_REVIEWS_LIMIT, connection=connection)
+    review_keys = [(row["project"], row["iid"], row["sha"]) for row in rows]
+    details = db.review_details_for(review_keys, connection=connection)
     # One audit pass keyed by (project, iid, sha); newest-first means the first
     # row wins for a re-run SHA (the freshest run summary).
     runs: dict[tuple[str, int, str], JsonObject] = {}
-    for audit in db.audit_rows(since_hours=24 * 366):
+    for audit in audit_history:
         key = (audit["project"], audit["iid"], audit["sha"])
         runs.setdefault(key, audit)
     return [
         {
             **row,
-            "detail": _review_detail(
-                row["project"],
-                row["iid"],
-                row["sha"],
-                runs.get((row["project"], row["iid"], row["sha"])),
-            ),
+            "detail": {
+                **details[(row["project"], row["iid"], row["sha"])],
+                "run": runs.get((row["project"], row["iid"], row["sha"])),
+            },
         }
         for row in rows
     ]
 
 
-def _reports() -> list[JsonObject]:
+def _reports(connection: sqlite3.Connection, audit_history: list[JsonObject]) -> list[JsonObject]:
     """Precompute the full report for each fixed reporting window.
 
     Each entry is ``{label, since_hours, report}`` where ``report`` is the
@@ -164,7 +119,12 @@ def _reports() -> list[JsonObject]:
             {
                 "label": label,
                 "since_hours": since_hours,
-                "report": report.build_report(since_hours=since_hours),
+                "report": report.build_report(
+                    since_hours=since_hours,
+                    connection=connection,
+                    audit_history=audit_history,
+                    limit=1000,
+                ),
             }
         )
     return out
@@ -287,7 +247,7 @@ def _load_config() -> ReviewConfig:
     """
     try:
         return load_review_config(paths.CONFIG)
-    except (ConfigError, OSError, ValueError, TypeError):
+    except ConfigError, OSError, ValueError, TypeError:
         # Display-only: a missing/invalid env.toml must never fail a read-only
         # export. Degrade to the dataclass defaults (what the runtime uses for
         # those fields anyway).
@@ -312,51 +272,11 @@ def _empty_skeleton(version: str) -> JsonObject:
         "version": {"installed": version, "update": None},
         "health": {"status": "empty", "threshold_seconds": cfg.timeout_seconds * 3},
         "inflight": 0,
-        "dashboard": {"recent": [], "reports": []},
+        "dashboard": {"recent": []},
         "reviews": [],
         "reports": [],
         "config": _config_schema(cfg),
     }
-
-
-@contextmanager
-def _readonly_db_snapshot() -> Iterator[None]:
-    """Retarget ``paths.DB`` at a private filesystem copy of the operator DB.
-
-    Several readers we call (``list_recent_reviews``, ``findings_for``,
-    ``count_inflight_workers``, …) open the *writer* connection, which runs
-    ``pragma journal_mode=WAL`` — a write. Against a read-only mount that fails;
-    against a writable one it would touch the operator's DB. Either way the
-    failure path would be swallowed into an empty document, silently losing data
-    in an auditable tool.
-
-    So we ``copy`` the DB file (plus its ``-wal`` sidecar, which carries
-    uncheckpointed rows) into a private temp dir with the filesystem, then point
-    ``paths.DB`` at the copy for the build. Every reader — writer- or
-    readonly-connection — then hits the throwaway copy in a *writable* temp dir,
-    where it can checkpoint the WAL normally; the operator's DB is never opened
-    at all. The ``-shm`` is deliberately NOT copied: SQLite rebuilds it from the
-    copied ``-wal`` in the writable temp dir, and a stale copied ``-shm`` would
-    be worse than none.
-
-    A failure to *read* the source (permission denied, unreadable mount) raises
-    ``OSError`` from :func:`shutil.copy2` and is left to surface — the export
-    must not mask it. Concurrency note: this is a plain file copy, so a copy
-    racing a live poller write can be torn; that is inherent to the
-    "snapshot, not live" design and is acceptable for a read-only export.
-    """
-    original = paths.DB
-    with tempfile.TemporaryDirectory(prefix="bubo-ui-") as tmp:
-        snapshot = Path(tmp) / "snapshot.sqlite"
-        shutil.copy2(original, snapshot)
-        wal = Path(f"{original}-wal")
-        if wal.exists():
-            shutil.copy2(wal, Path(f"{snapshot}-wal"))
-        paths.DB = snapshot
-        try:
-            yield
-        finally:
-            paths.DB = original
 
 
 def build_data() -> JsonObject:
@@ -364,35 +284,40 @@ def build_data() -> JsonObject:
 
     Guards on ``paths.DB.exists()`` first: a missing DB returns the empty
     skeleton without opening any connection (so the export never creates the
-    operator's database). When the DB exists it is snapshotted read-only (see
-    :func:`_readonly_db_snapshot`) so the readers — including the ones that use
-    the writer connection — run against a throwaway copy; this keeps the export
-    genuinely non-mutating and works against a read-only mount.
+    operator's database). When the DB exists one SQLite read-only connection is
+    shared by review/detail queries, so the export never copies database files
+    or retargets global paths.
 
     A DB that exists but is empty yields the same shape with empty aggregates.
-    A DB that exists but is *unreadable as SQLite* (truncated / not a database)
-    degrades to the empty skeleton; a DB file that cannot be *read at all*
-    (permission denied) raises ``OSError`` from the snapshot copy so the CLI
-    surfaces it rather than silently emptying a populated DB.
+    A DB that is unreadable or malformed degrades to the empty skeleton.
     """
     version = _installed_version()
     if not paths.DB.exists():
         return _empty_skeleton(version)
+    # SQLite may report permission denial as the generic DatabaseError. Surface
+    # a clearly unreadable file instead of silently producing an empty export.
+    if paths.DB.stat().st_mode & 0o444 == 0:
+        raise PermissionError(paths.DB)
 
     cfg = _load_config()
     try:
-        with _readonly_db_snapshot():
-            reviews = _recent_reviews()
-            reports = _reports()
-            health = _health(cfg.timeout_seconds)
-            inflight = db.count_inflight_workers()
+        with db.connect_db(readonly=True) as connection:
+            # Pin every reader below to one SQLite snapshot. Without an
+            # explicit transaction, independent SELECTs can observe a writer
+            # that commits midway through the static export.
+            connection.execute("begin")
+            audit_history = db.audit_rows(since_hours=24 * 366, connection=connection)
+            reviews = _recent_reviews(connection, audit_history)
+            reports = _reports(connection, audit_history)
+            # Reports/review details retain only rows they expose; release the
+            # preload container before assembling the export document.
+            del audit_history
+            health = _health(cfg.timeout_seconds, connection)
+            inflight = db.count_inflight_workers(connection=connection)
     except sqlite3.DatabaseError:
-        # The snapshot copy opened but is not a usable SQLite/bubo DB
+        # The read-only DB was not a usable SQLite/bubo DB
         # (truncated, "file is not a database", pre-schema). Treat as "nothing
-        # to show yet" rather than crash. NOTE: an unreadable *source* file
-        # raises OSError from shutil.copy2 inside the context manager — that is
-        # deliberately NOT caught here, so it propagates to the CLI (which exits
-        # non-zero) instead of silently producing an empty, data-losing export.
+        # to show yet" rather than crash.
         return _empty_skeleton(version)
 
     return {
@@ -408,7 +333,6 @@ def build_data() -> JsonObject:
         # the full lists: the most recent reviews + the report windows.
         "dashboard": {
             "recent": reviews[:10],
-            "reports": reports,
         },
         "reviews": reviews,
         "reports": reports,

@@ -158,7 +158,10 @@ def test_scm_identity_is_stable_and_provider_separated(
     assert github is not None
     assert github == analytics.scm_identity("github", 42)
     assert github != analytics.scm_identity("gitlab", 42)
-    assert "42" not in github.distinct_id
+    assert github.distinct_id != "42"
+    assert github.distinct_id != "github:42"
+    assert len(github.distinct_id) == 64
+    assert all(character in "0123456789abcdef" for character in github.distinct_id)
     assert len((tmp_path / "state" / "analytics_identity_secret").read_bytes()) == 32
 
     monkeypatch.setattr(analytics, "_identity_secret", None)
