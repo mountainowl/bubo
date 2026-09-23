@@ -29,6 +29,20 @@ def test_next_link_none_when_absent() -> None:
     assert github._next_link({"Link": '<https://x>; rel="last"'}) is None
 
 
+def test_authenticated_subject_uses_user_endpoint_and_returns_numeric_id() -> None:
+    cfg = ReviewConfig(provider="github")
+    with patch("bubo.github.api", return_value=({"id": 42, "login": "private"}, {})) as api:
+        assert github.authenticated_subject(cfg, "token") == 42
+    api.assert_called_once_with(cfg.github_api_url, "token", "GET", "/user")
+
+
+def test_authenticated_subject_rejects_malformed_user_response() -> None:
+    cfg = ReviewConfig(provider="github")
+    for payload in ({}, {"id": "42"}, {"id": 0}, {"id": True}, []):
+        with patch("bubo.github.api", return_value=(payload, {})):
+            assert github.authenticated_subject(cfg, "token") is None
+
+
 def test_api_pages_follows_link_header() -> None:
     pages = {
         "https://api.github.com/repos/o/r/pulls?state=open&per_page=100": (
@@ -54,6 +68,13 @@ def test_provider_change_number_and_head_sha() -> None:
     assert provider.change_number(change) == 42
     assert provider.head_sha(change) == "deadbeef"
     assert provider.head_sha({"number": 1}) == ""
+
+
+def test_provider_authenticated_subject_delegates_to_client() -> None:
+    provider = GitHubProvider()
+    with patch("bubo.github.authenticated_subject", return_value=42) as subject:
+        assert provider.authenticated_subject(ReviewConfig(provider="github"), "token") == 42
+    subject.assert_called_once()
 
 
 def test_provider_changed_lines_from_github_files() -> None:

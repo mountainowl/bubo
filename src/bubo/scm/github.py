@@ -53,6 +53,9 @@ class GitHubProvider:
     def bot_username(self) -> str:
         return os.environ.get("BUBO_GITHUB_USERNAME", "bubo")
 
+    def authenticated_subject(self, cfg: ReviewConfig, token: str) -> int | None:
+        return github.authenticated_subject(cfg, token)
+
     def list_open_changes(self, cfg: ReviewConfig, project: str, token: str) -> list[JsonObject]:
         return github.open_prs(cfg, project, token)
 

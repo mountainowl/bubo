@@ -43,6 +43,9 @@ class GitLabProvider:
     def bot_username(self) -> str:
         return os.environ.get("BUBO_GITLAB_USERNAME", "bubo")
 
+    def authenticated_subject(self, cfg: ReviewConfig, token: str) -> int | None:
+        return gitlab.authenticated_subject(cfg, token)
+
     def list_open_changes(self, cfg: ReviewConfig, project: str, token: str) -> list[JsonObject]:
         return gitlab.open_mrs(cfg, project, token)
 

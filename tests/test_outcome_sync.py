@@ -222,7 +222,7 @@ def test_outcome_sync_emits_analytics_once_per_outcome_transition(monkeypatch) -
     monkeypatch.setattr(
         poller.analytics,
         "record_finding_outcome",
-        lambda cfg, *, scm_provider, outcome: captured.append(outcome),
+        lambda cfg, *, scm_provider, outcome, identity=None: captured.append(outcome),
     )
     original_db = paths.DB
     try:

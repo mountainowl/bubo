@@ -48,6 +48,19 @@ def api(
     )
 
 
+def authenticated_subject(cfg: ReviewConfig, token: str) -> int | None:
+    """Return the numeric subject for ``token``, or ``None`` if malformed.
+
+    This exposes only the stable numeric id needed to form a local HMAC
+    pseudonym; profile fields never leave this module.
+    """
+    data, _ = api(cfg.gitlab_url, token, "GET", "/user")
+    subject_id = data.get("id") if isinstance(data, dict) else None
+    if isinstance(subject_id, bool) or not isinstance(subject_id, int) or subject_id <= 0:
+        return None
+    return subject_id
+
+
 def api_pages(base: str, token: str, path: str) -> list[JsonObject]:
     out: list[JsonObject] = []
     page = 1

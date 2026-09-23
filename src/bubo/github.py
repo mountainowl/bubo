@@ -81,6 +81,19 @@ def api(
     return _request(api_url.rstrip("/") + path, token, method, body)
 
 
+def authenticated_subject(cfg: ReviewConfig, token: str) -> int | None:
+    """Return the numeric subject for ``token``, or ``None`` if malformed.
+
+    Callers treat API failures as analytics-only and fall back to install
+    identity. This helper intentionally returns no login, name, or email.
+    """
+    data, _ = api(cfg.github_api_url, token, "GET", "/user")
+    subject_id = data.get("id") if isinstance(data, dict) else None
+    if isinstance(subject_id, bool) or not isinstance(subject_id, int) or subject_id <= 0:
+        return None
+    return subject_id
+
+
 def _next_link(headers: dict[str, str]) -> str | None:
     """Return the ``rel="next"`` URL from a GitHub ``Link`` header, if any."""
     link = headers.get("Link") or headers.get("link")

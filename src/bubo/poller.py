@@ -246,6 +246,22 @@ def normalize_config(cfg: JsonObject) -> ReviewConfig:
     return review_config_from_dict(cfg, log_event=log)
 
 
+def analytics_identity(
+    cfg: ReviewConfig, provider: ScmProvider, token: str
+) -> analytics.AnalyticsIdentity | None:
+    """Resolve one SCM pseudonym without affecting review execution.
+
+    Subject lookup is analytics-only: an unavailable method, malformed API
+    response, or provider error leaves the install identity in place.
+    """
+    if not analytics.analytics_enabled(cfg.analytics_config):
+        return None
+    try:
+        return analytics.scm_identity(provider.name, provider.authenticated_subject(cfg, token))
+    except Exception:
+        return None
+
+
 def reviewer_model(cfg: ReviewConfig) -> str:
     """Return the configured model label for telemetry, or ``"unknown"``."""
     return cfg.model or "unknown"
@@ -470,6 +486,7 @@ def poll() -> int:
     cfg = read_config()
     provider = get_provider(cfg)
     token = provider.token()
+    identity = analytics_identity(cfg, provider, token)
     queued = 0
     target_number = cfg.target_merge_request_iid
     poll_run_id = stable_hash({"poll": now()})[:12]
@@ -485,7 +502,10 @@ def poll() -> int:
         max_merge_requests_per_poll=cfg.max_merge_requests_per_poll,
     )
     analytics.record_session_start(
-        cfg.analytics_config, scm_provider=cfg.provider, projects_count=len(cfg.projects)
+        cfg.analytics_config,
+        scm_provider=cfg.provider,
+        projects_count=len(cfg.projects),
+        identity=identity,
     )
     if inflight >= inflight_cap:
         log(
@@ -1148,10 +1168,12 @@ def worker(job: Path) -> int:
     repo: Path | None = None
     files_changed: int | None = None
     lines_changed: int | None = None
+    identity: analytics.AnalyticsIdentity | None = None
     try:
         cfg = read_config()
         provider = get_provider(cfg)
         token = provider.token()
+        identity = analytics_identity(cfg, provider, token)
         telemetry = ReviewTelemetry.from_config(cfg.telemetry_config)
         queued_seconds = queue_latency_seconds(data)
         if queued_seconds is not None:
@@ -1330,6 +1352,7 @@ def worker(job: Path) -> int:
                 findings_skipped=skipped,
                 files_changed=files_changed,
                 lines_changed=lines_changed,
+                identity=identity,
             )
             log(
                 "review_done",
@@ -1404,6 +1427,7 @@ def worker(job: Path) -> int:
                 findings_skipped=0,
                 files_changed=files_changed,
                 lines_changed=lines_changed,
+                identity=identity,
             )
         log(
             "review_failed",
@@ -1494,6 +1518,7 @@ def sync_outcomes(limit: int = 200) -> int:
     cfg = read_config()
     provider = get_provider(cfg)
     token = provider.token()
+    identity = analytics_identity(cfg, provider, token)
     telemetry = ReviewTelemetry.from_config(cfg.telemetry_config)
     bot_username = provider.bot_username()
     synced = 0
@@ -1575,7 +1600,10 @@ def sync_outcomes(limit: int = 200) -> int:
                 # emit would multiply the count.
                 if analytics_on and not prior_outcome.get(name):
                     analytics.record_finding_outcome(
-                        cfg.analytics_config, scm_provider=cfg.provider, outcome=name
+                        cfg.analytics_config,
+                        scm_provider=cfg.provider,
+                        outcome=name,
+                        identity=identity,
                     )
             synced += 1
         except Exception as exc:
