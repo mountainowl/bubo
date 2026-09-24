@@ -116,7 +116,7 @@ def _resolve_provider(provider: str) -> str:
     if provider == "auto":
         try:
             return load_review_config(ENV_CONFIG).provider
-        except ConfigError, OSError:
+        except (ConfigError, OSError):
             return DEFAULT_PROVIDER
     if provider not in SUPPORTED_PROVIDERS:
         raise ValueError(

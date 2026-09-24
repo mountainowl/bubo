@@ -247,7 +247,7 @@ def _load_config() -> ReviewConfig:
     """
     try:
         return load_review_config(paths.CONFIG)
-    except ConfigError, OSError, ValueError, TypeError:
+    except (ConfigError, OSError, ValueError, TypeError):
         # Display-only: a missing/invalid env.toml must never fail a read-only
         # export. Degrade to the dataclass defaults (what the runtime uses for
         # those fields anyway).

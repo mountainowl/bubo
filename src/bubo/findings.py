@@ -654,7 +654,7 @@ def _finding_confidence(finding: JsonObject) -> float | None:
         return None
     try:
         return float(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
 
 
@@ -782,7 +782,7 @@ def resolve_finding_line(
         return None
     try:
         line = int(line)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
     entry = changed.get(file_path)
     if not entry or line not in entry["new_lines"]:

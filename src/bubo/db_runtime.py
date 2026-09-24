@@ -509,7 +509,7 @@ def record_finding(
     confidence = finding.get("confidence")
     try:
         confidence = float(confidence) if confidence is not None else None
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         confidence = None
     verified_int = None if verified is None else int(verified)
     with connect_db() as db:
