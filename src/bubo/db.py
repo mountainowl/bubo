@@ -181,6 +181,9 @@ def init_db() -> None:
             "category": "text",
             "confidence": "real",
             "note_id": "text",
+            # Cross-head identity used only by reconciliation. Existing rows
+            # remain NULL and are never auto-resolved by a migration.
+            "finding_identity": "text",
             # Opt-in verification (off by default) — per-finding verdict from
             # the pre-post "is this real?" pass. `verified` is 1 (survived) /
             # 0 (refuted) / NULL (not verified); `verify_votes` is the JSON
@@ -207,12 +210,45 @@ def init_db() -> None:
               resolved_at text,
               merged_unresolved integer not null default 0,
               reply_classified integer not null default 0,
+              resolution_source text not null default 'unknown',
+              resolution_evidence text not null default 'unknown',
+              developer_disposition text not null default 'unknown',
+              disposition_evidence text not null default 'unknown',
               last_checked_at text not null
             )
             """
         )
         # Additive migration for DBs created before reply_classified existed.
         ensure_column(db, "finding_outcomes", "reply_classified", "integer not null default 0")
+        for name, definition in {
+            "resolution_source": "text not null default 'unknown'",
+            "resolution_evidence": "text not null default 'unknown'",
+            "developer_disposition": "text not null default 'unknown'",
+            "disposition_evidence": "text not null default 'unknown'",
+        }.items():
+            ensure_column(db, "finding_outcomes", name, definition)
+        db.execute(
+            """
+            create table if not exists finding_reconciliations (
+              project text not null,
+              iid integer not null,
+              prior_sha text not null,
+              fingerprint text not null,
+              head_sha text not null,
+              discussion_id text not null,
+              state text not null,
+              reply_marker text not null,
+              reply_id text,
+              verdict text,
+              evidence text,
+              causal_commit text,
+              claim_until text,
+              updated_at text not null,
+              primary key(project,iid,prior_sha,fingerprint,head_sha)
+            )
+            """
+        )
+        ensure_column(db, "finding_reconciliations", "claim_until", "text")
         # Governance policy decisions (opt-in, off by default) — one advisory,
         # write-once decision per change. Separate table from review_runs: a
         # decision is a policy *artifact about* the run's provenance, with its
@@ -683,6 +719,7 @@ def record_finding(
     note_id: str | None = None,
     verified: bool | None = None,
     verify_votes: str | None = None,
+    finding_identity: str | None = None,
 ) -> None:
     """Upsert one ``review_findings`` row.
 
@@ -711,9 +748,9 @@ def record_finding(
             """
             insert into review_findings(
               project,iid,sha,fingerprint,file,line,status,discussion_id,body,updated_at,
-              run_id,type,severity,category,confidence,note_id,verified,verify_votes
+              run_id,type,severity,category,confidence,note_id,verified,verify_votes,finding_identity
             )
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(project,iid,sha,fingerprint) do update set
               status=excluded.status,
               discussion_id=excluded.discussion_id,
@@ -726,6 +763,9 @@ def record_finding(
               note_id=excluded.note_id,
               verified=coalesce(excluded.verified, review_findings.verified),
               verify_votes=coalesce(excluded.verify_votes, review_findings.verify_votes),
+              finding_identity=coalesce(
+                excluded.finding_identity, review_findings.finding_identity
+              ),
               updated_at=excluded.updated_at
             """,
             (
@@ -747,8 +787,64 @@ def record_finding(
                 note_id,
                 verified_int,
                 verify_votes,
+                finding_identity,
             ),
         )
+
+
+def _resolution_source(value: object) -> str:
+    """Normalize source without inferring a developer action from silence."""
+    value = str(value or "unknown").strip().lower()
+    return value if value in {"developer", "bubo_auto", "unknown"} else "unknown"
+
+
+def _developer_disposition(value: object, outcome: JsonObject) -> str:
+    """Normalize only explicit agreement, never resolution or code movement."""
+    raw = str(value or "").strip().lower()
+    if raw in {"agrees", "disagrees", "false_positive", "unknown"}:
+        return raw
+    if bool(outcome.get("false_positive")):
+        return "false_positive"
+    if bool(outcome.get("disputed")):
+        return "disagrees"
+    if outcome.get("developer_agreed") is True:
+        return "agrees"
+    return "unknown"
+
+
+def _outcome_evidence(value: object) -> str:
+    """Keep missing legacy evidence explicitly unknown and bounded."""
+    text = str(value or "").strip()
+    return text[:4000] if text else "unknown"
+
+
+def _normalized_severity(value: object) -> str:
+    """Public severity vocabulary; historical free text remains unknown."""
+    raw = str(value or "").strip().lower().replace("-", "_")
+    return raw if raw in {"blocking", "non_blocking"} else "unknown"
+
+
+def _bubo_auto_resolution(
+    db: sqlite3.Connection, *, project: str, iid: int, sha: str, fingerprint: str
+) -> tuple[str, str] | None:
+    """Return durable auto-resolution evidence, never infer it from SCM state."""
+    row = db.execute(
+        """
+        select head_sha,evidence,causal_commit from finding_reconciliations
+        where project=? and iid=? and prior_sha=? and fingerprint=? and state='resolved'
+        order by updated_at desc limit 1
+        """,
+        (project, iid, sha, fingerprint),
+    ).fetchone()
+    if row is None:
+        return None
+    head_sha, evidence, causal_commit = (str(value or "").strip() for value in row)
+    detail = f"verified fixed at {head_sha}"
+    if causal_commit:
+        detail += f"; causal commit {causal_commit}"
+    if evidence:
+        detail += f"; {evidence}"
+    return "bubo_auto", detail
 
 
 def record_finding_outcome(
@@ -759,18 +855,49 @@ def record_finding_outcome(
     fingerprint: str,
     discussion_id: str,
     outcome: JsonObject,
+    resolution_source: str | None = None,
+    resolution_evidence: str | None = None,
+    developer_disposition: str | None = None,
+    disposition_evidence: str | None = None,
 ) -> None:
     """Upsert a ``finding_outcomes`` row from a classify_discussion_outcome dict."""
     finding_id = f"{project}:{iid}:{sha}:{fingerprint}"
     with connect_db() as db:
+        # GitHub's GraphQL thread lookup can be unavailable.  An explicitly
+        # unobserved resolution is not a reopen and must not erase durable
+        # Bubo-auto attribution; an observed false is allowed to do so.
+        if outcome.get("resolution_observed") is False:
+            prior = db.execute(
+                """select resolved,resolution_source,resolution_evidence
+                   from finding_outcomes where finding_id=?""",
+                (finding_id,),
+            ).fetchone()
+            if prior is not None:
+                outcome = dict(outcome)
+                outcome["resolved"] = bool(prior[0])
+                resolution_source = str(prior[1] or "unknown")
+                resolution_evidence = str(prior[2] or "unknown")
+        source = _resolution_source(resolution_source or outcome.get("resolution_source"))
+        source_evidence = _outcome_evidence(
+            resolution_evidence or outcome.get("resolution_evidence")
+        )
+        # A provider's "resolved" state has no authorship semantics.  Only a
+        # completed, durable reconciliation action may claim Bubo auto-close.
+        if source == "unknown" and bool(outcome.get("resolved")):
+            auto = _bubo_auto_resolution(
+                db, project=project, iid=iid, sha=sha, fingerprint=fingerprint
+            )
+            if auto is not None:
+                source, source_evidence = auto
         db.execute(
             """
             insert into finding_outcomes(
               finding_id,project,iid,sha,fingerprint,discussion_id,
               resolved,deleted,developer_replied,disputed,false_positive,duplicate,
-              resolved_at,merged_unresolved,reply_classified,last_checked_at
-            )
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              resolved_at,merged_unresolved,reply_classified,resolution_source,
+              resolution_evidence,developer_disposition,disposition_evidence,last_checked_at
+              )
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(finding_id) do update set
               discussion_id=excluded.discussion_id,
               resolved=excluded.resolved,
@@ -782,6 +909,16 @@ def record_finding_outcome(
               resolved_at=excluded.resolved_at,
               merged_unresolved=excluded.merged_unresolved,
               reply_classified=excluded.reply_classified,
+              resolution_source=excluded.resolution_source,
+              resolution_evidence=excluded.resolution_evidence,
+              developer_disposition=case
+                when excluded.developer_disposition='unknown'
+                  then finding_outcomes.developer_disposition
+                else excluded.developer_disposition end,
+              disposition_evidence=case
+                when excluded.developer_disposition='unknown'
+                  then finding_outcomes.disposition_evidence
+                else excluded.disposition_evidence end,
               last_checked_at=excluded.last_checked_at
             """,
             (
@@ -800,6 +937,12 @@ def record_finding_outcome(
                 outcome.get("resolved_at"),
                 int(bool(outcome["merged_unresolved"])),
                 int(bool(outcome.get("reply_classified", False))),
+                source,
+                source_evidence,
+                _developer_disposition(
+                    developer_disposition or outcome.get("developer_disposition"), outcome
+                ),
+                _outcome_evidence(disposition_evidence or outcome.get("disposition_evidence")),
                 now(),
             ),
         )
@@ -833,6 +976,105 @@ def record_finding_outcome_sync_attempt(
               last_checked_at=excluded.last_checked_at
             """,
             (finding_id, project, iid, sha, fingerprint, discussion_id, now()),
+        )
+
+
+def prior_posted_findings_for_reconciliation(
+    project: str, iid: int, head_sha: str
+) -> list[JsonObject]:
+    """Return every unresolved trusted native provider thread.
+
+    Legacy rows are eligible only if Bubo's own non-null ``run_id`` proves
+    provenance; imported rows remain excluded. Provider root ownership is
+    re-proven immediately before every write.
+    """
+    with connect_db(readonly=True) as db:
+        rows = db.execute(
+            """
+            select rf.sha,rf.fingerprint,rf.finding_identity,rf.discussion_id,
+                   rf.file,rf.line,rf.body,rf.type,rf.severity,rf.category,rf.run_id
+              from review_findings rf
+              left join finding_outcomes fo
+                on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha
+                  || ':' || rf.fingerprint
+             where rf.project=? and rf.iid=? and rf.sha != ?
+               and rf.status=? and rf.discussion_id is not null and rf.discussion_id != ''
+               and ((rf.finding_identity is not null and rf.finding_identity != '')
+                    or (rf.run_id is not null and rf.run_id != ''))
+               and coalesce(fo.resolved,0)=0 and coalesce(fo.deleted,0)=0
+             order by rf.updated_at desc
+            """,
+            (project, iid, head_sha, FindingStatus.POSTED),
+        ).fetchall()
+    findings: list[JsonObject] = []
+    for row in rows:
+        identity = str(row[2]) if row[2] else f"native-legacy:{row[0]}:{row[1]}"
+        findings.append(
+            {
+                "sha": str(row[0]), "fingerprint": str(row[1]), "finding_identity": identity,
+                "discussion_id": str(row[3]), "file": str(row[4]), "line": row[5],
+                "body": str(row[6]), "type": row[7], "severity": row[8], "category": row[9],
+            }
+        )
+    return findings
+
+
+def claim_finding_reconciliation(
+    *, project: str, iid: int, prior_sha: str, fingerprint: str, head_sha: str,
+    discussion_id: str, reply_marker: str, lease_seconds: int,
+) -> bool:
+    """Atomically lease one head-specific action to prevent duplicate replies."""
+    stamp = now()
+    until = (datetime.now(UTC) + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
+    with connect_db() as db:
+        db.execute("begin immediate")
+        row = db.execute(
+            """select claim_until from finding_reconciliations
+               where project=? and iid=? and prior_sha=? and fingerprint=? and head_sha=?""",
+            (project, iid, prior_sha, fingerprint, head_sha),
+        ).fetchone()
+        if row is not None and row[0] and str(row[0]) > stamp:
+            db.rollback()
+            return False
+        db.execute(
+            """insert into finding_reconciliations(
+                 project,iid,prior_sha,fingerprint,head_sha,discussion_id,state,reply_marker,claim_until,updated_at
+               ) values(?,?,?,?,?,?,?,?,?,?)
+               on conflict(project,iid,prior_sha,fingerprint,head_sha) do update set
+                 claim_until=excluded.claim_until, updated_at=excluded.updated_at""",
+            (
+                project, iid, prior_sha, fingerprint, head_sha, discussion_id,
+                "claimed", reply_marker, until, stamp,
+            ),
+        )
+    return True
+
+
+def record_finding_reconciliation(
+    *, project: str, iid: int, prior_sha: str, fingerprint: str, head_sha: str,
+    discussion_id: str, state: str, reply_marker: str, reply_id: str | None = None,
+    verdict: str | None = None, evidence: str | None = None, causal_commit: str | None = None,
+) -> None:
+    """Durably upsert a retryable reconciliation action."""
+    with connect_db() as db:
+        db.execute(
+            """
+            insert into finding_reconciliations(
+              project,iid,prior_sha,fingerprint,head_sha,discussion_id,state,reply_marker,
+              reply_id,verdict,evidence,causal_commit,updated_at
+            ) values(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            on conflict(project,iid,prior_sha,fingerprint,head_sha) do update set
+              state=excluded.state,
+              reply_id=coalesce(
+                excluded.reply_id, finding_reconciliations.reply_id
+              ),
+              verdict=coalesce(excluded.verdict,finding_reconciliations.verdict),
+              evidence=coalesce(excluded.evidence,finding_reconciliations.evidence),
+              causal_commit=coalesce(excluded.causal_commit,finding_reconciliations.causal_commit),
+              updated_at=excluded.updated_at
+            """,
+            (project, iid, prior_sha, fingerprint, head_sha, discussion_id, state, reply_marker,
+             reply_id, verdict, evidence, causal_commit, now()),
         )
 
 
@@ -1172,12 +1414,18 @@ def outcomes_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
             return []
         rows = db.execute(
             """
-            select fingerprint,discussion_id,resolved,deleted,
-                   developer_replied,disputed,false_positive,duplicate,
-                   resolved_at,merged_unresolved,reply_classified,last_checked_at
-            from finding_outcomes
-            where project=? and iid=? and sha=?
-            order by last_checked_at desc
+            select fo.fingerprint,fo.discussion_id,fo.resolved,fo.deleted,
+                   fo.developer_replied,fo.disputed,fo.false_positive,fo.duplicate,
+                   fo.resolved_at,fo.merged_unresolved,fo.reply_classified,
+                   fo.resolution_source,fo.resolution_evidence,
+                   fo.developer_disposition,fo.disposition_evidence,fo.last_checked_at,
+                   rf.severity
+              from finding_outcomes fo
+              left join review_findings rf
+                on rf.project=fo.project and rf.iid=fo.iid and rf.sha=fo.sha
+               and rf.fingerprint=fo.fingerprint
+             where fo.project=? and fo.iid=? and fo.sha=?
+             order by fo.last_checked_at desc
             """,
             (project, iid, target_sha),
         ).fetchall()
@@ -1197,8 +1445,13 @@ def outcomes_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
             "resolved_at": row[8],
             "merged_unresolved": bool(row[9]),
             "reply_classified": bool(row[10]),
-            "last_checked_at": row[11],
-        }
+                "resolution_source": _resolution_source(row[11]),
+                "resolution_evidence": _outcome_evidence(row[12]),
+                "developer_disposition": _developer_disposition(row[13], {}),
+                "disposition_evidence": _outcome_evidence(row[14]),
+                "last_checked_at": row[15],
+                "severity": _normalized_severity(row[16]),
+            }
         for row in rows
     ]
 
@@ -1402,6 +1655,53 @@ def outcomes_summary(
             """,
             args,
         ).fetchone()
+        severity_rows = db.execute(
+            """
+            select
+              case lower(replace(coalesce(rf.severity,''), '-', '_'))
+                when 'blocking' then 'blocking'
+                when 'non_blocking' then 'non_blocking'
+                else 'unknown' end as severity,
+              count(*), coalesce(sum(fo.resolved),0),
+              coalesce(sum(
+                case when coalesce(fo.resolution_source,'unknown')='bubo_auto' then 1 else 0 end
+              ),0),
+              coalesce(sum(
+                case when coalesce(fo.developer_disposition,'unknown')='agrees' then 1 else 0 end
+              ),0),
+              coalesce(sum(
+                case when coalesce(fo.developer_disposition,'unknown')='disagrees' then 1 else 0 end
+              ),0),
+              coalesce(sum(
+                case when coalesce(fo.developer_disposition,'unknown')='false_positive'
+                  then 1 else 0 end
+              ),0),
+              coalesce(sum(
+                case when coalesce(fo.developer_disposition,'unknown')='unknown' then 1 else 0 end
+              ),0)
+            from finding_outcomes fo
+            left join review_findings rf
+              on rf.project=fo.project and rf.iid=fo.iid and rf.sha=fo.sha
+             and rf.fingerprint=fo.fingerprint
+            where fo.last_checked_at >= ? and fo.last_checked_at <= ?
+              and (? is null or fo.project = ?)
+            group by severity
+            """,
+            args,
+        ).fetchall()
+    by_severity: dict[str, JsonObject] = {
+        severity: {
+            "total": 0, "resolved": 0, "bubo_auto": 0, "agrees": 0,
+            "disagrees": 0, "false_positive": 0, "unknown_disposition": 0,
+        }
+        for severity in ("blocking", "non_blocking", "unknown")
+    }
+    for severity, total, resolved, auto, agrees, disagrees, fp, unknown in severity_rows:
+        by_severity[str(severity)] = {
+            "total": int(total), "resolved": int(resolved), "bubo_auto": int(auto),
+            "agrees": int(agrees), "disagrees": int(disagrees),
+            "false_positive": int(fp), "unknown_disposition": int(unknown),
+        }
     return {
         "total": int(row[0]),
         "resolved": int(row[1]),
@@ -1411,6 +1711,7 @@ def outcomes_summary(
         "developer_replied": int(row[5]),
         "merged_unresolved": int(row[6]),
         "deleted": int(row[7]),
+        "by_severity": by_severity,
     }
 
 
@@ -1723,12 +2024,14 @@ __all__ = [
     "outcomes_summary",
     "policy_decisions_summary",
     "posted_findings_for_outcome_sync",
+    "prior_posted_findings_for_reconciliation",
     "prompt_version",
     "provenance_for",
     "record",
     "record_finding",
     "record_finding_outcome",
     "record_finding_outcome_sync_attempt",
+    "record_finding_reconciliation",
     "record_governance_decision",
     "record_provenance",
     "record_review_run_finish",

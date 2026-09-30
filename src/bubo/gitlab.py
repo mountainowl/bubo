@@ -153,6 +153,47 @@ def get_mr_discussions(cfg: ReviewConfig, token: str, project: str, iid: int) ->
     return api_pages(cfg.gitlab_url, token, f"/projects/{encoded}/merge_requests/{iid}/discussions")
 
 
+def create_mr_discussion_note(
+    cfg: ReviewConfig,
+    token: str,
+    project: str,
+    iid: int,
+    discussion_id: str,
+    body: str,
+) -> JsonObject:
+    """Reply to an existing merge-request discussion."""
+    encoded = urllib.parse.quote(project, safe="")
+    encoded_discussion = urllib.parse.quote(discussion_id, safe="")
+    data, _ = api(
+        cfg.gitlab_url,
+        token,
+        "POST",
+        f"/projects/{encoded}/merge_requests/{iid}/discussions/{encoded_discussion}/notes",
+        {"body": body},
+    )
+    return cast(JsonObject, data) if isinstance(data, dict) else {}
+
+
+def resolve_mr_discussion(
+    cfg: ReviewConfig,
+    token: str,
+    project: str,
+    iid: int,
+    discussion_id: str,
+) -> JsonObject:
+    """Mark a merge-request discussion resolved and return its final state."""
+    encoded = urllib.parse.quote(project, safe="")
+    encoded_discussion = urllib.parse.quote(discussion_id, safe="")
+    data, _ = api(
+        cfg.gitlab_url,
+        token,
+        "PUT",
+        f"/projects/{encoded}/merge_requests/{iid}/discussions/{encoded_discussion}",
+        {"resolved": True},
+    )
+    return cast(JsonObject, data) if isinstance(data, dict) else {}
+
+
 def find_discussion_by_body(
     cfg: ReviewConfig, token: str, project: str, iid: int, body: str
 ) -> str:
@@ -261,6 +302,51 @@ def classify_discussion_outcome(
     false_positive = "[llm-review:false-positive]" in note_text
     duplicate = "[llm-review:duplicate]" in note_text
     disputed = "[llm-review:disputed]" in note_text or false_positive
+
+    # Resolution, merge, silence, and a changed diff say nothing about whether
+    # the developer agrees with a finding.  Capture only an explicit marker on
+    # a human reply. GitLab returns ``author.bot`` for bot accounts; absence is
+    # intentionally treated as human for compatibility with older GitLab API
+    # payloads and existing outcome-sync behaviour.
+    human_replies = [
+        note for note in reply_notes if not bool((note.get("author") or {}).get("bot"))
+    ]
+
+    def marker_note(marker: str) -> JsonObject | None:
+        for note in human_replies:
+            if marker in str(note.get("body") or "").lower():
+                return cast(JsonObject, note)
+        return None
+
+    disagreement_note = marker_note("[llm-review:false-positive]") or marker_note(
+        "[llm-review:disputed]"
+    )
+    agreement_note = marker_note("[llm-review:agreed]")
+    disposition = "unknown"
+    evidence_note: JsonObject | None = None
+    evidence_kind = "unknown"
+    # A disagreement wins a conflicting marker set: never report acceptance
+    # while the developer has also explicitly rejected the finding.
+    if disagreement_note is not None:
+        disposition = (
+            "false_positive" if marker_note("[llm-review:false-positive]") else "disagrees"
+        )
+        evidence_note = disagreement_note
+        evidence_kind = "explicit_marker"
+    elif agreement_note is not None:
+        disposition = "agrees"
+        evidence_note = agreement_note
+        evidence_kind = "explicit_marker"
+    evidence_author = ""
+    evidence_at = ""
+    if evidence_note is not None:
+        evidence_author = str((evidence_note.get("author") or {}).get("username") or "")
+        evidence_at = str(evidence_note.get("created_at") or evidence_note.get("updated_at") or "")
+    evidence = "unknown"
+    if evidence_kind != "unknown":
+        evidence = f"{evidence_kind}; actor={evidence_author or 'unknown'}"
+        if evidence_at:
+            evidence += f"; at={evidence_at}"
     return {
         "resolved": resolved,
         "deleted": bool(discussion.get("deleted", False)) or (bool(notes) and not active_notes),
@@ -268,6 +354,16 @@ def classify_discussion_outcome(
         "disputed": disputed,
         "false_positive": false_positive,
         "duplicate": duplicate,
+        "developer_agreed": True
+        if disposition == "agrees"
+        else False
+        if disposition != "unknown"
+        else None,
+        "developer_disposition": disposition,
+        "disposition_evidence": evidence,
+        "developer_disposition_evidence_kind": evidence_kind,
+        "developer_disposition_actor": evidence_author or None,
+        "developer_disposition_at": evidence_at or None,
         "resolved_at": discussion.get("resolved_at"),
         "merged_unresolved": mr_state == "merged" and not resolved,
         # Original-case text for the LLM reply classifier (transient; ignored

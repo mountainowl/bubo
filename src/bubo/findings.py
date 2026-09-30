@@ -891,3 +891,4 @@ def finding_fingerprint(project: str, iid: int, sha: str, finding: JsonObject) -
         "body": " ".join(finding_body(finding).split()),
     }
     return stable_hash(payload)
+

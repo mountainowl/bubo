@@ -50,6 +50,7 @@ from bubo import analytics, github, gitlab, paths
 from bubo.config_values import ConfigError
 from bubo.db import (
     already_seen,
+    claim_finding_reconciliation,
     connect_db,
     count_inflight_workers,
     disputed_class_stats,
@@ -58,9 +59,11 @@ from bubo.db import (
     init_db,
     latest_reviewed_row,
     posted_findings_for_outcome_sync,
+    prior_posted_findings_for_reconciliation,
     prompt_version,
     record_finding_outcome,
     record_finding_outcome_sync_attempt,
+    record_finding_reconciliation,
     record_governance_decision,
     record_provenance,
     record_review_run_finish,
@@ -96,8 +99,16 @@ from bubo.paths import CONFIG, ROOT
 from bubo.prompt import render_meta_prompt as _render_meta_prompt
 from bubo.prompt import write_rendered_meta_prompt as write_rendered_prompt_file
 from bubo.provenance import ProvenanceSignal, compile_patterns, compute_provenance
+from bubo.reconciliation import (
+    ReconciliationOutcome,
+    ReconciliationStatus,
+    finding_identity,
+    reconciliation_marker,
+    verified_fixed_reply,
+)
 from bubo.review_config import ReviewConfig, load_review_config, review_config_from_dict
 from bubo.scm import ScmProvider, get_provider
+from bubo.scm.base import FindingThreadState
 from bubo.secrets import redact_secrets
 from bubo.signals import (
     install_signal_handlers as _install_signal_handlers,
@@ -116,9 +127,13 @@ from bubo.telemetry import (
 )
 from bubo.types import JsonObject
 from bubo.verification import (
+    ReconciliationResult,
+    ReconciliationVerdict,
     Verdict,
+    build_reconciliation_prompt,
     build_verification_prompt,
     decide,
+    parse_reconciliation_result,
     parse_verdict,
     votes_summary,
 )
@@ -236,6 +251,259 @@ def run_verification(finding: JsonObject, repo: Path | None, cfg: ReviewConfig) 
     return verdicts
 
 
+def run_reconciliation_verification(
+    finding: JsonObject, *, original_sha: str, head_sha: str, repo: Path | None, cfg: ReviewConfig
+) -> ReconciliationResult:
+    """Run the dedicated fixed-proof verifier; failures remain uncertain."""
+    command = list(cfg.reconcile_command or cfg.verify_command or cfg.reviewer_command)
+    if not command:
+        return ReconciliationResult(ReconciliationVerdict.UNCERTAIN, 0.0, "No verifier command")
+    try:
+        result = run(
+            [
+                *command,
+                build_reconciliation_prompt(
+                    finding, original_sha=original_sha, current_sha=head_sha
+                ),
+            ],
+            cwd=repo,
+            env=reviewer_env(os.environ, cfg),
+            timeout=cfg.reconcile_timeout_seconds,
+        )
+    except Exception as exc:
+        log("reconciliation_verify_failed", error=type(exc).__name__)
+        return ReconciliationResult(
+            ReconciliationVerdict.UNCERTAIN, 0.0, "Verifier unavailable", ok=False
+        )
+    if result.returncode:
+        return ReconciliationResult(
+            ReconciliationVerdict.UNCERTAIN, 0.0, "Verifier returned non-zero", ok=False
+        )
+    # Verifier output is untrusted: redact before parsing/persisting and bound
+    # it so a hostile or noisy CLI cannot turn reconciliation into a log sink.
+    parsed = parse_reconciliation_result(redact_secrets(result.stdout or "")[:12000])
+    return parsed or ReconciliationResult(
+        ReconciliationVerdict.UNCERTAIN, 0.0, "Malformed verifier output", ok=False
+    )
+
+
+def reconciliation_proof_is_valid(
+    result: ReconciliationResult, *, repo: Path | None, confidence_floor: float
+) -> bool:
+    """Require concrete current-checkout proof before a FIXED mutation."""
+    if result.verdict is not ReconciliationVerdict.FIXED or not result.ok:
+        return False
+    if (
+        result.confidence < confidence_floor
+        or not result.reason.strip()
+        or len(result.reason) > 1000
+    ):
+        return False
+    if repo is None or not result.evidence_path or result.evidence_line is None:
+        return False
+    try:
+        path = (repo / result.evidence_path).resolve()
+        path.relative_to(repo.resolve())
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError, ValueError):
+        return False
+    return 1 <= result.evidence_line <= len(lines)
+
+
+def reconcile_prior_findings(
+    *, cfg: ReviewConfig, token: str, project: str, number: int, head_sha: str,
+    provider: ScmProvider, repo: Path | None,
+) -> ReconciliationOutcome:
+    """Verify and close only proven-fixed, native Bubo threads.
+
+    ``BLOCKED`` dominates every other result: incomplete provider/verifier
+    work must never be reported as a clean scan.
+    """
+    if not cfg.reconcile_fixed_findings or cfg.dry_run:
+        return ReconciliationOutcome(ReconciliationStatus.NO_CANDIDATES)
+    def current_head_matches() -> bool:
+        try:
+            return provider.head_sha(provider.get_change(cfg, token, project, number)) == head_sha
+        except Exception as exc:
+            log(
+                "reconciliation_provider_failed", project=project, iid=number,
+                error=type(exc).__name__,
+            )
+            return False
+
+    if not current_head_matches():
+        log(
+            "reconciliation_skipped",
+            project=project,
+            iid=number,
+            reason="head_changed_before_start",
+        )
+        return ReconciliationOutcome(ReconciliationStatus.BLOCKED)
+    status = ReconciliationStatus.NO_CANDIDATES
+
+    def worsen(candidate: ReconciliationStatus) -> None:
+        nonlocal status
+        rank = {
+            ReconciliationStatus.NO_CANDIDATES: 0,
+            ReconciliationStatus.RESOLVED: 1,
+            ReconciliationStatus.SURVIVES: 2,
+            ReconciliationStatus.BLOCKED: 3,
+        }
+        if rank[candidate] > rank[status]:
+            status = candidate
+
+    try:
+        bot_username = provider.bot_username()
+    except Exception as exc:
+        log(
+            "reconciliation_provider_failed", project=project, iid=number,
+            error=type(exc).__name__,
+        )
+        return ReconciliationOutcome(ReconciliationStatus.BLOCKED)
+    for prior in prior_posted_findings_for_reconciliation(project, number, head_sha):
+        prior_sha = str(prior["sha"])
+        fingerprint = str(prior["fingerprint"])
+        thread_id = str(prior["discussion_id"])
+        marker = reconciliation_marker(project, number, prior_sha, fingerprint, head_sha)
+        try:
+            thread = provider.finding_thread(
+                cfg, token, project, number, thread_id, bot_username, marker
+            )
+        except Exception as exc:
+            log(
+                "reconciliation_provider_failed", project=project, iid=number,
+                error=type(exc).__name__,
+            )
+            worsen(ReconciliationStatus.BLOCKED)
+            continue
+        if thread.state is not FindingThreadState.OPEN:
+            continue
+        # Claim before verification.  A second worker cannot spend verifier
+        # capacity or publish a duplicate reply for this exact head.
+        if not claim_finding_reconciliation(
+            project=project, iid=number, prior_sha=prior_sha, fingerprint=fingerprint,
+            head_sha=head_sha, discussion_id=thread_id, reply_marker=marker,
+            lease_seconds=cfg.reconcile_lease_seconds,
+        ):
+            worsen(ReconciliationStatus.BLOCKED)
+            continue
+        verdict = run_reconciliation_verification(
+            prior, original_sha=prior_sha, head_sha=head_sha, repo=repo, cfg=cfg
+        )
+        evidence = verdict.reason or ""
+        record_finding_reconciliation(
+            project=project, iid=number, prior_sha=prior_sha, fingerprint=fingerprint,
+            head_sha=head_sha, discussion_id=thread_id, state=str(verdict.verdict),
+            reply_marker=marker, verdict=str(verdict.verdict), evidence=evidence,
+            causal_commit=verdict.causal_commit,
+        )
+        if verdict.verdict is ReconciliationVerdict.STILL_VALID:
+            worsen(ReconciliationStatus.SURVIVES)
+            continue
+        if not reconciliation_proof_is_valid(
+            verdict, repo=repo, confidence_floor=cfg.reconcile_confidence_floor
+        ):
+            worsen(ReconciliationStatus.BLOCKED)
+            continue
+        # The checkout/verdict is valid only for this exact head. Re-fetch
+        # before every mutation so a push race can never close a stale thread.
+        if not current_head_matches():
+            worsen(ReconciliationStatus.BLOCKED)
+            continue
+        try:
+            thread = provider.finding_thread(
+                cfg, token, project, number, thread_id, bot_username, marker
+            )
+        except Exception as exc:
+            log(
+                "reconciliation_provider_failed", project=project, iid=number,
+                error=type(exc).__name__,
+            )
+            worsen(ReconciliationStatus.BLOCKED)
+            continue
+        if thread.state is not FindingThreadState.OPEN:
+            continue
+        reply_id: str | None = None
+        if not thread.reply_marker_present:
+            try:
+                reply = provider.reply_to_finding_thread(
+                    cfg, token, project, number, thread_id,
+                    verified_fixed_reply(head_sha, marker), marker,
+                )
+            except Exception as exc:
+                log(
+                    "reconciliation_provider_failed", project=project, iid=number,
+                    error=type(exc).__name__,
+                )
+                record_finding_reconciliation(
+                    project=project, iid=number, prior_sha=prior_sha, fingerprint=fingerprint,
+                    head_sha=head_sha, discussion_id=thread_id, state="reply_failed",
+                    reply_marker=marker, verdict=str(verdict.verdict), evidence=evidence,
+                    causal_commit=verdict.causal_commit,
+                )
+                worsen(ReconciliationStatus.BLOCKED)
+                continue
+            if reply.state in {FindingThreadState.RESOLVED, FindingThreadState.DELETED}:
+                record_finding_reconciliation(
+                    project=project, iid=number, prior_sha=prior_sha, fingerprint=fingerprint,
+                    head_sha=head_sha, discussion_id=thread_id,
+                    state=(
+                        "resolved_external"
+                        if reply.state is FindingThreadState.RESOLVED
+                        else "deleted_external"
+                    ),
+                    reply_marker=marker, verdict=str(verdict.verdict), evidence=evidence,
+                    causal_commit=verdict.causal_commit,
+                )
+                # A developer terminal action won the race; this is a safe
+                # no-op, not an infrastructure failure.
+                continue
+            if not reply.marker_confirmed or not reply.reply_id:
+                worsen(ReconciliationStatus.BLOCKED)
+                continue
+            reply_id = reply.reply_id
+        record_finding_reconciliation(
+            project=project, iid=number, prior_sha=prior_sha, fingerprint=fingerprint,
+            head_sha=head_sha, discussion_id=thread_id, state="replied", reply_marker=marker,
+            reply_id=reply_id, verdict=str(verdict.verdict), evidence=evidence,
+            causal_commit=verdict.causal_commit,
+        )
+        if not current_head_matches():
+            worsen(ReconciliationStatus.BLOCKED)
+            continue
+        try:
+            resolution = provider.resolve_finding_thread(
+                cfg, token, project, number, thread_id, bot_username
+            )
+        except Exception as exc:
+            log(
+                "reconciliation_provider_failed", project=project, iid=number,
+                error=type(exc).__name__,
+            )
+            worsen(ReconciliationStatus.BLOCKED)
+            continue
+        if resolution.state is FindingThreadState.RESOLVED and resolution.applied_by_bubo:
+            reconciliation_state = "resolved"
+            worsen(ReconciliationStatus.RESOLVED)
+        elif resolution.state is FindingThreadState.RESOLVED:
+            reconciliation_state = "resolved_external"
+        elif resolution.state is FindingThreadState.DELETED:
+            reconciliation_state = "deleted_external"
+        else:
+            # FOREIGN or OPEN results cannot prove who resolved anything.
+            worsen(ReconciliationStatus.BLOCKED)
+            continue
+        record_finding_reconciliation(
+            project=project, iid=number, prior_sha=prior_sha, fingerprint=fingerprint,
+            head_sha=head_sha, discussion_id=thread_id,
+            state=reconciliation_state,
+            reply_marker=marker,
+            reply_id=reply_id, verdict=str(verdict.verdict), evidence=evidence,
+            causal_commit=verdict.causal_commit,
+        )
+    return ReconciliationOutcome(status)
+
+
 def read_config() -> ReviewConfig:
     """Load and apply ``config/env.toml``."""
     return load_review_config(CONFIG, log_event=log)
@@ -281,6 +549,7 @@ def record_finding(
     note_id: str | None = None,
     verified: bool | None = None,
     verify_votes: str | None = None,
+    finding_identity: str | None = None,
 ) -> None:
     """Persist a finding with its rendered body.
 
@@ -311,6 +580,7 @@ def record_finding(
         note_id=note_id,
         verified=verified,
         verify_votes=verify_votes,
+        finding_identity=finding_identity,
     )
 
 
@@ -790,6 +1060,7 @@ def post_or_plan_findings(
     telemetry: ReviewTelemetry | None = None,
     provider: ScmProvider | None = None,
     repo: Path | None = None,
+    pending_external_ids: list[bool] | None = None,
 ) -> tuple[int, int, int]:
     """Parse, filter, and post (or plan) findings for one change.
 
@@ -891,6 +1162,7 @@ def post_or_plan_findings(
     verified_count = refuted_count = capped_count = verified_attempts = 0
     for finding in findings:
         fp = finding_fingerprint(project, number, sha, finding)
+        identity = finding_identity(project, number, finding)
         if finding_seen(project, number, sha, fp):
             skipped += 1
             continue
@@ -904,6 +1176,7 @@ def post_or_plan_findings(
                 finding=finding,
                 status=FindingStatus.SKIPPED,
                 run_id=run_id,
+                finding_identity=identity,
             )
             emit_finding_metric(
                 telemetry,
@@ -985,6 +1258,7 @@ def post_or_plan_findings(
                         run_id=run_id,
                         verified=False,
                         verify_votes=verify_votes_json,
+                        finding_identity=identity,
                     )
                     emit_finding_metric(
                         telemetry,
@@ -1033,6 +1307,7 @@ def post_or_plan_findings(
                 run_id=run_id,
                 verified=verified_flag,
                 verify_votes=verify_votes_json,
+                finding_identity=identity,
             )
             emit_finding_metric(
                 telemetry,
@@ -1062,6 +1337,7 @@ def post_or_plan_findings(
                     run_id=run_id,
                     verified=verified_flag,
                     verify_votes=verify_votes_json,
+                    finding_identity=identity,
                 )
                 emit_finding_metric(
                     telemetry,
@@ -1077,6 +1353,8 @@ def post_or_plan_findings(
                     file=_position_file(position),
                     line=_position_line(position),
                 )
+                if pending_external_ids is not None:
+                    pending_external_ids.append(True)
                 skipped += 1
                 continue
             record_finding(
@@ -1090,6 +1368,7 @@ def post_or_plan_findings(
                 run_id=run_id,
                 verified=verified_flag,
                 verify_votes=verify_votes_json,
+                finding_identity=identity,
             )
             emit_finding_metric(
                 telemetry,
@@ -1250,6 +1529,7 @@ def worker(job: Path) -> int:
                         )
                     )
             with telemetry.span("llm_review.post", repo=project, dry_run=cfg.dry_run) as post_span:
+                pending_external_ids: list[bool] = []
                 posted, planned, skipped = post_or_plan_findings(
                     cfg=cfg,
                     token=token,
@@ -1260,6 +1540,7 @@ def worker(job: Path) -> int:
                     telemetry=telemetry,
                     provider=provider,
                     repo=repo,
+                    pending_external_ids=pending_external_ids,
                 )
                 telemetry.set_span_attrs(
                     post_span,
@@ -1272,7 +1553,29 @@ def worker(job: Path) -> int:
                 if (posted, planned, skipped) == (0, 0, 0)
                 else ReviewStatus.SUCCESS
             )
-            if status == ReviewStatus.NO_FINDINGS:
+            record(project, iid, sha, status, str(report))
+            record_review_run_finish(
+                run_id=run_id, status=status, tokens=tokens, cost_usd=cost_usd,
+                error=None, lines_reviewed=lines_reviewed,
+            )
+            reconciliation = ReconciliationOutcome(ReconciliationStatus.NO_CANDIDATES)
+            if (
+                status in {ReviewStatus.SUCCESS, ReviewStatus.NO_FINDINGS}
+                and not cfg.dry_run
+                and not pending_external_ids
+            ):
+                reconciliation = reconcile_prior_findings(
+                    cfg=cfg, token=token, project=project, number=iid,
+                    head_sha=sha, provider=provider, repo=repo,
+                )
+            # A provider accepted a write but did not return a durable thread
+            # id: do not claim a clean scan while that external result is
+            # unresolved.  This also keeps reconciliation out of partial runs.
+            if (
+                status == ReviewStatus.NO_FINDINGS
+                and reconciliation.permits_no_findings_acknowledgement
+                and not pending_external_ids
+            ):
                 no_findings_verdict, no_findings_detail = post_no_findings_comment(
                     cfg=cfg,
                     token=token,
@@ -1289,15 +1592,6 @@ def worker(job: Path) -> int:
                     detail=no_findings_detail,
                     run_id=run_id,
                 )
-            record(project, iid, sha, status, str(report))
-            record_review_run_finish(
-                run_id=run_id,
-                status=status,
-                tokens=tokens,
-                cost_usd=cost_usd,
-                error=None,
-                lines_reviewed=lines_reviewed,
-            )
             telemetry.record_review_done(
                 repo=project,
                 model=model,
@@ -1516,6 +1810,7 @@ def sync_outcomes(limit: int = 200) -> int:
             if (
                 outcome.get("developer_replied")
                 and not outcome.get("disputed")
+                and str(outcome.get("developer_disposition") or "unknown") == "unknown"
                 and not already_classified
                 and reply_text.strip()
                 and classifications < MAX_REPLY_CLASSIFICATIONS_PER_SYNC
@@ -1531,8 +1826,18 @@ def sync_outcomes(limit: int = 200) -> int:
                 if verdict["verdict"] != "error":
                     if verdict["verdict"] == "rejected" or verdict["false_positive"]:
                         outcome["disputed"] = True
+                        outcome["developer_disposition"] = (
+                            "false_positive" if verdict["false_positive"] else "disagrees"
+                        )
+                        outcome["disposition_evidence"] = "reply_classifier"
                     if verdict["false_positive"]:
                         outcome["false_positive"] = True
+                    # Agreement requires an explicit classifier conclusion;
+                    # resolution, code edits, and silence remain unknown.
+                    if verdict["verdict"] == "agrees":
+                        outcome["developer_agreed"] = True
+                        outcome["developer_disposition"] = "agrees"
+                        outcome["disposition_evidence"] = "reply_classifier"
                     outcome["reply_classified"] = True
                 log(
                     "reply_classified",

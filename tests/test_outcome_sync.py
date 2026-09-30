@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from bubo import gitlab, paths, poller
+from bubo import db, gitlab, paths, poller
 from bubo.review_config import ReviewConfig
 from bubo.telemetry.config import TelemetryConfig
 
@@ -276,9 +276,9 @@ def test_outcome_sync_classifies_rejecting_reply_as_disputed() -> None:
             mocked.assert_called_once()
             with sqlite3.connect(paths.DB) as db:
                 row = db.execute(
-                    "select disputed, reply_classified from finding_outcomes"
+                    "select disputed, developer_disposition, disposition_evidence, reply_classified from finding_outcomes"
                 ).fetchone()
-            assert row == (1, 1)
+            assert row == (1, "disagrees", "reply_classifier", 1)
     finally:
         paths.DB = original_db
 
@@ -305,6 +305,12 @@ def test_outcome_sync_classifies_each_finding_only_once() -> None:
                             # not re-invoke the (paid) LLM classifier.
                             poller.sync_outcomes(limit=1)
             assert mocked.call_count == 1
+            with sqlite3.connect(paths.DB) as db:
+                row = db.execute(
+                    "select developer_disposition, disposition_evidence from finding_outcomes"
+                ).fetchone()
+            # Classifier acceptance is not an explicit developer agreement.
+            assert row == ("unknown", "unknown")
     finally:
         paths.DB = original_db
 
@@ -575,17 +581,21 @@ def test_backfill_github_bot_comments_imports_resolved_threads() -> None:
             thread = {
                 "is_resolved": True,
                 "comments": [
-                    {
-                        "database_id": 555,
-                        "node_id": "PRRC_x",
-                        "login": "lt-bubo",
+                        {
+                            "database_id": 555,
+                            "node_id": "PRRC_x",
+                            "login": "lt-bubo",
+                            "user": {"type": "Bot"},
                         "body": (
                             "**Issue (blocking, correctness):** bad path\n\n**Confidence:** 0.91"
                         ),
                         "path": "src/A.java",
                         "line": 12,
                     },
-                    {"database_id": 556, "node_id": "PRRC_y", "login": "dev1", "body": "thanks"},
+                        {
+                                "database_id": 556, "node_id": "PRRC_y", "login": "dev1",
+                                "user": {"type": "User"}, "body": "thanks",
+                        },
                 ],
             }
 
@@ -702,5 +712,38 @@ def test_backfill_github_bot_comments_noops_on_gitlab_provider() -> None:
             with patch("bubo.poller.read_config", return_value=cfg):
                 with patch("bubo.poller.get_provider", return_value=_FakeGitLabProvider()):
                     assert poller.backfill_github_bot_comments("2026-05-25T00:00:00Z") == 0
+    finally:
+        paths.DB = original_db
+
+
+def test_outcomes_for_keeps_legacy_unknown_and_derives_durable_bubo_auto() -> None:
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            db.init_db()
+            with sqlite3.connect(paths.DB) as con:
+                con.execute(
+                    """insert into review_findings(project,iid,sha,fingerprint,file,line,status,
+                       discussion_id,body,severity,updated_at) values(?,?,?,?,?,?,?,?,?,?,?)""",
+                    ("group/repo", 1, "oldsha", "fp", "a.py", 1, "posted", "disc", "body", "blocking", poller.now()),
+                )
+            # SCM resolved state alone never claims automatic resolution.
+            outcome = {"resolved": True, "deleted": False, "developer_replied": False,
+                       "disputed": False, "false_positive": False, "duplicate": False,
+                       "merged_unresolved": False}
+            db.record_finding_outcome(project="group/repo", iid=1, sha="oldsha", fingerprint="fp", discussion_id="disc", outcome=outcome)
+            assert db.outcomes_for("group/repo", 1, "oldsha")[0]["resolution_source"] == "unknown"
+            db.record_finding_reconciliation(
+                project="group/repo", iid=1, prior_sha="oldsha", fingerprint="fp", head_sha="newsha",
+                discussion_id="disc", state="resolved", reply_marker="marker", verdict="fixed",
+                evidence="line no longer divides", causal_commit="newsha",
+            )
+            db.record_finding_outcome(project="group/repo", iid=1, sha="oldsha", fingerprint="fp", discussion_id="disc", outcome=outcome)
+            row = db.outcomes_for("group/repo", 1, "oldsha")[0]
+            assert row["severity"] == "blocking"
+            assert row["resolution_source"] == "bubo_auto"
+            assert "newsha" in row["resolution_evidence"]
+            assert row["developer_disposition"] == "unknown"
     finally:
         paths.DB = original_db

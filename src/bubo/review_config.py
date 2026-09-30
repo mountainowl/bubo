@@ -334,6 +334,11 @@ class ReviewConfig:
     verify_max_findings: int = 5
     verify_timeout_seconds: int = 300
     verify_command: list[str] = field(default_factory=list)
+    reconcile_fixed_findings: bool = False
+    reconcile_confidence_floor: float = 0.9
+    reconcile_timeout_seconds: int = 300
+    reconcile_lease_seconds: int = 300
+    reconcile_command: list[str] = field(default_factory=list)
 
 
 def load_review_config(
@@ -533,6 +538,24 @@ def review_config_from_dict(
             "verify_timeout_seconds",
         ),
         verify_command=string_list(review.get("verify_command"), "verify_command"),
+        reconcile_fixed_findings=bool_value(
+            review.get("reconcile_fixed_findings"),
+            "reconcile_fixed_findings",
+            default=False,
+        ),
+        reconcile_confidence_floor=confidence_threshold(
+            review.get("reconcile_confidence_floor", 0.9), "reconcile_confidence_floor"
+        ),
+        reconcile_timeout_seconds=positive_int(
+            review.get("reconcile_timeout_seconds", 300),
+            "reconcile_timeout_seconds",
+        ),
+        reconcile_lease_seconds=positive_int(
+            review.get("reconcile_lease_seconds", 300), "reconcile_lease_seconds"
+        ),
+        reconcile_command=string_list(
+            review.get("reconcile_command"), "reconcile_command"
+        ),
     )
 
 

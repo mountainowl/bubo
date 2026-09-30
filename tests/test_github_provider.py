@@ -7,6 +7,7 @@ from unittest.mock import patch
 from bubo import github
 from bubo.review_config import ReviewConfig
 from bubo.scm import get_provider
+from bubo.scm.base import FindingThreadReply, FindingThreadResolution, FindingThreadState
 from bubo.scm.github import GitHubProvider
 
 
@@ -141,7 +142,7 @@ def test_checkout_clones_credential_safe(tmp_path, monkeypatch) -> None:
 def test_classify_review_thread_outcome_reads_markers_and_replies() -> None:
     comment = {"id": "c1", "body": "finding"}
     replies = [
-        {"user": {"login": "dev1"}, "body": "[llm-review:false-positive] nope"},
+        {"user": {"login": "dev1", "type": "User"}, "body": "[llm-review:false-positive] nope"},
     ]
     outcome = github.classify_review_thread_outcome(
         comment, replies, bot_username="bubo", pr_state="merged"
@@ -229,6 +230,69 @@ def test_get_pr_review_threads_paginates_and_normalizes() -> None:
     assert first["line"] == 7
 
 
+def test_get_pr_review_threads_fetches_marker_after_first_100_thread_comments() -> None:
+    initial_comments = [
+        {
+            "databaseId": 100,
+            "id": "PRRC_root",
+            "author": {"login": "bubo"},
+            "body": "finding",
+        }
+    ] + [
+        {
+            "databaseId": index,
+            "id": f"PRRC_{index}",
+            "author": {"login": "dev"},
+            "body": "reply",
+            "replyTo": {"id": "PRRC_root"},
+        }
+        for index in range(101, 200)
+    ]
+    first_page = {
+        "repository": {
+            "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [
+                        {
+                            "id": "PRRT_1",
+                            "isResolved": False,
+                            "comments": {
+                                "pageInfo": {"hasNextPage": True, "endCursor": "COMMENTS_1"},
+                                "nodes": initial_comments,
+                            },
+                        }
+                    ],
+                }
+            }
+        }
+    }
+    second_page = {
+        "node": {
+            "comments": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [
+                    {
+                        "databaseId": 200,
+                        "id": "PRRC_marker",
+                        "author": {"login": "bubo"},
+                        "body": "fixed <!-- bubo-fixed:abc -->",
+                        "replyTo": {"id": "PRRC_root"},
+                    }
+                ],
+            }
+        }
+    }
+    with patch("bubo.github.graphql", side_effect=[first_page, second_page]) as graphql:
+        threads = github.get_pr_review_threads(ReviewConfig(provider="github"), "tok", "o/r", 5)
+    assert graphql.call_count == 2
+    assert len(threads[0]["comments"]) == 101
+    assert (
+        github.bubo_reply_with_marker(threads[0], "bubo", "<!-- bubo-fixed:abc -->")
+        is not None
+    )
+
+
 def test_find_thread_for_comment_matches_database_id_and_node_id() -> None:
     threads = [
         {"is_resolved": True, "comments": [{"database_id": 100, "node_id": "PRRC_a"}]},
@@ -250,7 +314,7 @@ def test_classify_graphql_thread_outcome_reads_resolution() -> None:
         "is_resolved": True,
         "comments": [
             {"login": "bubo", "body": "finding"},
-            {"login": "dev1", "body": "[llm-review:false-positive] nope"},
+            {"login": "dev1", "actor_type": "User", "body": "[llm-review:false-positive] nope"},
         ],
     }
     outcome = github.classify_graphql_thread_outcome(thread, bot_username="bubo", pr_state="merged")
@@ -258,6 +322,9 @@ def test_classify_graphql_thread_outcome_reads_resolution() -> None:
     assert outcome["developer_replied"] is True
     assert outcome["false_positive"] is True
     assert outcome["disputed"] is True
+    assert outcome["developer_agreed"] is False
+    assert outcome["developer_disposition"] == "false_positive"
+    assert outcome["resolution_observed"] is True
     # Resolved before merge -> not a merged-unresolved finding.
     assert outcome["merged_unresolved"] is False
 
@@ -276,7 +343,7 @@ def test_classify_graphql_thread_outcome_extracts_finding_and_reply_text() -> No
         "is_resolved": True,
         "comments": [
             {"login": "bubo", "body": "The Finding Body"},
-            {"login": "dev1", "body": "Working As Intended"},
+            {"login": "dev1", "actor_type": "User", "body": "Working As Intended"},
         ],
     }
     outcome = github.classify_graphql_thread_outcome(thread, bot_username="bubo", pr_state="open")
@@ -284,11 +351,82 @@ def test_classify_graphql_thread_outcome_extracts_finding_and_reply_text() -> No
     assert "Working As Intended" in outcome["_reply_text"]
 
 
+def test_graphql_outcome_records_explicit_human_agreement_evidence() -> None:
+    thread = {
+        "is_resolved": True,
+        "comments": [
+            {"login": "bubo", "body": "finding"},
+            {
+                "login": "dev1",
+                "actor_type": "User",
+                "body": "[llm-review:agreed] fixed in this branch",
+                "created_at": "2026-09-30T12:00:00Z",
+            },
+        ],
+    }
+    outcome = github.classify_graphql_thread_outcome(thread, "bubo", "open")
+    assert outcome["developer_agreed"] is True
+    assert outcome["developer_disposition"] == "agrees"
+    assert '"actor": "dev1"' in outcome["disposition_evidence"]
+    assert '"time": "2026-09-30T12:00:00Z"' in outcome["disposition_evidence"]
+
+
+def test_outcome_keeps_silence_and_resolution_developer_disposition_unknown() -> None:
+    outcome = github.classify_graphql_thread_outcome(
+        {"is_resolved": True, "comments": [{"login": "bubo", "body": "finding"}]},
+        "bubo",
+        "merged",
+    )
+    assert outcome["developer_agreed"] is False
+    assert outcome["developer_disposition"] == "unknown"
+    assert outcome["disposition_evidence"] == "unknown"
+
+
+def test_outcome_accepts_only_explicit_agrees_classifier_result() -> None:
+    thread = {
+        "is_resolved": False,
+        "comments": [
+            {"login": "bubo", "body": "finding"},
+            {"login": "dev1", "actor_type": "User", "body": "I will take a look"},
+        ],
+    }
+    outcome = github.classify_graphql_thread_outcome(
+        thread, "bubo", "open", reply_classifier_result={"verdict": "agrees"}
+    )
+    assert outcome["developer_agreed"] is True
+    assert outcome["developer_disposition"] == "agrees"
+    assert '"kind": "reply_classifier"' in outcome["disposition_evidence"]
+    unknown = github.classify_graphql_thread_outcome(
+        thread, "bubo", "open", reply_classifier_result={"verdict": "accepted"}
+    )
+    assert unknown["developer_disposition"] == "unknown"
+
+
+def test_graphql_outcome_ignores_other_bot_agreement_and_dispute_markers() -> None:
+    thread = {
+        "is_resolved": False,
+        "comments": [
+            {"login": "bubo", "actor_type": "Bot", "body": "finding"},
+            {
+                "login": "another-bot",
+                "actor_type": "Bot",
+                "body": "[llm-review:agreed] [llm-review:disputed]",
+            },
+        ],
+    }
+    outcome = github.classify_graphql_thread_outcome(thread, "bubo", "open")
+    assert outcome["developer_replied"] is False
+    assert outcome["developer_agreed"] is False
+    assert outcome["developer_disposition"] == "unknown"
+    assert outcome["disputed"] is False
+    assert outcome["false_positive"] is False
+
+
 def test_classify_review_thread_outcome_extracts_finding_and_reply_text() -> None:
     # GitHub REST fallback (GraphQL outage) must also surface the text so
     # classification still works on that path.
     comment = {"body": "The Finding Body"}
-    replies = [{"user": {"login": "dev1"}, "body": "Working As Intended"}]
+    replies = [{"user": {"login": "dev1", "type": "User"}, "body": "Working As Intended"}]
     outcome = github.classify_review_thread_outcome(
         comment, replies, bot_username="bubo", pr_state="open"
     )
@@ -327,6 +465,7 @@ def test_fetch_outcome_falls_back_to_rest_on_graphql_failure() -> None:
     # REST classifier is resolution-blind, but a merged PR -> merged_unresolved.
     assert outcome["resolved"] is False
     assert outcome["merged_unresolved"] is True
+    assert outcome["resolution_observed"] is False
 
 
 def test_pulls_updated_after_stops_at_cutoff() -> None:
@@ -367,3 +506,287 @@ def test_provider_review_prompt_mentions_github_pr() -> None:
     assert "GitHub PR" in prompt
     assert "PR number: 5" in prompt
     assert "Use the `code-reviewer` skill" in prompt
+
+
+def _open_bubo_thread(*, marker: str = "") -> dict:
+    comments = [
+        {
+            "database_id": 100,
+            "node_id": "PRRC_root",
+            "login": "bubo",
+            "body": "finding",
+            "in_reply_to_node_id": "",
+        }
+    ]
+    if marker:
+        comments.append(
+            {
+                "database_id": 101,
+                "node_id": "PRRC_reply",
+                "login": "bubo",
+                "body": f"verified {marker}",
+                "in_reply_to_node_id": "PRRC_root",
+            }
+        )
+    return {"node_id": "PRRT_1", "is_resolved": False, "comments": comments}
+
+
+def test_finding_thread_requires_bubo_owned_root_and_detects_marker() -> None:
+    provider = GitHubProvider()
+    thread = _open_bubo_thread(marker="<!-- bubo-fixed:abc -->")
+    with patch("bubo.github.get_pr_review_threads", return_value=[thread]):
+        result = provider.finding_thread(
+            ReviewConfig(provider="github"),
+            "tok",
+            "o/r",
+            5,
+            "100",
+            "bubo",
+            "<!-- bubo-fixed:abc -->",
+        )
+    assert result.state is FindingThreadState.OPEN
+    assert result.reply_marker_present is True
+
+
+def test_finding_thread_rejects_bubo_reply_on_developer_root() -> None:
+    provider = GitHubProvider()
+    thread = {
+        "node_id": "PRRT_1",
+        "is_resolved": False,
+        "comments": [
+            {
+                "database_id": 100,
+                "node_id": "PRRC_root",
+                "login": "dev1",
+                "body": "developer finding",
+                "in_reply_to_node_id": "",
+            },
+            {
+                "database_id": 101,
+                "node_id": "PRRC_bubo_reply",
+                "login": "bubo",
+                "body": "<!-- bubo-fixed:abc -->",
+                "in_reply_to_node_id": "PRRC_root",
+            },
+        ],
+    }
+    with patch("bubo.github.get_pr_review_threads", return_value=[thread]):
+        result = provider.finding_thread(
+            ReviewConfig(provider="github"),
+            "tok",
+            "o/r",
+            5,
+            "100",
+            "bubo",
+            "<!-- bubo-fixed:abc -->",
+        )
+    assert result.state is FindingThreadState.FOREIGN
+    assert result.reply_marker_present is False
+
+
+def test_finding_thread_marks_missing_numeric_comment_deleted_on_rest_404() -> None:
+    provider = GitHubProvider()
+    with patch("bubo.github.get_pr_review_threads", return_value=[]):
+        with patch("bubo.github.pr_review_comment_deleted", return_value=True) as deleted:
+            result = provider.finding_thread(
+                ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "bubo", "marker"
+            )
+    assert result.state is FindingThreadState.DELETED
+    deleted.assert_called_once_with(ReviewConfig(provider="github"), "tok", "o/r", "100")
+
+
+def test_reply_to_finding_thread_reuses_marker_before_rest_write() -> None:
+    provider = GitHubProvider()
+    marker = "<!-- bubo-fixed:abc -->"
+    with patch("bubo.github.get_pr_review_threads", return_value=[_open_bubo_thread(marker=marker)]):
+        with patch("bubo.github.reply_to_pr_review_comment") as reply:
+            result = provider.reply_to_finding_thread(
+                ReviewConfig(provider="github"), "tok", "o/r", 5, "100", f"fixed\n{marker}", marker
+            )
+    assert result == FindingThreadReply(
+        "101", marker_confirmed=True, applied_by_bubo=False, state=FindingThreadState.OPEN
+    )
+    reply.assert_not_called()
+
+
+def test_reply_to_finding_thread_posts_only_to_bubo_root() -> None:
+    provider = GitHubProvider()
+    marker = "<!-- bubo-fixed:abc -->"
+    with patch(
+        "bubo.github.get_pr_review_threads",
+        side_effect=[[_open_bubo_thread()], [_open_bubo_thread(marker=marker)]],
+    ):
+        with patch(
+            "bubo.github.reply_to_pr_review_comment", return_value={"id": 222}
+        ) as reply:
+            result = provider.reply_to_finding_thread(
+                ReviewConfig(provider="github"),
+                "tok",
+                "o/r",
+                5,
+                "100",
+                f"verified fixed\n{marker}",
+                marker,
+            )
+    assert result == FindingThreadReply(
+        "222", marker_confirmed=True, applied_by_bubo=True, state=FindingThreadState.OPEN
+    )
+    reply.assert_called_once_with(
+        ReviewConfig(provider="github"),
+        "tok",
+        "o/r",
+        5,
+        "100",
+        f"verified fixed\n{marker}",
+    )
+
+
+def test_reply_to_finding_thread_requires_refetched_marker_confirmation() -> None:
+    provider = GitHubProvider()
+    marker = "<!-- bubo-fixed:abc -->"
+    with patch(
+        "bubo.github.get_pr_review_threads",
+        side_effect=[[_open_bubo_thread()], [_open_bubo_thread()]],
+    ):
+        with patch("bubo.github.reply_to_pr_review_comment", return_value={"id": 222}):
+            try:
+                provider.reply_to_finding_thread(
+                    ReviewConfig(provider="github"), "tok", "o/r", 5, "100", marker, marker
+                )
+            except RuntimeError as exc:
+                assert "marker" in str(exc)
+            else:
+                raise AssertionError("missing refetched marker must fail")
+
+
+def test_reply_to_finding_thread_requires_nonempty_rest_reply_id() -> None:
+    provider = GitHubProvider()
+    marker = "<!-- bubo-fixed:abc -->"
+    with patch("bubo.github.get_pr_review_threads", return_value=[_open_bubo_thread()]):
+        with patch("bubo.github.reply_to_pr_review_comment", return_value={}):
+            try:
+                provider.reply_to_finding_thread(
+                    ReviewConfig(provider="github"), "tok", "o/r", 5, "100", marker, marker
+                )
+            except RuntimeError as exc:
+                assert "id" in str(exc)
+            else:
+                raise AssertionError("empty REST reply id must fail")
+
+
+def test_reply_to_finding_thread_reports_developer_resolved_race() -> None:
+    provider = GitHubProvider()
+    marker = "<!-- bubo-fixed:abc -->"
+    developer_resolved = {**_open_bubo_thread(marker=marker), "is_resolved": True}
+    with patch(
+        "bubo.github.get_pr_review_threads",
+        side_effect=[[_open_bubo_thread()], [developer_resolved]],
+    ):
+        with patch("bubo.github.reply_to_pr_review_comment", return_value={"id": 222}):
+            result = provider.reply_to_finding_thread(
+                ReviewConfig(provider="github"), "tok", "o/r", 5, "100", marker, marker
+            )
+    assert result == FindingThreadReply(
+        "222", marker_confirmed=True, applied_by_bubo=True, state=FindingThreadState.RESOLVED
+    )
+
+
+def test_resolve_finding_thread_refetches_and_verifies_final_state() -> None:
+    provider = GitHubProvider()
+    open_thread = _open_bubo_thread()
+    resolved_thread = {**open_thread, "is_resolved": True}
+    with patch(
+        "bubo.github.get_pr_review_threads", side_effect=[[open_thread], [resolved_thread]]
+    ):
+        with patch("bubo.github.resolve_pr_review_thread") as resolve:
+            result = provider.resolve_finding_thread(
+                ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "bubo"
+            )
+    resolve.assert_called_once_with(ReviewConfig(provider="github"), "tok", "PRRT_1")
+    assert result == FindingThreadResolution(FindingThreadState.RESOLVED, applied_by_bubo=False)
+
+
+def test_resolve_finding_thread_is_noop_when_already_resolved() -> None:
+    provider = GitHubProvider()
+    resolved_thread = {**_open_bubo_thread(), "is_resolved": True}
+    with patch("bubo.github.get_pr_review_threads", return_value=[resolved_thread]) as get_threads:
+        with patch("bubo.github.resolve_pr_review_thread") as resolve:
+            result = provider.resolve_finding_thread(
+                ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "bubo"
+            )
+    assert get_threads.call_count == 1
+    resolve.assert_not_called()
+    assert result == FindingThreadResolution(FindingThreadState.RESOLVED, applied_by_bubo=False)
+
+
+def test_resolve_finding_thread_reports_developer_resolution_race() -> None:
+    provider = GitHubProvider()
+    open_thread = _open_bubo_thread()
+    developer_resolved = {**open_thread, "is_resolved": True, "resolved_by": "dev1"}
+    with patch(
+        "bubo.github.get_pr_review_threads", side_effect=[[open_thread], [developer_resolved]]
+    ):
+        with patch("bubo.github.resolve_pr_review_thread"):
+            result = provider.resolve_finding_thread(
+                ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "bubo"
+            )
+    assert result == FindingThreadResolution(FindingThreadState.RESOLVED, applied_by_bubo=False)
+
+
+def test_resolve_finding_thread_attributes_only_bubo_resolver() -> None:
+    provider = GitHubProvider()
+    open_thread = _open_bubo_thread()
+    bubo_resolved = {**open_thread, "is_resolved": True, "resolved_by": "bubo"}
+    with patch(
+        "bubo.github.get_pr_review_threads", side_effect=[[open_thread], [bubo_resolved]]
+    ):
+        with patch("bubo.github.resolve_pr_review_thread"):
+            result = provider.resolve_finding_thread(
+                ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "bubo"
+            )
+    assert result == FindingThreadResolution(FindingThreadState.RESOLVED, applied_by_bubo=True)
+
+
+def test_resolve_finding_thread_returns_deleted_or_foreign_noop_state() -> None:
+    provider = GitHubProvider()
+    with patch("bubo.github.get_pr_review_threads", return_value=[]):
+        with patch("bubo.github.pr_review_comment_deleted", return_value=True):
+            deleted = provider.resolve_finding_thread(
+                ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "bubo"
+            )
+    foreign_thread = {
+        "node_id": "PRRT_1",
+        "is_resolved": False,
+        "comments": [
+            {
+                "database_id": 100,
+                "node_id": "PRRC_root",
+                "login": "dev1",
+                "body": "finding",
+                "in_reply_to_node_id": "",
+            }
+        ],
+    }
+    with patch("bubo.github.get_pr_review_threads", return_value=[foreign_thread]):
+        foreign = provider.resolve_finding_thread(
+            ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "bubo"
+        )
+    assert deleted == FindingThreadResolution(FindingThreadState.DELETED, applied_by_bubo=False)
+    assert foreign == FindingThreadResolution(FindingThreadState.FOREIGN, applied_by_bubo=False)
+
+
+def test_resolution_graphql_failure_has_no_rest_fallback() -> None:
+    provider = GitHubProvider()
+    with patch("bubo.github.get_pr_review_threads", side_effect=RuntimeError("graphql down")):
+        with patch("bubo.github.reply_to_pr_review_comment") as reply:
+            with patch("bubo.github.resolve_pr_review_thread") as resolve:
+                try:
+                    provider.resolve_finding_thread(
+                        ReviewConfig(provider="github"), "tok", "o/r", 5, "100", "bubo"
+                    )
+                except RuntimeError as exc:
+                    assert str(exc) == "graphql down"
+                else:
+                    raise AssertionError("GraphQL failure must be raised")
+    reply.assert_not_called()
+    resolve.assert_not_called()

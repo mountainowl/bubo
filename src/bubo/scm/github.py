@@ -26,7 +26,14 @@ from bubo.errors import describe
 from bubo.events import log
 from bubo.findings import changed_lines_from_files, resolve_finding_line
 from bubo.review_config import ReviewConfig
-from bubo.scm.base import build_review_contract, git_checkout_change
+from bubo.scm.base import (
+    FindingThread,
+    FindingThreadReply,
+    FindingThreadResolution,
+    FindingThreadState,
+    build_review_contract,
+    git_checkout_change,
+)
 from bubo.types import JsonObject
 
 
@@ -201,6 +208,153 @@ class GitHubProvider:
         return github.classify_review_thread_outcome(
             comment, replies, bot_username=bot_username, pr_state=pr_state
         )
+
+    def finding_thread(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        thread_id: str,
+        bot_username: str,
+        reply_marker: str,
+    ) -> FindingThread:
+        """Return a fail-closed, Bubo-owned GitHub review-thread state."""
+        threads = github.get_pr_review_threads(cfg, token, project, number)
+        thread = github.find_thread_for_comment(threads, thread_id)
+        if thread is None:
+            # GraphQL does not expose deleted review comments.  A missing
+            # thread is only known-deleted when its persisted REST id returns
+            # 404.  Either result remains non-writable.
+            if thread_id.isdecimal() and github.pr_review_comment_deleted(
+                cfg, token, project, thread_id
+            ):
+                return FindingThread(FindingThreadState.DELETED)
+            return FindingThread(FindingThreadState.FOREIGN)
+        root = github.bubo_owned_root(thread, thread_id, bot_username)
+        if root is None:
+            return FindingThread(FindingThreadState.FOREIGN)
+        marker = github.bubo_reply_with_marker(thread, bot_username, reply_marker) is not None
+        state = (
+            FindingThreadState.RESOLVED if thread.get("is_resolved") else FindingThreadState.OPEN
+        )
+        return FindingThread(state, reply_marker_present=marker)
+
+    def reply_to_finding_thread(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        thread_id: str,
+        body: str,
+        reply_marker: str,
+    ) -> FindingThreadReply:
+        """Post/reuse a marked reply and prove its marker survived GitHub."""
+        if reply_marker not in body:
+            raise ValueError("Bubo reconciliation reply is missing its idempotency marker")
+        threads = github.get_pr_review_threads(cfg, token, project, number)
+        thread = github.find_thread_for_comment(threads, thread_id)
+        if thread is None:
+            snapshot = self.finding_thread(
+                cfg, token, project, number, thread_id, self.bot_username(), reply_marker
+            )
+            return FindingThreadReply(
+                None,
+                marker_confirmed=snapshot.reply_marker_present,
+                applied_by_bubo=False,
+                state=snapshot.state,
+            )
+        if thread.get("is_resolved"):
+            return FindingThreadReply(
+                None,
+                marker_confirmed=False,
+                applied_by_bubo=False,
+                state=FindingThreadState.RESOLVED,
+            )
+        root = github.bubo_owned_root(thread, thread_id, self.bot_username())
+        if root is None:
+            return FindingThreadReply(
+                None,
+                marker_confirmed=False,
+                applied_by_bubo=False,
+                state=FindingThreadState.FOREIGN,
+            )
+        prior = github.bubo_reply_with_marker(thread, self.bot_username(), reply_marker)
+        if prior is not None:
+            return FindingThreadReply(
+                str(prior.get("database_id") or prior.get("node_id") or "") or None,
+                marker_confirmed=True,
+                applied_by_bubo=False,
+                state=FindingThreadState.OPEN,
+            )
+        root_id = root.get("database_id")
+        if root_id is None:
+            raise RuntimeError("GitHub Bubo root comment has no REST database id")
+        created = github.reply_to_pr_review_comment(
+            cfg, token, project, number, str(root_id), body
+        )
+        reply_id = str(created.get("id") or "")
+        if not reply_id:
+            raise RuntimeError("GitHub did not return an id for Bubo reconciliation reply")
+        # Re-fetch through complete GraphQL pagination: a successful REST post
+        # alone is not durable evidence if the response was stale or malformed.
+        final = self.finding_thread(
+            cfg, token, project, number, thread_id, self.bot_username(), reply_marker
+        )
+        if not final.reply_marker_present:
+            raise RuntimeError("GitHub did not confirm Bubo reconciliation reply marker")
+        return FindingThreadReply(
+            reply_id,
+            marker_confirmed=True,
+            applied_by_bubo=True,
+            state=final.state,
+        )
+
+    def resolve_finding_thread(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        thread_id: str,
+        bot_username: str,
+    ) -> FindingThreadResolution:
+        """Resolve a proven Bubo thread and return a verified provider state."""
+        threads = github.get_pr_review_threads(cfg, token, project, number)
+        thread = github.find_thread_for_comment(threads, thread_id)
+        if thread is None:
+            snapshot = self.finding_thread(
+                cfg, token, project, number, thread_id, bot_username, ""
+            )
+            return FindingThreadResolution(snapshot.state, applied_by_bubo=False)
+        if github.bubo_owned_root(thread, thread_id, bot_username) is None:
+            return FindingThreadResolution(FindingThreadState.FOREIGN, applied_by_bubo=False)
+        if thread.get("is_resolved"):
+            return FindingThreadResolution(FindingThreadState.RESOLVED, applied_by_bubo=False)
+        node_id = str(thread.get("node_id") or "")
+        if not node_id:
+            raise RuntimeError("GitHub review thread has no GraphQL node id")
+        # Deliberately no REST fallback: only GraphQL can resolve a review
+        # thread, and a failed mutation must leave the finding open.
+        github.resolve_pr_review_thread(cfg, token, node_id)
+        final_threads = github.get_pr_review_threads(cfg, token, project, number)
+        final_thread = github.find_thread_for_comment(final_threads, thread_id)
+        if final_thread is None:
+            final = self.finding_thread(
+                cfg, token, project, number, thread_id, bot_username, ""
+            )
+            if final.state is FindingThreadState.DELETED:
+                return FindingThreadResolution(final.state, applied_by_bubo=False)
+            raise RuntimeError("GitHub review thread was not resolved after mutation")
+        if github.bubo_owned_root(final_thread, thread_id, bot_username) is None:
+            return FindingThreadResolution(FindingThreadState.FOREIGN, applied_by_bubo=False)
+        if not final_thread.get("is_resolved"):
+            raise RuntimeError("GitHub review thread was not resolved after mutation")
+        # A different resolver proves a developer/manual race; do not take
+        # credit for it even though the desired end state is already reached.
+        applied = str(final_thread.get("resolved_by") or "") == bot_username
+        return FindingThreadResolution(FindingThreadState.RESOLVED, applied_by_bubo=applied)
 
     def review_prompt(
         self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
