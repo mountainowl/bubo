@@ -13,6 +13,8 @@ requests and GitHub pull requests.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
@@ -21,6 +23,45 @@ from bubo.review_config import ReviewConfig
 from bubo.secrets import redact_secrets
 from bubo.subproc import run_bounded
 from bubo.types import JsonObject
+
+
+class FindingThreadState(StrEnum):
+    """Provider-normalized state for one persisted Bubo finding thread."""
+
+    OPEN = "open"
+    RESOLVED = "resolved"
+    DELETED = "deleted"
+    FOREIGN = "foreign"
+
+
+@dataclass(frozen=True, slots=True)
+class FindingThread:
+    """Current provider view used to guard reconciliation writes.
+
+    ``reply_marker_present`` lets a retry skip a duplicate Bubo verification
+    reply when the first reply request succeeded but local persistence failed.
+    """
+
+    state: FindingThreadState
+    reply_marker_present: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class FindingThreadReply:
+    """Result of an idempotent reconciliation reply operation."""
+
+    reply_id: str | None
+    marker_confirmed: bool
+    applied_by_bubo: bool
+    state: FindingThreadState
+
+
+@dataclass(frozen=True, slots=True)
+class FindingThreadResolution:
+    """Result of an idempotent resolution operation."""
+
+    state: FindingThreadState
+    applied_by_bubo: bool
 
 # The finding-output contract shared by every provider's review prompt. Only
 # the change-specific header differs per provider; the JSON shape the agent
@@ -300,6 +341,49 @@ class ScmProvider(Protocol):
         bot_username: str,
     ) -> JsonObject:
         """Fetch a posted comment's current state and classify its outcome."""
+        ...
+
+    def finding_thread(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        thread_id: str,
+        bot_username: str,
+        reply_marker: str,
+    ) -> FindingThread:
+        """Return the guarded state of a Bubo-owned persisted thread.
+
+        Implementations must return ``FOREIGN`` unless the original finding
+        comment belongs to ``bot_username``. They must detect ``reply_marker``
+        in a prior Bubo reconciliation reply for retry idempotency.
+        """
+        ...
+
+    def reply_to_finding_thread(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        thread_id: str,
+        body: str,
+        reply_marker: str,
+    ) -> FindingThreadReply:
+        """Post/reuse a marked reply and confirm its provider-visible marker."""
+        ...
+
+    def resolve_finding_thread(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        thread_id: str,
+        bot_username: str,
+    ) -> FindingThreadResolution:
+        """Resolve a guarded thread; report whether Bubo applied the mutation."""
         ...
 
     def review_prompt(

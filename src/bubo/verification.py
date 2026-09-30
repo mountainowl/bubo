@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from bubo.types import JsonObject
 
@@ -103,6 +104,27 @@ class VerificationResult:
     votes: tuple[Verdict, ...]
 
 
+class ReconciliationVerdict(StrEnum):
+    """Conservative proof state for a previously posted finding."""
+
+    FIXED = "fixed"
+    STILL_VALID = "still_valid"
+    UNCERTAIN = "uncertain"
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciliationResult:
+    """A current-head verification result with auditable evidence."""
+
+    verdict: ReconciliationVerdict
+    confidence: float
+    reason: str
+    evidence_path: str = ""
+    evidence_line: int | None = None
+    causal_commit: str | None = None
+    ok: bool = True
+
+
 def _finding_excerpt(finding: JsonObject) -> str:
     """Render the finding's own claim for the verifier prompt.
 
@@ -169,6 +191,56 @@ def build_verification_prompt(finding: JsonObject, *, lens: str, diff_excerpt: s
         '- "confidence": your certainty in the verdict, 0.0 (none) to 1.0 '
         "(certain).\n"
         '- "reason": one short sentence justifying the verdict.'
+    )
+
+
+def build_reconciliation_prompt(
+    finding: JsonObject, *, original_sha: str, current_sha: str, diff_excerpt: str = ""
+) -> str:
+    """Ask for proof of a fix without conflating silence with a fix."""
+    return (
+        "You are verifying whether a previously posted code-review finding was fixed. "
+        "Inspect the current checkout at the stated head and the supplied history excerpt. "
+        "Absence from a new review is NOT evidence of a fix. Return fixed only when current "
+        "code directly proves the original failure is prevented. If it still occurs return "
+        "still_valid; if evidence is incomplete return uncertain.\n\n"
+        f"ORIGINAL SHA: {original_sha}\nCURRENT SHA: {current_sha}\n\n"
+        f"PRIOR FINDING:\n{_finding_excerpt(finding)}\n\n"
+        f"HISTORY EXCERPT:\n{diff_excerpt[:_MAX_EXCERPT_CHARS]}\n\n"
+        "Respond with ONLY JSON: "
+        '{"verdict":"fixed|still_valid|uncertain","confidence":0..1,'
+        '"reason":"evidence", "evidence_path":"path", "evidence_line":1, '
+        '"causal_commit":"full sha or null"}'
+    )
+
+
+def parse_reconciliation_result(stdout: str) -> ReconciliationResult | None:
+    """Parse a reconciliation verdict; malformed output is deliberately uncertain."""
+    decoder = json.JSONDecoder()
+    found: JsonObject | None = None
+    for index, char in enumerate(stdout):
+        if char != "{":
+            continue
+        try:
+            candidate, _ = decoder.raw_decode(stdout[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict) and "verdict" in candidate:
+            found = candidate
+    if found is None:
+        return None
+    try:
+        verdict = ReconciliationVerdict(str(found.get("verdict")))
+    except ValueError:
+        verdict = ReconciliationVerdict.UNCERTAIN
+    line = found.get("evidence_line")
+    return ReconciliationResult(
+        verdict=verdict,
+        confidence=_coerce_confidence(found.get("confidence")),
+        reason=str(found.get("reason") or "").strip(),
+        evidence_path=str(found.get("evidence_path") or "").strip(),
+        evidence_line=int(line) if isinstance(line, int) and line > 0 else None,
+        causal_commit=str(found.get("causal_commit") or "").strip() or None,
     )
 
 
@@ -270,10 +342,14 @@ def votes_summary(verdicts: Sequence[Verdict]) -> str:
 __all__ = [
     "DEFAULT_LENSES",
     "LENS_INSTRUCTIONS",
+    "ReconciliationResult",
+    "ReconciliationVerdict",
     "Verdict",
     "VerificationResult",
+    "build_reconciliation_prompt",
     "build_verification_prompt",
     "decide",
+    "parse_reconciliation_result",
     "parse_verdict",
     "votes_summary",
 ]

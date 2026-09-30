@@ -671,3 +671,40 @@ def test_to_csv_dispute_classes_section() -> None:
     # The raw row (no would_suppress key) renders an empty trailing cell.
     assert "security,5,2,0.4," in csv_text
     assert "documentation,5,3,0.6,True" in csv_text
+
+
+def test_resolution_provenance_is_grouped_by_normalized_severity() -> None:
+    from bubo import report
+
+    with _temp_db():
+        when = _ts()
+        with sqlite3.connect(paths.DB) as con:
+            for fingerprint, severity in (("block", "blocking"), ("soft", "non-blocking")):
+                con.execute(
+                    """insert into review_findings(project,iid,sha,fingerprint,file,line,status,
+                       body,severity,updated_at) values(?,?,?,?,?,?,?,?,?,?)""",
+                    ("g/r", 1, "sha", fingerprint, "a.py", 1, "posted", "body", severity, when),
+                )
+        db.record_finding_outcome(
+            project="g/r", iid=1, sha="sha", fingerprint="block", discussion_id="d1",
+            outcome={"resolved": True, "deleted": False, "developer_replied": True,
+                     "disputed": False, "false_positive": False, "duplicate": False,
+                     "merged_unresolved": False, "resolution_source": "bubo_auto",
+                     "resolution_evidence": "verified fixed at fullsha",
+                     "developer_disposition": "agrees", "disposition_evidence": "reply"},
+        )
+        db.record_finding_outcome(
+            project="g/r", iid=1, sha="sha", fingerprint="soft", discussion_id="d2",
+            outcome={"resolved": False, "deleted": False, "developer_replied": False,
+                     "disputed": False, "false_positive": False, "duplicate": False,
+                     "merged_unresolved": False},
+        )
+        rep = report.build_report(since_hours=24, project="g/r", generated_at="fixed")
+    blocking = rep["outcomes"]["by_severity"]["blocking"]
+    soft = rep["outcomes"]["by_severity"]["non_blocking"]
+    assert blocking["observed_resolution_rate"] == 1.0
+    assert blocking["bubo_auto_rate"] == 1.0
+    assert blocking["explicit_agreement_rate"] == 1.0
+    assert soft["unknown_disposition"] == 1
+    assert soft["explicit_agreement_rate"] == 0.0
+    assert rep["roi"]["resolution_by_severity"] == rep["outcomes"]["by_severity"]

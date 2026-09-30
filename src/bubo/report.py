@@ -234,8 +234,19 @@ def build_report(
     )
 
     outcomes_total = outcomes_raw["total"]
+    resolution_by_severity = {
+        severity: {
+            **counts,
+            "observed_resolution_rate": _rate(counts["resolved"], counts["total"]),
+            "bubo_auto_rate": _rate(counts["bubo_auto"], counts["total"]),
+            "explicit_agreement_rate": _rate(counts["agrees"], counts["total"]),
+            "explicit_disagreement_rate": _rate(counts["disagrees"], counts["total"]),
+        }
+        for severity, counts in outcomes_raw["by_severity"].items()
+    }
     outcomes = {
         **outcomes_raw,
+        "by_severity": resolution_by_severity,
         "accept_rate": _rate(outcomes_raw["resolved"], outcomes_total),
         "dispute_rate": _rate(outcomes_raw["disputed"], outcomes_total),
         "false_positive_rate": _rate(outcomes_raw["false_positive"], outcomes_total),
@@ -243,6 +254,9 @@ def build_report(
 
     roi = {
         **roi_raw,
+        # Resolution provenance is context for the ROI proxy, not proof that a
+        # developer agreed with a finding.  Keep the same normalized buckets.
+        "resolution_by_severity": resolution_by_severity,
         "accepted_per_usd": _rate(roi_raw["accepted"], roi_raw["cost_usd_sum"]),
     }
 

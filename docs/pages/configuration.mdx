@@ -93,6 +93,11 @@ Controls polling, filtering, and review-output policy.
 | `verify_max_findings` | integer | `5` | Maximum findings verified per change. Findings beyond the cap post unverified. |
 | `verify_timeout_seconds` | integer | `300` | Timeout for each verifier call. |
 | `verify_command` | string array | `[]` | Verifier command. Empty reuses `[agents].reviewer_command`. |
+| `reconcile_fixed_findings` | boolean | `false` | Opt in to guarded closure of Bubo-owned cross-head findings. |
+| `reconcile_confidence_floor` | number | `0.9` | FIXED proof minimum; current-checkout path and line evidence are required. |
+| `reconcile_timeout_seconds` | integer | `300` | Per-proof verifier timeout. |
+| `reconcile_lease_seconds` | integer | `300` | Per-finding claim lease for concurrent workers. |
+| `reconcile_command` | string array | `[]` | Dedicated proof verifier; empty reuses verifier/reviewer. |
 
 Canonical categories for `category_min_confidence`: `correctness`, `security`,
 `concurrency`, `resource`, `error_handling`, `performance`, `style`, `docs`,

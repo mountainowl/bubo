@@ -16,7 +16,14 @@ from bubo.config_values import ConfigError
 from bubo.errors import describe
 from bubo.findings import build_position, changed_lines_from_diffs
 from bubo.review_config import ReviewConfig
-from bubo.scm.base import build_review_contract, git_checkout_change
+from bubo.scm.base import (
+    FindingThread,
+    FindingThreadReply,
+    FindingThreadResolution,
+    FindingThreadState,
+    build_review_contract,
+    git_checkout_change,
+)
 from bubo.types import JsonObject
 
 
@@ -142,6 +149,155 @@ class GitLabProvider:
         return gitlab.classify_discussion_outcome(
             discussion, bot_username=bot_username, mr_state=str(mr.get("state") or "")
         )
+
+    def _finding_thread_snapshot(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        thread_id: str,
+        bot_username: str,
+        reply_marker: str,
+    ) -> tuple[FindingThread, str, str | None]:
+        """Read and validate one persisted Bubo discussion before a write.
+
+        GitLab returns the original note first.  We deliberately require that
+        note to belong to the configured Bubo account: a stored discussion ID
+        must never give Bubo permission to reply to or resolve someone else's
+        thread.
+        """
+        discussion = gitlab.get_mr_discussion(cfg, token, project, number, thread_id)
+        raw_notes = discussion.get("notes") or []
+        notes = [note for note in raw_notes if isinstance(note, dict)]
+
+        if bool(discussion.get("deleted")):
+            return FindingThread(FindingThreadState.DELETED), "", None
+        if not notes:
+            return FindingThread(FindingThreadState.FOREIGN), "", None
+
+        root = notes[0]
+        root_author = (root.get("author") or {}).get("username")
+        if root.get("deleted"):
+            return FindingThread(FindingThreadState.DELETED), "", None
+        if root_author != bot_username:
+            return FindingThread(FindingThreadState.FOREIGN), "", None
+
+        marker_found = False
+        marker_note_id = ""
+        for note in notes[1:]:
+            if note.get("deleted"):
+                continue
+            author = (note.get("author") or {}).get("username")
+            if (
+                reply_marker
+                and author == bot_username
+                and reply_marker in str(note.get("body") or "")
+            ):
+                marker_found = True
+                marker_note_id = str(note.get("id") or "")
+                break
+        resolved_notes = [
+            note for note in notes if bool(note.get("resolvable")) and bool(note.get("resolved"))
+        ]
+        resolved = bool(discussion.get("resolved")) or bool(resolved_notes)
+        state = FindingThreadState.RESOLVED if resolved else FindingThreadState.OPEN
+        # GitLab carries resolution attribution on the resolvable note. A few
+        # self-managed versions have also returned it at discussion level, so
+        # retain that fallback only when the note payload lacks a username.
+        resolver = None
+        for note in resolved_notes:
+            resolver = (note.get("resolved_by") or {}).get("username")
+            if resolver:
+                break
+        if not resolver:
+            resolver = (discussion.get("resolved_by") or {}).get("username")
+        return (
+            FindingThread(state, marker_found),
+            marker_note_id,
+            str(resolver) if resolver else None,
+        )
+
+    def finding_thread(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        thread_id: str,
+        bot_username: str,
+        reply_marker: str,
+    ) -> FindingThread:
+        thread, _, _ = self._finding_thread_snapshot(
+            cfg, token, project, number, thread_id, bot_username, reply_marker
+        )
+        return thread
+
+    def reply_to_finding_thread(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        thread_id: str,
+        body: str,
+        reply_marker: str,
+    ) -> FindingThreadReply:
+        """Reply once to a still-open Bubo-owned discussion."""
+        if reply_marker not in body:
+            raise ValueError("Bubo reconciliation reply is missing its idempotency marker")
+        thread, marker_note_id, _ = self._finding_thread_snapshot(
+            cfg,
+            token,
+            project,
+            number,
+            thread_id,
+            self.bot_username(),
+            reply_marker,
+        )
+        if thread.state is not FindingThreadState.OPEN:
+            return FindingThreadReply(None, thread.reply_marker_present, False, thread.state)
+        if thread.reply_marker_present:
+            return FindingThreadReply(marker_note_id or None, True, False, FindingThreadState.OPEN)
+        created = gitlab.create_mr_discussion_note(cfg, token, project, number, thread_id, body)
+        reply_id = str(created.get("id") or "")
+        if not reply_id:
+            raise RuntimeError("GitLab did not return an ID for Bubo reconciliation reply")
+        final, _, _ = self._finding_thread_snapshot(
+            cfg,
+            token,
+            project,
+            number,
+            thread_id,
+            self.bot_username(),
+            reply_marker,
+        )
+        if not final.reply_marker_present:
+            raise RuntimeError("GitLab did not confirm Bubo reconciliation reply marker")
+        return FindingThreadReply(reply_id, True, True, final.state)
+
+    def resolve_finding_thread(
+        self,
+        cfg: ReviewConfig,
+        token: str,
+        project: str,
+        number: int,
+        thread_id: str,
+        bot_username: str,
+    ) -> FindingThreadResolution:
+        """Resolve an open Bubo-owned discussion, then confirm server state."""
+        thread, _, _ = self._finding_thread_snapshot(
+            cfg, token, project, number, thread_id, bot_username, ""
+        )
+        if thread.state is not FindingThreadState.OPEN:
+            return FindingThreadResolution(thread.state, False)
+        gitlab.resolve_mr_discussion(cfg, token, project, number, thread_id)
+        final, _, resolved_by = self._finding_thread_snapshot(
+            cfg, token, project, number, thread_id, bot_username, ""
+        )
+        if final.state is not FindingThreadState.RESOLVED:
+            raise RuntimeError("GitLab did not confirm Bubo discussion resolution")
+        return FindingThreadResolution(FindingThreadState.RESOLVED, resolved_by == bot_username)
 
     def review_prompt(
         self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
