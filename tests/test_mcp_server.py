@@ -15,6 +15,7 @@ import os
 import sqlite3
 import subprocess
 import tempfile
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -24,6 +25,7 @@ import pytest
 from bubo import db, mcp_server, paths
 from bubo.review_config import ReviewConfig
 from bubo.statuses import FindingStatus, ReviewStatus
+from bubo.subscription import CircuitConfig, CircuitState, signal_path, state_path, write_state
 
 
 def _seed_two_reviews(tmp_db: Path) -> None:
@@ -469,6 +471,37 @@ def test_review_change_returns_raw_output_when_findings_unparseable() -> None:
     assert result["findings"] is None
     assert result["raw_output"] == "Codex crashed mid-stream"
     assert result["exit_code"] == 1
+
+
+def test_review_change_pauses_before_provider_when_circuit_open(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(paths, "DB", tmp_path / "reviewer.sqlite")
+    cfg = ReviewConfig(subscription_circuit=CircuitConfig(enabled=True))
+    write_state(state_path(tmp_path), CircuitState(status="open", heartbeat_at=time.time()))
+    provider = _FakeReviewProvider()
+    with (
+        patch("bubo.mcp_server.load_review_config", return_value=cfg),
+        patch("bubo.mcp_server.get_provider", return_value=provider) as get_provider,
+    ):
+        result = mcp_server.review_change(provider="github", project="owner/repo", number=5)
+    assert result["status"] == "deferred_subscription"
+    get_provider.assert_not_called()
+
+
+def test_review_change_signals_quota_without_returning_findings(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(paths, "DB", tmp_path / "reviewer.sqlite")
+    cfg = ReviewConfig(subscription_circuit=CircuitConfig(enabled=True))
+    write_state(state_path(tmp_path), CircuitState(status="closed", heartbeat_at=time.time()))
+    with (
+        patch("bubo.mcp_server.load_review_config", return_value=cfg),
+        patch("bubo.mcp_server.get_provider", return_value=_FakeReviewProvider()),
+        patch(
+            "bubo.mcp_server.run_bounded",
+            return_value=subprocess.CompletedProcess([], 1, "Error: insufficient_quota", None),
+        ),
+    ):
+        result = mcp_server.review_change(provider="github", project="owner/repo", number=5)
+    assert result == {"status": "deferred_subscription", "reason": "subscription_failure"}
+    assert signal_path(tmp_path).exists()
 
 
 # ---------------------------------------------------------------------------

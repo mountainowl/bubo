@@ -70,6 +70,15 @@ single status.
 | GitLab posting fails | token scope or bot lacks MR access | token is the bot user's and has `api` scope |
 | Same MR reviewed repeatedly | new SHA each push, or failed rows retried | `reviewed_mrs` by `(project, iid, sha)` |
 | Success status, no comments | `post_no_findings_comment = false` or `dry_run = true` | `[agents].post_no_findings_comment`; `[review].dry_run` |
+| Reviews are paused with `paused_subscription` | A terminal subscription/quota error opened the circuit, or a signal is awaiting monitor persistence. | Restore the subscription and let the monitor recover through its bounded probe cycle. |
+
+## Subscription circuit pause
+
+`paused_subscription` is an intentional pause and the health command exits `0`. Bubo does not discover, review, post, reconcile, or write no-findings acknowledgements while paused.
+
+`subscription_monitor_stale` means the monitor heartbeat is missing or too old; health exits `1` and reviews fail closed. A pending terminal-error signal is treated as `paused_subscription` until the monitor durably records the state.
+
+Do not edit circuit state files manually. The monitor is the sole state writer and recovery occurs only when its bounded reviewer probe returns a successfully parsed empty review response. Transition-only telemetry records `subscription_circuit_opened` and `subscription_circuit_recovered`; failed recovery probes are logged as `subscription_circuit_probe_failed`.
 
 ## Review did not run
 

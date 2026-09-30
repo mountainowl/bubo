@@ -83,7 +83,8 @@ _ALLOWED_ATTRS = frozenset(
         "findings_planned",
         "findings_skipped",
         "files_changed",
-        "lines_changed",
+    "lines_changed",
+    "circuit_state",
         # per-outcome engagement event — one per finding-outcome transition
         # (see `record_finding_outcome`). The value is the outcome name only.
         "outcome",
@@ -94,7 +95,9 @@ _ALLOWED_ATTRS = frozenset(
 # "other" so a custom command can never leak a path or arbitrary string.
 _KNOWN_PROVIDERS = frozenset({"gitlab", "github"})
 _KNOWN_AGENTS = frozenset({"codex", "claude"})
-_KNOWN_EVENTS = frozenset({"session_start", "review_completed", "finding_outcome"})
+_KNOWN_EVENTS = frozenset(
+    {"session_start", "review_completed", "finding_outcome", "subscription_circuit"}
+)
 # Developer-engagement outcome dimensions. Mirrors the per-finding flags the
 # poller's outcome sync writes to SQLite; a value outside the set normalizes to
 # "other" so a future column can never leak as an arbitrary string.
@@ -256,6 +259,12 @@ def record_session_start(cfg: AnalyticsConfig, *, scm_provider: str, projects_co
     )
 
 
+def record_subscription_circuit(cfg: AnalyticsConfig, *, event: str) -> None:
+    """Emit only safe, transition-only circuit state analytics."""
+    state = "opened" if event == "subscription_circuit_opened" else "recovered"
+    _emit(cfg, "subscription_circuit", {"circuit_state": state})
+
+
 def record_review_completed(
     cfg: AnalyticsConfig,
     *,
@@ -382,4 +391,5 @@ __all__ = [
     "record_finding_outcome",
     "record_review_completed",
     "record_session_start",
+    "record_subscription_circuit",
 ]

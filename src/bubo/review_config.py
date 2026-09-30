@@ -41,6 +41,7 @@ from bubo.errors import describe
 from bubo.findings import CANONICAL_CATEGORIES
 from bubo.governance_config import GovernanceConfig, governance_config_from_dict
 from bubo.paths import ROOT
+from bubo.subscription import DEFAULT_ERROR_PATTERNS, CircuitConfig
 from bubo.telemetry import TelemetryConfig, telemetry_config_from_dict
 
 # Default minimum confidence for posting a finding. Findings with a numeric
@@ -339,6 +340,8 @@ class ReviewConfig:
     reconcile_timeout_seconds: int = 300
     reconcile_lease_seconds: int = 300
     reconcile_command: list[str] = field(default_factory=list)
+    subscription_circuit: CircuitConfig = field(default_factory=CircuitConfig)
+    service_poll_interval_seconds: int = 900
 
 
 def load_review_config(
@@ -415,6 +418,7 @@ def review_config_from_dict(
     review = section(raw, "review")
     poller = section(raw, "poller")
     agent = section(raw, "agents")
+    circuit = section(raw, "subscription_circuit")
 
     provider = str(scm.get("provider", DEFAULT_PROVIDER)).strip().lower()
     if provider not in SUPPORTED_PROVIDERS:
@@ -555,6 +559,38 @@ def review_config_from_dict(
         ),
         reconcile_command=string_list(
             review.get("reconcile_command"), "reconcile_command"
+        ),
+        subscription_circuit=CircuitConfig(
+            enabled=bool_value(
+                circuit.get("enabled"), "subscription_circuit.enabled", default=False
+            ),
+            monitor_interval_seconds=positive_int(
+                circuit.get("monitor_interval_seconds", 15),
+                "subscription_circuit.monitor_interval_seconds",
+            ),
+            heartbeat_ttl_seconds=positive_int(
+                circuit.get("heartbeat_ttl_seconds", 60),
+                "subscription_circuit.heartbeat_ttl_seconds",
+            ),
+            probe_interval_seconds=positive_int(
+                circuit.get("probe_interval_seconds", 300),
+                "subscription_circuit.probe_interval_seconds",
+            ),
+            probe_backoff_max_seconds=positive_int(
+                circuit.get("probe_backoff_max_seconds", 3600),
+                "subscription_circuit.probe_backoff_max_seconds",
+            ),
+            probe_timeout_seconds=positive_int(
+                circuit.get("probe_timeout_seconds", 30),
+                "subscription_circuit.probe_timeout_seconds",
+            ),
+            error_patterns=tuple(
+                string_list(circuit.get("error_patterns"), "subscription_circuit.error_patterns")
+                or list(DEFAULT_ERROR_PATTERNS)
+            ),
+        ),
+        service_poll_interval_seconds=positive_int(
+            poller.get("interval_seconds", 900), "poller.interval_seconds"
         ),
     )
 

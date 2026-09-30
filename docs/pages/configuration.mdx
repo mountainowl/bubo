@@ -124,8 +124,24 @@ Controls state location and single-MR debug targeting.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `state_dir` | string | `"var"` | Runtime state directory. Relative paths resolve under `BUBO_ROOT`. |
-| `interval_seconds` | integer | `900` | Suggested interval for long-running wrappers. Cron/systemd can use their own interval. |
+| `interval_seconds` | integer | `900` | Interval for long-running wrappers and the portable `bubo-poller service` poll schedule. |
 | `target_merge_request_iid` | integer | unset | Debug filter for one GitLab MR IID. Leave unset in production. |
+
+## `[subscription_circuit]`
+
+This opt-in circuit breaker pauses reviews after a terminal subscription or quota failure. Review workers only record a signal; the persistent monitor is the sole writer of circuit state.
+
+When enabled, discovery, reviewer invocation, and SCM writes require a fresh monitor heartbeat and a `CLOSED` circuit. Missing or stale monitor state fails closed.
+
+| Key | Type | Default | Purpose |
+|---|---:|---:|---|
+| `enabled` | boolean | `false` | Enable subscription pause and recovery monitoring. |
+| `monitor_interval_seconds` | integer | `15` | Monitor heartbeat interval. |
+| `heartbeat_ttl_seconds` | integer | `60` | Maximum age of a usable monitor heartbeat. |
+| `probe_interval_seconds` | integer | `300` | Initial interval before a recovery probe. |
+| `probe_backoff_max_seconds` | integer | `3600` | Maximum recovery-probe backoff. |
+| `probe_timeout_seconds` | integer | `30` | Timeout for one recovery probe. |
+| `error_patterns` | string array | built-in patterns | Terminal subscription/quota error patterns that open the circuit. |
 
 ## `[agents]`
 
@@ -286,6 +302,15 @@ policy_mode           = "off"
 state_dir        = "var"
 interval_seconds = 900
 # target_merge_request_iid = 123
+
+[subscription_circuit]
+enabled = false
+monitor_interval_seconds = 15
+heartbeat_ttl_seconds = 60
+probe_interval_seconds = 300
+probe_backoff_max_seconds = 3600
+probe_timeout_seconds = 30
+error_patterns = ["insufficient[_ -]?quota", "exceeded your current quota"]
 
 [agents]
 reviewer_command = [

@@ -97,6 +97,9 @@ class ReviewTelemetry:
         self._verifications = _safe_instrument(
             self.meter.create_counter, "llm_review.verifications"
         )
+        self._subscription_circuits = _safe_instrument(
+            self.meter.create_counter, "llm_review.subscription_circuit"
+        )
         self._review_duration = _safe_instrument(
             self.meter.create_histogram,
             "llm_review.latency.review_seconds",
@@ -217,6 +220,15 @@ class ReviewTelemetry:
         No-op when telemetry is disabled.
         """
         self._add(self._verifications, 1, metric_attrs(repo=repo, outcome=outcome))
+
+    def record_subscription_circuit(self, *, event: str) -> None:
+        """Count a circuit transition without repository or error attributes."""
+        outcome = "opened" if event == "subscription_circuit_opened" else "recovered"
+        self._add(
+            self._subscription_circuits,
+            1,
+            metric_attrs(component="subscription_circuit", outcome=outcome),
+        )
 
     def record_failure(self, *, repo: str, error_type: str, operation: str) -> None:
         self._add(

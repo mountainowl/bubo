@@ -66,6 +66,7 @@ REPORTS = _STATE / "reports"
 JOBS = _STATE / "jobs"
 LOGS = _STATE / "log"
 RENDERED_PROMPTS = _STATE / "rendered-prompts"
+SERVICE_PID = _STATE / "state" / "bubo-service.pid"
 
 __all__ = [
     "CONFIG",
@@ -75,5 +76,6 @@ __all__ = [
     "RENDERED_PROMPTS",
     "REPORTS",
     "ROOT",
+    "SERVICE_PID",
     "WORK",
 ]

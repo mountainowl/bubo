@@ -46,6 +46,21 @@ The same two commands verify the wheel, sdist, deploy bundle, and the SBOM — p
 Install Bubo on the host with `uv tool install bubo`, then `bubo init` — the
 per-stack steps live on the [recipes](/recipes) page.
 
+## Portable service
+
+Run the portable service when Bubo should own both the poll schedule and the subscription monitor:
+
+```sh
+bubo-poller service start
+bubo-poller service start --foreground
+bubo-poller service status
+bubo-poller service stop
+```
+
+`start` detaches and writes service output to `var/log/service.log`; `--foreground` keeps the process attached for an external supervisor. The service waits for the monitor's first durable heartbeat before its first poll.
+
+The service is not an OS boot service. Use your platform's supervisor to restart it after process or machine failure.
+
 ## Schedule the poller
 
 > **`bubo init` does not install cron entries or systemd units.** Scheduling is a
@@ -75,8 +90,8 @@ sudo install -m 0644 \
 
 The cron entries run `bubo-poller` (poll cycle),
 `bubo-poller --sync-outcomes` (outcome grading), and `bubo-poller --health`
-(liveness probe) at staggered cadences. Each invocation runs once and exits —
-there's no daemon mode, so tight intervals are safe.
+(liveness probe) at staggered cadences. Each scheduled poll invocation is one-shot
+and exits after completion. The separate `bubo-poller service` mode is documented above.
 
 ### systemd
 
@@ -141,6 +156,14 @@ and reads thread resolution differently.
 - **Thread resolution** needs no GraphQL — GitLab's REST discussions API already
   carries the `resolved` / `resolvable` flags, so `--sync-outcomes` reads accurate
   state (including `merged_unresolved`) straight from REST.
+
+## Reconcile Bubo findings fixed in later commits
+
+Set `reconcile_fixed_findings = true` to let a successful non-dry-run rescan close a Bubo-owned finding that later commits have fixed. This applies to blocking and non-blocking findings.
+
+Bubo requires a separate high-confidence `FIXED` proof with current-checkout path and line evidence. It posts `Verified fixed as of <full SHA>` and resolves only its own GitLab or GitHub thread.
+
+Developer-resolved or deleted threads are no-ops. Uncertain proof, stale heads, duplicate threads, provider races, or a still-valid finding are left open; Bubo does not post a no-findings acknowledgement in those cases.
 
 ## Outcome sync
 
