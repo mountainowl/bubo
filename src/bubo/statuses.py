@@ -37,6 +37,7 @@ class ReviewStatus(StrEnum):
     SUCCESS = "success"
     NO_FINDINGS = "no_findings"
     FAILED = "failed"
+    DEFERRED = "deferred"
 
 
 class FindingStatus(StrEnum):

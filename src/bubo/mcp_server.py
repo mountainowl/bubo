@@ -40,7 +40,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from bubo import db
+from bubo import db, paths
 from bubo.config_values import ConfigError
 from bubo.errors import describe
 from bubo.events import log
@@ -53,6 +53,13 @@ from bubo.review_config import (
 from bubo.scm import get_provider
 from bubo.secrets import redact_secrets
 from bubo.subproc import run_bounded
+from bubo.subscription import (
+    is_subscription_failure,
+    review_gate,
+    signal_path,
+    signal_subscription_failure,
+    state_path,
+)
 
 mcp: FastMCP = FastMCP("bubo")
 
@@ -457,6 +464,10 @@ def review_change(
     # Build the same contract-carrying prompt the poller uses, then run the
     # operator's configured reviewer_command directly (no bundled wrapper).
     cfg = replace(load_review_config(ENV_CONFIG), provider=provider)
+    allowed, reason = review_gate(cfg.subscription_circuit, state_path(paths.DB.parent))
+    if not allowed:
+        log("mcp_review_deferred_subscription", reason=reason)
+        return {"status": "deferred_subscription", "reason": reason}
     scm = get_provider(cfg)
     token = scm.token()
     change = scm.get_change(cfg, token, project, number)
@@ -466,6 +477,12 @@ def review_change(
     result = run_bounded([*cfg.reviewer_command, prompt], timeout=timeout)
     duration = time.monotonic() - started
     raw = redact_secrets(result.stdout or "")
+    if cfg.subscription_circuit.enabled and is_subscription_failure(
+        raw, cfg.subscription_circuit.error_patterns, terminal_only=True
+    ):
+        signal_subscription_failure(signal_path(paths.DB.parent))
+        log("mcp_review_deferred_subscription", reason="subscription_failure")
+        return {"status": "deferred_subscription", "reason": "subscription_failure"}
 
     return {
         "provider": provider,

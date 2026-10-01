@@ -376,6 +376,20 @@ def test_worker_failed_run_never_reconciles() -> None:
     assert finish.call_args.kwargs["status"].value == "failed"
 
 
+def test_post_start_circuit_pause_finishes_deferred_review_run() -> None:
+    with _temp_db(), tempfile.TemporaryDirectory() as raw, patch(
+        "bubo.poller.subscription_gate",
+        side_effect=[(True, "closed"), (False, "paused_subscription")],
+    ):
+        _provider, reconciler, finish, no_findings, result = _run_worker_case(
+            Path(raw), cfg=ReviewConfig(dry_run=False, reconcile_fixed_findings=True)
+        )
+    assert result == 0
+    assert finish.call_args.kwargs["status"].value == "deferred"
+    reconciler.assert_not_called()
+    no_findings.assert_not_called()
+
+
 def test_worker_pending_external_id_skips_reconciliation_and_acknowledgement() -> None:
     with _temp_db(), tempfile.TemporaryDirectory() as raw:
         _, reconciler, finish, no_findings, result = _run_worker_case(

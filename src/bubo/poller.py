@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -119,6 +120,13 @@ from bubo.signals import (
 from bubo.statuses import FindingStatus, ReviewMode, ReviewStatus
 from bubo.subproc import kill_process_group
 from bubo.subproc import run_bounded as run
+from bubo.subscription import (
+    is_subscription_failure,
+    review_gate,
+    signal_path,
+    signal_subscription_failure,
+    state_path,
+)
 from bubo.telemetry import (
     ReviewTelemetry,
     TokenUsage,
@@ -143,6 +151,33 @@ from bubo.verification import (
 # 2x leaves room for normal cycle-time jitter while preventing a stuck
 # cycle from silently doubling GitLab/LLM load.
 INFLIGHT_WORKER_MULTIPLIER = 2
+_CIRCUIT_NOTICE_AT: dict[str, float] = {}
+
+
+def subscription_gate(cfg: ReviewConfig) -> tuple[bool, str]:
+    return review_gate(cfg.subscription_circuit, state_path(paths.DB.parent))
+
+
+def log_subscription_gate(reason: str, **fields: object) -> None:
+    """Rate-limit the non-transition pause signals per process."""
+    current = time.monotonic()
+    if current - _CIRCUIT_NOTICE_AT.get(reason, 0.0) >= 60:
+        _CIRCUIT_NOTICE_AT[reason] = current
+        log("subscription_circuit_paused", reason=reason, **fields)
+
+
+class SubscriptionUnavailable(RuntimeError):
+    pass
+
+
+class CircuitPaused(RuntimeError):
+    pass
+
+
+def require_subscription_write_gate(cfg: ReviewConfig) -> None:
+    allowed, _reason = subscription_gate(cfg)
+    if not allowed:
+        raise CircuitPaused()
 _NOTE_HEADER = re.compile(
     r"^\*\*(Issue|Suggestion|Question) \((blocking|non-blocking), ([^)]+)\):\*\* (.+)$",
     re.IGNORECASE,
@@ -425,6 +460,9 @@ def reconcile_prior_findings(
             continue
         reply_id: str | None = None
         if not thread.reply_marker_present:
+            if not subscription_gate(cfg)[0]:
+                worsen(ReconciliationStatus.BLOCKED)
+                continue
             try:
                 reply = provider.reply_to_finding_thread(
                     cfg, token, project, number, thread_id,
@@ -469,6 +507,9 @@ def reconcile_prior_findings(
             causal_commit=verdict.causal_commit,
         )
         if not current_head_matches():
+            worsen(ReconciliationStatus.BLOCKED)
+            continue
+        if not subscription_gate(cfg)[0]:
             worsen(ReconciliationStatus.BLOCKED)
             continue
         try:
@@ -738,6 +779,10 @@ def poll() -> int:
     """
     init_db()
     cfg = read_config()
+    allowed, reason = subscription_gate(cfg)
+    if not allowed:
+        log_subscription_gate(reason, scope="discovery")
+        return 0
     provider = get_provider(cfg)
     token = provider.token()
     queued = 0
@@ -935,6 +980,8 @@ def post_no_findings_comment(
         return ("disabled", "")
     if cfg.dry_run:
         return ("skipped_dry_run", "")
+    if not subscription_gate(cfg)[0]:
+        return ("disabled", "")
     try:
         comment_id = provider.post_change_comment(cfg, token, project, number, body)
     except (RuntimeError, OSError, urllib.error.URLError) as exc:
@@ -1325,6 +1372,7 @@ def post_or_plan_findings(
             )
             planned += 1
         else:
+            require_subscription_write_gate(cfg)
             comment_id = provider.post_inline_comment(cfg, token, project, number, body, position)
             if not comment_id:
                 record_finding(
@@ -1427,8 +1475,26 @@ def worker(job: Path) -> int:
     repo: Path | None = None
     files_changed: int | None = None
     lines_changed: int | None = None
+    review_run_started = False
+
+    def defer_review_run() -> None:
+        record(project, iid, sha, ReviewStatus.DEFERRED, str(report))
+        if cfg is not None and review_run_started:
+            record_review_run_finish(
+                run_id=run_id,
+                status=ReviewStatus.DEFERRED,
+                tokens=tokens,
+                cost_usd=cost_usd,
+                error=None,
+                lines_reviewed=lines_reviewed,
+            )
     try:
         cfg = read_config()
+        allowed, reason = subscription_gate(cfg)
+        if not allowed:
+            record(project, iid, sha, ReviewStatus.DEFERRED, str(report))
+            log_subscription_gate(reason, scope="reviewer", project=project, iid=iid, run_id=run_id)
+            return 0
         provider = get_provider(cfg)
         token = provider.token()
         telemetry = ReviewTelemetry.from_config(cfg.telemetry_config)
@@ -1458,6 +1524,7 @@ def worker(job: Path) -> int:
             dry_run=cfg.dry_run,
             tone=cfg.tone,
         )
+        review_run_started = True
         with telemetry.span("llm_review.run", repo=project, mr_iid=iid, sha=sha, run_id=run_id):
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
             with telemetry.span("llm_review.checkout", repo=project, sha=sha):
@@ -1494,6 +1561,13 @@ def worker(job: Path) -> int:
                 )
             extra_directive = governance[1] if governance else ""
             env = reviewer_env(os.environ, cfg)
+            allowed, reason = subscription_gate(cfg)
+            if not allowed:
+                defer_review_run()
+                log_subscription_gate(
+                    reason, scope="reviewer", project=project, iid=iid, run_id=run_id
+                )
+                return 0
             with telemetry.span("llm_review.agent", repo=project, model=model) as agent_span:
                 result = run(
                     [
@@ -1506,6 +1580,10 @@ def worker(job: Path) -> int:
                 )
                 safe_stdout = redact_secrets(result.stdout)
                 report.write_text(safe_stdout, encoding="utf-8")
+                if cfg.subscription_circuit.enabled and is_subscription_failure(
+                    safe_stdout, cfg.subscription_circuit.error_patterns, terminal_only=True
+                ):
+                    raise SubscriptionUnavailable()
                 tokens = parse_codex_token_usage(result.stdout)
                 cost_usd = estimate_cost_usd(tokens, cfg.telemetry_config.price_for(model))
                 telemetry.set_span_attrs(
@@ -1528,6 +1606,13 @@ def worker(job: Path) -> int:
                             ),
                         )
                     )
+            allowed, reason = subscription_gate(cfg)
+            if not allowed:
+                defer_review_run()
+                log_subscription_gate(
+                    reason, scope="posting", project=project, iid=iid, run_id=run_id
+                )
+                return 0
             with telemetry.span("llm_review.post", repo=project, dry_run=cfg.dry_run) as post_span:
                 pending_external_ids: list[bool] = []
                 posted, planned, skipped = post_or_plan_findings(
@@ -1642,6 +1727,16 @@ def worker(job: Path) -> int:
                 run_id=run_id,
             )
             return 0
+    except SubscriptionUnavailable:
+        if cfg is not None:
+            signal_subscription_failure(signal_path(paths.DB.parent))
+        defer_review_run()
+        log("review_deferred_subscription", project=project, iid=iid, sha=sha, run_id=run_id)
+        return 0
+    except CircuitPaused:
+        defer_review_run()
+        log_subscription_gate("paused_during_write", scope="posting", project=project, iid=iid)
+        return 0
     except Exception as exc:
         error = redact_secrets(str(exc))
         # Preserve the agent transcript if we already wrote one; put the
@@ -1736,6 +1831,15 @@ def check_health() -> int:
     except ConfigError as exc:
         log("health_check", verdict="config_error", error=str(exc))
         return 2
+    allowed, circuit_reason = subscription_gate(cfg)
+    if not allowed:
+        verdict = (
+            "paused_subscription"
+            if circuit_reason in {"paused_subscription", "subscription_signal_pending"}
+            else "subscription_monitor_stale"
+        )
+        log("health_check", verdict=verdict)
+        return 0 if verdict == "paused_subscription" else 1
     threshold_seconds = cfg.timeout_seconds * 3
     latest = latest_reviewed_row()
     if latest is None:
@@ -2193,9 +2297,46 @@ def main() -> int:
     parser.add_argument("--backfill-github-bot-comments-since")
     parser.add_argument("--backfill-limit", type=int, default=500)
     parser.add_argument("--worker", type=Path)
+    parser.add_argument("service", nargs="?")
+    parser.add_argument("service_action", nargs="?")
+    parser.add_argument("--foreground", action="store_true")
+    parser.add_argument("--service-token", help=argparse.SUPPRESS)
     args = parser.parse_args()
     _install_signal_handlers()
     try:
+        if args.service is not None:
+            if args.service != "service" or args.service_action not in {"start", "stop", "status"}:
+                parser.error("usage: bubo-poller service {start|stop|status} [--foreground]")
+            from bubo.service import run_foreground, service_status, start_detached, stop_service
+
+            if args.service_action == "start":
+                if args.foreground and not args.service_token:
+                    token = secrets.token_urlsafe(24)
+                    os.execv(
+                        sys.executable,
+                        [
+                            sys.executable,
+                            "-m",
+                            "bubo.poller",
+                            "service",
+                            "start",
+                            "--foreground",
+                            "--service-token",
+                            token,
+                        ],
+                    )
+                return (
+                    run_foreground(args.service_token)
+                    if args.foreground
+                    else start_detached()
+                )
+            if args.service_action == "stop":
+                stopped = stop_service()
+                log("service_stop_requested", stopped=stopped)
+                return 0 if stopped else 1
+            status, pid = service_status()
+            log("service_status", status=status, pid=pid)
+            return 0 if status == "running" else 1
         if args.init_db:
             init_db()
             log("db_ready", path=str(paths.DB))
