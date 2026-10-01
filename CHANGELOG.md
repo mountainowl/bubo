@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.27.0](https://github.com/mountainowl/bubo/compare/v0.26.0...v0.27.0) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* Removes legacy cron/systemd scheduler templates, the GitHub Action, and bare one-shot bubo-poller. Migrate to bubo-poller service start.
+
+### Features
+
+* replace legacy scheduler with service ([#216](https://github.com/mountainowl/bubo/issues/216)) ([4d1e24c](https://github.com/mountainowl/bubo/commit/4d1e24cee68e5bbcdb22517c639fbbdc49014b5c))
+
 ## [0.26.0](https://github.com/mountainowl/bubo/compare/v0.25.4...v0.26.0) (2026-10-01)
 
 
