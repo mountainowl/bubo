@@ -61,6 +61,6 @@ ${ctx.os.exportLine(ctx.agentKeyEnv, `<your-${ctx.agentKeyName.toLowerCase()} ke
 
 docker run --rm -v "${home}:/home/bubo" bubo-local bubo init   # template the agent profile from the config
 ${ctx.agentAuthDocker(home, 'bubo-local')}
-docker run --rm -v "${home}:/home/bubo" -e ${ctx.scmEnv} -e ${ctx.agentKeyEnv} bubo-local bubo-poller`
+docker run --rm -v "${home}:/home/bubo" -e ${ctx.scmEnv} -e ${ctx.agentKeyEnv} bubo-local bubo-poller service start --foreground`
   },
 }

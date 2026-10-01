@@ -142,30 +142,63 @@ def test_cmd_init_real_run_creates_full_workspace(isolated_root: Path) -> None:
     assert (isolated_root / "plugins" / "superpowers").is_dir()
 
 
-def test_cmd_init_renders_deploy_templates_with_root_substituted(
+def test_cmd_init_does_not_materialize_legacy_scheduler_templates(
     isolated_root: Path,
 ) -> None:
-    # docs/operate.md tells operators to `sudo install` the cron + systemd
-    # files from $ROOT/deploy/templates/. The CLI must materialize all
-    # three templates and substitute {{ROOT}} wherever it appears, so
-    # the rendered files are ready for `sudo install` / `systemctl
-    # enable` without further hand-editing.
     args = cli.build_parser().parse_args(
         ["init", "--root", str(isolated_root), "--no-agent-config"]
     )
 
     cli.cmd_init(args)
 
-    for name in ("bubo.cron", "bubo.service", "bubo.timer"):
-        rendered = (isolated_root / "deploy" / "templates" / name).read_text()
-        assert "{{ROOT}}" not in rendered, f"{name} kept unrendered placeholder"
+    assert not (isolated_root / "deploy" / "templates").exists()
 
-    # cron + service reference ROOT (paths to bin/log dirs); timer
-    # references only the systemd unit name and has no ROOT to render.
-    cron = (isolated_root / "deploy" / "templates" / "bubo.cron").read_text()
-    service = (isolated_root / "deploy" / "templates" / "bubo.service").read_text()
-    assert str(isolated_root) in cron
-    assert str(isolated_root) in service
+
+def test_cmd_init_upgrade_warns_only_for_known_generated_scheduler_files(
+    isolated_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    generated = isolated_root / "deploy" / "templates"
+    generated.mkdir(parents=True)
+    for name in ("bubo.cron", "bubo.service", "bubo.timer"):
+        (generated / name).write_text("old generated template\n")
+    unrelated = generated / "operator.service"
+    unrelated.write_text("operator owned\n")
+
+    args = cli.build_parser().parse_args(
+        ["init", "--root", str(isolated_root), "--no-agent-config"]
+    )
+    assert cli.cmd_init(args) == 0
+
+    assert all((generated / name).exists() for name in ("bubo.cron", "bubo.service", "bubo.timer"))
+    assert unrelated.read_text() == "operator owned\n"
+    assert "warning: retired generated scheduler template remains" in capsys.readouterr().err
+
+
+def test_cmd_init_legacy_cleanup_is_fresh_safe_and_idempotent(isolated_root: Path) -> None:
+    args = cli.build_parser().parse_args(
+        ["init", "--root", str(isolated_root), "--no-agent-config"]
+    )
+    assert cli.cmd_init(args) == 0
+    assert cli.cmd_init(args) == 0
+    assert not (isolated_root / "deploy").exists()
+
+
+def test_cmd_init_legacy_notice_never_touches_host_or_symlinked_files(
+    isolated_root: Path, tmp_path: Path
+) -> None:
+    generated = isolated_root / "deploy" / "templates"
+    generated.mkdir(parents=True)
+    host_unit = tmp_path / "host-bubo.service"
+    host_unit.write_text("host owned\n")
+    legacy_link = generated / "bubo.service"
+    legacy_link.symlink_to(host_unit)
+
+    args = cli.build_parser().parse_args(
+        ["init", "--root", str(isolated_root), "--no-agent-config"]
+    )
+    assert cli.cmd_init(args) == 0
+    assert legacy_link.is_symlink()
+    assert host_unit.read_text() == "host owned\n"
 
 
 def test_cmd_init_is_idempotent_on_rerun(isolated_root: Path) -> None:

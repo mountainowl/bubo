@@ -23,6 +23,8 @@ from bubo import analytics, paths
 from bubo.events import log
 from bubo.findings import extract_findings
 from bubo.review_config import ReviewConfig, load_review_config
+from bubo.secrets import redact_secrets
+from bubo.signals import request_shutdown
 from bubo.subproc import run_bounded
 from bubo.subscription import (
     CircuitState,
@@ -39,6 +41,7 @@ from bubo.subscription import (
 from bubo.telemetry import ReviewTelemetry
 
 _PROBE_PROMPT = "Subscription availability probe. Reply with exactly []."
+_STARTUP_TIMEOUT_SECONDS = 10.0
 
 
 def _pid_path() -> Path:
@@ -51,6 +54,38 @@ def _service_lock_path() -> Path:
 
 def _stop_path() -> Path:
     return paths.SERVICE_PID.with_suffix(".stop")
+
+
+def _ready_path(token: str) -> Path:
+    """Per-attempt handshake path; concurrent starts cannot collide."""
+    return paths.SERVICE_PID.with_name(f"{paths.SERVICE_PID.name}.ready.{token}")
+
+
+def _write_startup_result(token: str, status: str, error: str = "") -> None:
+    """Atomically publish a token-bound child startup result to its parent."""
+    target = _ready_path(token)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f"{target.name}.tmp")
+    temporary.write_text(
+        json.dumps({"token": token, "status": status, "error": redact_secrets(error)}),
+        encoding="utf-8",
+    )
+    os.replace(temporary, target)
+
+
+def _read_startup_result(token: str) -> tuple[str, str] | None:
+    try:
+        value = json.loads(_ready_path(token).read_text(encoding="utf-8"))
+        if not secrets.compare_digest(str(value["token"]), token):
+            return None
+        return str(value["status"]), str(value.get("error") or "")
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _clear_startup_result(token: str) -> None:
+    with suppress(FileNotFoundError):
+        _ready_path(token).unlink()
 
 
 def _read_identity() -> tuple[int, str, float] | None:
@@ -137,6 +172,15 @@ def _heartbeat_loop(token: str, stop: threading.Event) -> None:
             _write_pid(token)
 
 
+def _watch_windows_stop(token: str, stop: threading.Event) -> None:
+    """Bridge a cooperative Windows stop request into shared poll shutdown."""
+    while not stop.wait(0.25):  # pragma: no cover - Windows only
+        if _consume_stop_request(token):
+            request_shutdown(source="windows_stop")
+            stop.set()
+            return
+
+
 def _clear_pid() -> None:
     try:
         identity = _read_identity()
@@ -144,6 +188,19 @@ def _clear_pid() -> None:
             _pid_path().unlink()
     except FileNotFoundError:
         pass
+
+
+def _cleanup_failed_start(token: str) -> None:
+    """Remove only state owned by this unsuccessful detached start."""
+    identity = _read_identity()
+    if identity is not None and secrets.compare_digest(identity[1], token):
+        with suppress(FileNotFoundError):
+            _pid_path().unlink()
+        # The portable lock can persist as an unlocked filesystem entry on
+        # POSIX. It is safe to remove only when this token owns the PID.
+        with suppress(FileNotFoundError):
+            _service_lock_path().unlink()
+    _clear_startup_result(token)
 
 
 def _transition(cfg: ReviewConfig, telemetry: ReviewTelemetry, event: str) -> None:
@@ -182,6 +239,66 @@ def _probe(cfg: ReviewConfig) -> bool:
             return False
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def _sync_outcomes(cfg: ReviewConfig) -> None:
+    """Run service-owned outcome sync without taking down review polling."""
+    from bubo.poller import sync_outcomes
+
+    try:
+        sync_outcomes(cfg.service_outcome_sync_limit)
+    except Exception:  # outcome sync is auxiliary to scheduled review work
+        # Do not include provider responses or credentials in service logs.
+        log("service_outcome_sync_failed")
+
+
+def _poll_once() -> None:
+    """Run one review poll without allowing a transient failure to stop service."""
+    from bubo.poller import poll
+
+    try:
+        poll()
+    except Exception as exc:
+        log("service_poll_failed", error=redact_secrets(str(exc)))
+
+
+def _wait_for_next_cycle(stop: threading.Event, seconds: float, token: str) -> bool:
+    """Wait interruptibly; Windows also polls its cooperative stop token."""
+    if os.name != "nt":
+        return stop.wait(seconds)
+    deadline = time.monotonic() + seconds
+    while not stop.is_set():  # pragma: no branch - Windows-only branch
+        if _consume_stop_request(token):  # pragma: no cover - Windows only
+            request_shutdown(source="windows_stop")
+            stop.set()
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        if stop.wait(min(1, remaining)):
+            return True
+    return True
+
+
+def _advance_deadline(deadline: float, interval: float, current: float) -> float:
+    """Return the next fixed-rate deadline strictly after ``current``."""
+    if current < deadline:
+        return deadline
+    missed = int((current - deadline) // interval) + 1
+    return deadline + missed * interval
+
+
+def _next_due_task(
+    *, current: float, poll_deadline: float, outcome_deadline: float
+) -> str | None:
+    """Choose the earliest due service task; polling wins an exact tie."""
+    poll_due = current >= poll_deadline
+    outcome_due = current >= outcome_deadline
+    if poll_due and (not outcome_due or poll_deadline <= outcome_deadline):
+        return "poll"
+    if outcome_due:
+        return "outcome_sync"
+    return None
 
 
 def monitor_loop(
@@ -260,11 +377,16 @@ def monitor_loop(
 
 
 def run_foreground(service_token: str | None = None) -> int:
-    cfg = load_review_config(paths.CONFIG, log_event=log)
     token = service_token or secrets.token_urlsafe(24)
+    try:
+        cfg = load_review_config(paths.CONFIG, log_event=log)
+    except Exception as exc:
+        _write_startup_result(token, "error", str(exc))
+        raise
     with singleton_lock(_service_lock_path()) as owner:
         if not owner:
             log("service_already_running")
+            _write_startup_result(token, "error", "service already running")
             return 1
         _write_pid(token)
         return _run_service_loop(cfg, token)
@@ -274,8 +396,10 @@ def _run_service_loop(cfg: ReviewConfig, token: str) -> int:
     stop = threading.Event()
     heartbeat_stop = threading.Event()
     heartbeat: threading.Thread | None = None
+    windows_stop_watcher: threading.Thread | None = None
 
     def request_stop(*_args: object) -> None:
+        request_shutdown(source="signal")
         stop.set()
 
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -286,6 +410,10 @@ def _run_service_loop(cfg: ReviewConfig, token: str) -> int:
             target=_heartbeat_loop, args=(token, heartbeat_stop), daemon=True
         )
         heartbeat.start()
+        windows_stop_watcher = threading.Thread(
+            target=_watch_windows_stop, args=(token, stop), daemon=True
+        )
+        windows_stop_watcher.start()
     ready = threading.Event()
     monitor = threading.Thread(target=monitor_loop, args=(cfg, stop, ready), daemon=True)
     monitor.start()
@@ -296,28 +424,45 @@ def _run_service_loop(cfg: ReviewConfig, token: str) -> int:
         heartbeat_stop.set()
         if heartbeat is not None:
             heartbeat.join(timeout=2)
+        if windows_stop_watcher is not None:
+            windows_stop_watcher.join(timeout=2)
         monitor.join(timeout=2)
         _clear_pid()
+        _write_startup_result(token, "error", "subscription monitor did not become ready")
         log("service_monitor_not_ready")
         return 1
-    interval = max(1, int(getattr(cfg, "service_poll_interval_seconds", 900)))
+    interval = cfg.service_poll_interval_seconds
+    outcome_interval = cfg.service_outcome_sync_interval_seconds
+    next_poll = time.monotonic()
+    next_outcome_sync = next_poll
     log("service_started", subscription_monitor=cfg.subscription_circuit.enabled)
+    _write_startup_result(token, "ready")
     try:
         while not stop.is_set():
-            from bubo.poller import poll
-
-            poll()
-            for _ in range(interval):
-                if stop.wait(1):
-                    break
-                if os.name == "nt" and _consume_stop_request(token):
-                    stop.set()
-                    break
+            current = time.monotonic()
+            task = _next_due_task(
+                current=current, poll_deadline=next_poll, outcome_deadline=next_outcome_sync
+            )
+            if task == "poll":
+                _poll_once()
+                next_poll = _advance_deadline(next_poll, interval, time.monotonic())
+                continue
+            if task == "outcome_sync":
+                _sync_outcomes(cfg)
+                next_outcome_sync = _advance_deadline(
+                    next_outcome_sync, outcome_interval, time.monotonic()
+                )
+                continue
+            wait_seconds = min(next_poll, next_outcome_sync) - current
+            if _wait_for_next_cycle(stop, wait_seconds, token):
+                break
     finally:
         stop.set()
         heartbeat_stop.set()
         if heartbeat is not None:
             heartbeat.join(timeout=2)
+        if windows_stop_watcher is not None:
+            windows_stop_watcher.join(timeout=2)
         monitor.join(timeout=max(2, cfg.subscription_circuit.monitor_interval_seconds + 1))
         _clear_pid()
         log("service_stopped")
@@ -349,17 +494,48 @@ def start_detached() -> int:
     else:
         kwargs["start_new_session"] = True
     token = secrets.token_urlsafe(24)
+    _clear_startup_result(token)
     try:
-        subprocess.Popen(
+        child = subprocess.Popen(
             [
                 sys.executable, "-m", "bubo.poller", "service", "start", "--foreground",
                 "--service-token", token,
             ],
             **kwargs,
         )
+    except OSError as exc:
+        _cleanup_failed_start(token)
+        log("service_start_failed", error=redact_secrets(str(exc)))
+        return 1
     finally:
         log_file.close()
-    return 0
+    deadline = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
+    error = "service child exited before becoming ready"
+    while time.monotonic() < deadline:
+        result = _read_startup_result(token)
+        if result is not None:
+            status, detail = result
+            if status == "ready" and child.poll() is None:
+                _clear_startup_result(token)
+                return 0
+            error = detail or error
+            break
+        if child.poll() is not None:
+            break
+        time.sleep(0.05)
+    if child.poll() is None:
+        with suppress(OSError):
+            child.terminate()
+        try:
+            child.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            with suppress(OSError):
+                child.kill()
+            with suppress(subprocess.TimeoutExpired):
+                child.wait(timeout=2)
+    _cleanup_failed_start(token)
+    log("service_start_failed", error=redact_secrets(error))
+    return 1
 
 
 __all__ = ["monitor_loop", "run_foreground", "service_status", "start_detached", "stop_service"]

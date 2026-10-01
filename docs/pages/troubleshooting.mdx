@@ -2,15 +2,15 @@
 
 Bubo runs three subsystems that fail differently and leave different evidence:
 **review execution** (the agent produces findings), **posting** (findings reach the
-MR/PR), and **outcome sync** (`--sync-outcomes` grades what developers did). Decide
+MR/PR), and **outcome sync** (the review service grades what developers did). Decide
 which one failed before digging in.
 
 Two rules save the most time:
 
 1. A `no_findings` result is not trustworthy until you confirm the agent could read
    the diff — the sandbox failure below looks identical to a clean review.
-2. Metrics only move while `bubo-poller --sync-outcomes` keeps running. Posting is
-   immediate; resolution, replies, and disputes are a separate job.
+2. Metrics move while the review service is running. Posting is immediate;
+   resolution, replies, and disputes are periodically synchronized by that service.
 
 Start with the read-only probes, then jump to the matching symptom.
 
@@ -29,8 +29,8 @@ bubo doctor
 # 2. Poller liveness — exit 0 healthy, 1 stale, 2 config error.
 bubo-poller --health
 
-# 3. Poll-cycle logs (the poller writes JSON lines to stdout under systemd/cron).
-journalctl -u bubo -n 200 --no-pager
+# 3. Service logs (JSON lines).
+tail -n 200 "$BASE/log/service.log"
 
 # 4. Newest per-review worker log (JSON lines: one {"ts","event",...} per line).
 tail -n 80 "$(ls -t "$BASE"/log/*.log | head -1)"
@@ -59,12 +59,12 @@ single status.
 
 | Symptom | Likely cause | First check |
 |---|---|---|
-| MR never reviewed | project disabled, wrong provider, scheduler down, `target_merge_request_iid` left set, stale state row | `review_runs` / `reviewed_mrs`; cron / `journalctl -u bubo` |
+| MR never reviewed | project disabled, service stopped, wrong provider, `target_merge_request_iid` left set, stale state row | `review_runs` / `reviewed_mrs`; `bubo-poller service status` |
 | "No findings" on risky code | Codex sandbox/bubblewrap blocked the agent's tools | grep the worker log for `bwrap:` / `git_diff` failed |
 | Reviews suddenly all fail or go no-findings | LLM account out of funds, or key deleted/rotated | `review_runs.error` for `insufficient_quota` / `invalid_api_key` / `401` |
 | MCP works locally, not over SSH | password / passphrase / banner corrupts the stdio stream | `ssh -o BatchMode=yes host 'bubo mcp --help'` |
 | Findings recorded, not posted | `dry_run`, confidence / gate / `allowed_kinds` filters, duplicate fingerprint, line-mapping miss | `review_findings.status`; `finding_filtered` log events |
-| Metrics show zero resolved | `--sync-outcomes` not scheduled, or `bot_username` mismatch | outcome-sync logs; `[gitlab]`/`[github]`.`bot_username` |
+| Metrics show zero resolved | service stopped, outcome sync failing, or `bot_username` mismatch | `service.log`; `[gitlab]`/`[github]`.`bot_username` |
 | Cost shows zero | pricing left at defaults | `[telemetry].input_per_1m` / `output_per_1m` / `cached_input_per_1m` |
 | GitHub resolution stays zero | GraphQL unavailable or token scope gap | GraphQL `reviewThreads` vs REST-fallback logs |
 | GitLab posting fails | token scope or bot lacks MR access | token is the bot user's and has `api` scope |
@@ -84,10 +84,10 @@ Do not edit circuit state files manually. The monitor is the sole state writer a
 
 An open MR/PR is never picked up.
 
-- **Scheduler down.** `bubo init` does not install a scheduler — `bubo-poller` runs
-  from cron or systemd ([Operate](/operate#schedule-the-poller)). `bubo-poller --health`
+- **Service stopped.** Start the review service and confirm it with
+  `bubo-poller service status` ([Operate](/operate#review-service)). `bubo-poller --health`
   exit `1` means the last reviewed row is older than `[review].timeout_seconds × 3`.
-- **Wrong `$BUBO_ROOT`.** The scheduler and your shell must resolve the same root; a
+- **Wrong `$BUBO_ROOT`.** The service and your shell must resolve the same root; a
   run against the wrong root reads an empty DB and reviews nothing.
 - **Project disabled.** The repo needs `[[projects]] enabled = true` and the matching
   `[scm].provider`.
@@ -222,8 +222,8 @@ Check `review_findings.status` (`posted` / `suppressed` / …) and the
 
 Comments exist, but `resolved`/`disputed` tallies stay at zero.
 
-- **`--sync-outcomes` not scheduled.** Outcomes update only when
-  `bubo-poller --sync-outcomes` runs (hourly cron; see [Operate](/operate#outcome-sync)).
+- **Outcome sync failing.** Outcomes update inside the review service. Check
+  `service_outcome_sync_failed` in `var/log/service.log` and its configured cadence.
 - **`bot_username` mismatch.** Sync tells bot comments from developer replies by
   author. A wrong `[gitlab].bot_username` / `[github].bot_username` misattributes both.
 - **GitHub resolution needs GraphQL.** REST cannot read per-thread resolution; without
@@ -349,5 +349,5 @@ Two traps:
 - **Retries and re-reviews bill again.** Every agent invocation bills tokens; a new SHA
   re-reviews and re-bills. `review_runs` holds one row per run with `tokens_total` /
   `cost_usd`.
-- **Sync jobs are not reviews.** `--sync-outcomes` and the reply classifier also call the
+- **Sync jobs are not reviews.** Outcome sync and the reply classifier also call the
   model. Those tokens hit the bill but may not map to a `review_runs` row.

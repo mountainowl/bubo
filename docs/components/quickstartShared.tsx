@@ -262,9 +262,9 @@ brun bubo init
 # 4) authenticate the review agent (logs in here — the key never enters the agent's env)
 ${authDocker}
 
-# 5) verify + first (dry-run) review
+# 5) verify + start the review service
 brun bubo doctor
-brun bubo-poller`
+brun bubo-poller service start --foreground`
     }
     const reviewer = agent === 'claude' ? `\nreviewer_command = ["claude", "-p"]` : ''
     return `#!/usr/bin/env bash
@@ -321,9 +321,9 @@ brun bubo init
 # 4) authenticate the review agent (logs in here — the key never enters the agent's env)
 ${authDocker}
 
-# 5) verify + first (dry-run) review
+# 5) verify + start the review service
 brun bubo doctor
-brun bubo-poller`
+brun bubo-poller service start --foreground`
   }
 
   // Windows → native PowerShell (no bash/WSL assumed)
@@ -369,9 +369,9 @@ bubo init
 # 4) authenticate the review agent (logs in here — the key never enters the agent's env)
 ${authPwsh}
 
-# 5) verify + run the first (dry-run) review
+# 5) verify + start the review service
 bubo doctor
-bubo-poller`
+bubo-poller service start`
   }
 
   const prereq =
@@ -418,7 +418,7 @@ bubo init
 # 4) authenticate the review agent (logs in here — the key never enters the agent's env)
 ${authBash}
 
-# 5) verify + run the first (dry-run) review
+# 5) verify + start the review service
 bubo doctor
-bubo-poller`
+bubo-poller service start`
 }

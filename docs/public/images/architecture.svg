@@ -103,7 +103,7 @@
 
   <rect class="ba-card" x="430" y="714" width="230" height="70" rx="13"/>
   <text class="ba-title" x="545" y="738" text-anchor="middle" font-size="13px">Outcome sync</text>
-  <text class="ba-sub"   x="545" y="756" text-anchor="middle" font-size="11px">--sync-outcomes, later</text>
+  <text class="ba-sub"   x="545" y="756" text-anchor="middle" font-size="11px">service outcome sync, later</text>
   <text class="ba-sub"   x="545" y="771" text-anchor="middle" font-size="10px">resolved · disputed · merged</text>
 
   <path class="ba-card" d="M190,832 v46 a110,13 0 0 0 220,0 v-46" filter="none"/>

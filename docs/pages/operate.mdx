@@ -2,7 +2,7 @@ import { Eyebrow } from '../components/Eyebrow'
 
 # Operate
 
-Use this page to verify releases, schedule the poller, sync outcomes, generate
+Use this page to verify releases, run the review service, sync outcomes, generate
 governance reports, and backfill existing comments.
 
 <Eyebrow>Trust · Compliance · Provenance</Eyebrow>
@@ -46,9 +46,10 @@ The same two commands verify the wheel, sdist, deploy bundle, and the SBOM — p
 Install Bubo on the host with `uv tool install bubo`, then `bubo init` — the
 per-stack steps live on the [recipes](/recipes) page.
 
-## Portable service
+## Review service
 
-Run the portable service when Bubo should own both the poll schedule and the subscription monitor:
+The portable service is the only supported long-running review scheduler. It owns
+the poll schedule, subscription monitor, and periodic outcome sync:
 
 ```sh
 bubo-poller service start
@@ -57,62 +58,28 @@ bubo-poller service status
 bubo-poller service stop
 ```
 
-`start` detaches and writes service output to `var/log/service.log`; `--foreground` keeps the process attached for an external supervisor. The service waits for the monitor's first durable heartbeat before its first poll.
+`start` detaches and writes service output to `var/log/service.log`; `--foreground`
+keeps the process attached for an external supervisor. The service waits for the
+monitor's first durable heartbeat before its first poll. `[poller].interval_seconds`
+controls the poll cadence, and `[poller].outcome_sync_interval_seconds` controls
+the service-owned outcome-sync cadence.
 
-The service is not an OS boot service. Use your platform's supervisor to restart it after process or machine failure.
+The service is not an OS boot service. Use your platform's supervisor to run
+`bubo-poller service start --foreground` and restart it after process or machine
+failure.
 
-## Schedule the poller
+## Migrate from cron or systemd timers
 
-> **`bubo init` does not install cron entries or systemd units.** Scheduling is a
-> separate step, so you can run Bubo under whatever fits your host — cron, systemd,
-> Kubernetes CronJob, Nomad.
+Before starting the service, manually disable and delete every old Bubo cron,
+timer, and systemd scheduler entry. Running an old poller alongside the service
+is unsupported.
 
-`bubo init` materializes three ready-to-install templates under
-`$BUBO_ROOT/deploy/templates/`, with `{{ROOT}}` already substituted — ready for
-`sudo install` / `systemctl enable`. Pick **one** path below. Both run the same
-cadence (poll every 15 min, sync outcomes hourly, health probe every 5 min) and
-ship **separate `flock` files per role** (poller / outcome-sync / health) so the
-roles never collide on a lock.
-
-### Cron
-
-```sh
-# Create the lock dir owned by the runtime user (once).
-sudo install -d -o bubo -g bubo -m 0755 /var/run/bubo
-
-# Install the cron drop-in. The exact directory is distro-specific:
-#   Debian / Ubuntu / RHEL → /etc/cron.d/
-#   macOS launchd hosts    → use the systemd path or convert manually
-sudo install -m 0644 \
-  "$BUBO_ROOT/deploy/templates/bubo.cron" \
-  /etc/cron.d/bubo
-```
-
-The cron entries run `bubo-poller` (poll cycle),
-`bubo-poller --sync-outcomes` (outcome grading), and `bubo-poller --health`
-(liveness probe) at staggered cadences. Each scheduled poll invocation is one-shot
-and exits after completion. The separate `bubo-poller service` mode is documented above.
-
-### systemd
-
-```sh
-sudo cp "$BUBO_ROOT/deploy/templates/bubo.service" /etc/systemd/system/
-sudo cp "$BUBO_ROOT/deploy/templates/bubo.timer"   /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now bubo.timer
-```
-
-The service file uses `LoadCredential=` to inject secrets from
-`/etc/bubo/credentials/`, keeping tokens out of `config/env.toml` on disk.
-Pair it with TOML env interpolation in the config:
-
-```toml
-[gitlab]
-token = "${GITLAB_TOKEN}"
-
-[agents]
-llm_api_key = "${LLM_API_KEY}"
-```
+The previously shipped generated scheduler templates are no longer used. On
+upgrade, `bubo init` reports any it finds below `$BUBO_ROOT/deploy/templates/`
+but preserves them. Manually delete those generated templates after disabling
+their installed entries, reload your platform supervisor if needed, then start
+the Bubo service. Retain an external supervisor only for boot startup and
+restart; it must invoke the foreground service command above.
 
 ## Health check
 
@@ -126,8 +93,7 @@ llm_api_key = "${LLM_API_KEY}"
 | `~/.codex/config.toml` contains `[profiles.bubo]` | Codex profile missing or hand-edited away. |
 
 Pass `--no-agent-config` to skip generated agent profiles and manage them
-yourself. Doctor returns 0 on a full pass and non-zero on any
-failure, so it drops cleanly into a cron-driven liveness probe.
+yourself. Doctor returns 0 on a full pass and non-zero on any failure.
 
 ## Troubleshooting
 
@@ -144,7 +110,7 @@ and reads thread resolution differently.
 
 - **Posting** goes through the GitHub REST API — a pull-request review comment
   anchored to the diff line. No SCM MCP server or extra CLI is involved.
-- **Thread resolution** (`--sync-outcomes`) reads GitHub's GraphQL `reviewThreads`
+- **Thread resolution** (service-owned outcome sync) reads GitHub's GraphQL `reviewThreads`
   (`isResolved`), since REST doesn't expose per-thread state. If GraphQL is
   unavailable, it falls back to a resolution-blind REST path that still records
   posted/deleted/replied transitions.
@@ -154,7 +120,7 @@ and reads thread resolution differently.
 - **Posting** goes through the GitLab REST API — a merge-request discussion
   anchored to the diff line. No SCM MCP server or extra CLI is involved.
 - **Thread resolution** needs no GraphQL — GitLab's REST discussions API already
-  carries the `resolved` / `resolvable` flags, so `--sync-outcomes` reads accurate
+  carries the `resolved` / `resolvable` flags, so outcome sync reads accurate
   state (including `merged_unresolved`) straight from REST.
 
 ## Reconcile Bubo findings fixed in later commits
@@ -167,13 +133,9 @@ Developer-resolved or deleted threads are no-ops. Uncertain proof, stale heads, 
 
 ## Outcome sync
 
-`--sync-outcomes` grades posted findings against current SCM state. It runs
-from the cron line `bubo init` materializes, so once scheduling is set up you
-never call it by hand.
-
-```sh
-bubo-poller --sync-outcomes
-```
+The review service grades posted findings against current SCM state at
+`[poller].outcome_sync_interval_seconds`. Outcome-sync failures are logged and
+do not stop review polling.
 
 It records whether each finding was resolved, left unresolved after merge,
 deleted, replied to, marked disputed, marked false-positive, or marked
@@ -186,7 +148,7 @@ A thread can be resolved because the developer **fixed** the finding or because
 they **rejected** it ("working as intended", "not a blocker"). The `resolved`
 flag alone can't tell them apart, which would overcount the reviewer's
 precision. So when a finding's discussion has a developer reply and no explicit
-dispute marker, `--sync-outcomes` asks an LLM to read the bot's finding plus the
+dispute marker, outcome sync asks an LLM to read the bot's finding plus the
 reply and decide whether it was **accepted** or **rejected**. A rejection sets
 `disputed` (and `false_positive` when the reply says the finding is factually
 wrong).
@@ -287,9 +249,9 @@ local SQLite. Reach for them when:
 - You reset `var/state/reviewer.sqlite` (test, rebuild, host migration) and need
   the per-finding metrics to reflect history, not just go-forward.
 
-They are **deliberately off the cron schedule.** Each run scans every MR/PR
+They are deliberately outside the review service. Each run scans every MR/PR
 updated since the cutoff — suitable for one-time recovery, inefficient as a
-frequent poll task. Run them once, then let `--sync-outcomes` take over for go-forward
+frequent poll task. Run them once, then let service-owned outcome sync take over for go-forward
 grading.
 
 ```sh
@@ -300,7 +262,6 @@ bubo-poller --backfill-gitlab-bot-comments-since 2026-05-25T00:00:00Z
 BUBO_PROVIDER=github bubo-poller --backfill-github-bot-comments-since 2026-05-25T00:00:00Z
 
 # Then grade the imported rows once:
-bubo-poller --sync-outcomes
 ```
 
 Both backfill commands are idempotent — a comment already in SQLite is upserted,

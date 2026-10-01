@@ -42,7 +42,7 @@ Every instrument carries `repo`. Run-scoped instruments also carry `model`, `pro
 | Metric | Type | Counts | Extra attributes |
 |---|---|---|---|
 | `llm_review.runs` | counter | one per completed review run | — |
-| `llm_review.findings` | counter | one per finding lifecycle event — initial post plus every `--sync-outcomes` transition | `status` (`planned`/`posted`/`skipped`/`resolved`/`disputed`/`false_positive`/`duplicate`/`deleted`/`developer_replied`), `finding_type`, `severity`, `category` |
+| `llm_review.findings` | counter | one per finding lifecycle event — initial post plus every outcome-sync transition | `status` (`planned`/`posted`/`skipped`/`resolved`/`disputed`/`false_positive`/`duplicate`/`deleted`/`developer_replied`), `finding_type`, `severity`, `category` |
 | `llm_review.tokens` | counter | LLM tokens per review | `operation` (`input`/`output`/`cached`/`total`) |
 | `llm_review.cost.usd` | counter | estimated USD per review | — |
 | `llm_review.provenance` | counter | one per AI-provenance signal | `provenance_band`, `provenance_source` |

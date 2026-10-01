@@ -108,9 +108,6 @@ packages = ["src/bubo"]
 [tool.hatch.build.targets.wheel.force-include]
 "deploy/templates/codex-config.toml" = "bubo/_assets/codex-config.toml"
 "deploy/templates/claude-settings.json" = "bubo/_assets/claude-settings.json"
-"deploy/templates/bubo.cron" = "bubo/_assets/bubo.cron"
-"deploy/templates/bubo.service" = "bubo/_assets/bubo.service"
-"deploy/templates/bubo.timer" = "bubo/_assets/bubo.timer"
 "prompts/00-meta.md" = "bubo/_assets/prompts/00-meta.md"
 "skills/code-reviewer/SKILL.md" = "bubo/_assets/skills/code-reviewer/SKILL.md"
 "plugins/superpowers/.codex-plugin/plugin.json" = "bubo/_assets/plugins/superpowers/.codex-plugin/plugin.json"

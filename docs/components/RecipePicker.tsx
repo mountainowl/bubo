@@ -213,8 +213,8 @@ export function RecipePicker() {
               <p className={styles.recipeNote}>
                 The first run is <strong>dry-run by default</strong> — it plans findings and posts
                 nothing. Flip <code>[review].dry_run = false</code> when it looks right, then{' '}
-                <a href={asset('/operate/#schedule-the-poller')} className={styles.link}>
-                  schedule it
+                <a href={asset('/operate/#review-service')} className={styles.link}>
+                  start the service
                 </a>
                 .
               </p>

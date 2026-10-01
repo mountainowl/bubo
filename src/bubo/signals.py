@@ -1,10 +1,7 @@
-"""Cooperative SIGTERM / SIGINT shutdown for the poll loop.
+"""Cooperative shutdown shared by the poller and portable service.
 
-The poller is intended to run under cron or systemd. When the supervisor
-sends ``SIGTERM`` (``systemctl stop``, machine shutdown), we want the
-current poll cycle to **finish the in-progress MR cleanly** and exit
-rather than getting SIGKILLed mid-DB-write and leaving an MR stranded at
-status ``queued`` forever.
+When a supervisor sends ``SIGTERM`` or Windows records a cooperative stop,
+the active poll stops between changes rather than starting another review.
 
 The mechanism:
 
@@ -30,6 +27,15 @@ from bubo.events import log
 _SHUTDOWN_REQUESTED = False
 
 
+def request_shutdown(*, source: str) -> None:
+    """Request shutdown once without replacing unrelated structured events."""
+    global _SHUTDOWN_REQUESTED
+    if _SHUTDOWN_REQUESTED:
+        return
+    _SHUTDOWN_REQUESTED = True
+    log("shutdown_requested", source=source)
+
+
 def install_signal_handlers() -> None:
     """Wire SIGTERM and SIGINT to set the shutdown flag.
 
@@ -40,9 +46,7 @@ def install_signal_handlers() -> None:
     """
 
     def _on_signal(signum: int, _frame: object) -> None:
-        global _SHUTDOWN_REQUESTED
-        _SHUTDOWN_REQUESTED = True
-        log("shutdown_requested", signal=signal.Signals(signum).name)
+        request_shutdown(source=signal.Signals(signum).name)
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         with suppress(ValueError):
@@ -66,6 +70,7 @@ def reset_for_tests() -> None:
 
 __all__ = [
     "install_signal_handlers",
+    "request_shutdown",
     "reset_for_tests",
     "shutdown_requested",
 ]

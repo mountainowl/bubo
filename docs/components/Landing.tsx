@@ -31,7 +31,6 @@ const CAPABILITIES = [
   'Governance & provenance',
   'OpenTelemetry',
   'MCP',
-  'GitHub Action CI',
 ]
 
 const FEATURES: { group: string; items: [string, ReactNode][] }[] = [
@@ -63,7 +62,6 @@ const FEATURES: { group: string; items: [string, ReactNode][] }[] = [
     group: 'Fits how you work',
     items: [
       ['MCP', 'Connect your editor to trigger an interactive review on demand.'],
-      ['Reviews in CI', 'A GitHub Action that comments on PRs in your pipeline.'],
       ['A simple dashboard', 'Read-only view of recent reviews, health, and reports.'],
     ],
   },

@@ -64,9 +64,6 @@ _ASSETS_PACKAGE = "bubo._assets"
 _EDITABLE_FALLBACKS: dict[tuple[str, ...], str] = {
     ("codex-config.toml",): "deploy/templates/codex-config.toml",
     ("claude-settings.json",): "deploy/templates/claude-settings.json",
-    ("bubo.cron",): "deploy/templates/bubo.cron",
-    ("bubo.service",): "deploy/templates/bubo.service",
-    ("bubo.timer",): "deploy/templates/bubo.timer",
     ("env.example.toml",): "config/env.example.toml",
     ("prompts",): "prompts",
     ("skills",): "skills",
@@ -76,6 +73,8 @@ _EDITABLE_FALLBACKS: dict[tuple[str, ...], str] = {
     # the committed Vite build output at ui/dist/ instead.
     ("ui",): "ui/dist",
 }
+
+_LEGACY_GENERATED_TEMPLATES = ("bubo.cron", "bubo.service", "bubo.timer")
 
 
 def _repo_root() -> Path:
@@ -211,30 +210,20 @@ def _plan_packaged_runtime_copies(root: Path) -> list[Action]:
     ]
 
 
-def _plan_deploy_templates(root: Path) -> list[Action]:
-    """Drop rendered cron / systemd templates at ``$ROOT/deploy/templates/``.
-
-    These files carry a ``{{ROOT}}`` placeholder that has to point at the
-    actual install path before they're useful to ``sudo install`` /
-    ``systemctl enable``. Rendering them here keeps the operate docs
-    pointing at a single discoverable location (``$ROOT/deploy/templates/``)
-    instead of asking operators to dig into ``importlib.resources`` for
-    the bundled originals.
-    """
-    target_dir = root / "deploy" / "templates"
-    templates = (
-        "bubo.cron",
-        "bubo.service",
-        "bubo.timer",
-    )
+def _plan_legacy_template_cleanup(root: Path) -> list[Action]:
+    """Warn about only known generated scheduler files under this Bubo root."""
+    generated = root / "deploy" / "templates"
     return [
         Action(
-            kind="write_file",
-            target=target_dir / name,
-            source=(name,),
-            note=f"render {{{{ROOT}}}} = {root}; install with sudo when scheduling",
+            kind="notice",
+            target=generated / name,
+            note=(
+                "retired generated scheduler template remains; remove it manually. "
+                "Installed host cron or units are never touched"
+            ),
         )
-        for name in templates
+        for name in _LEGACY_GENERATED_TEMPLATES
+        if (generated / name).is_file() or (generated / name).is_symlink()
     ]
 
 
@@ -294,7 +283,7 @@ def plan_init(
     actions.extend(_plan_workspace(root))
     actions.extend(_plan_env_seed(root, force))
     actions.extend(_plan_packaged_runtime_copies(root))
-    actions.extend(_plan_deploy_templates(root))
+    actions.extend(_plan_legacy_template_cleanup(root))
     if install_agent_config:
         actions.extend(_plan_agent_config(home, root, force))
     actions.append(
@@ -415,6 +404,8 @@ def _execute(action: Action, subs: dict[str, str]) -> None:
             shutil.rmtree(action.target)
         _copy_traversable(_asset(*action.source), action.target)
         return
+    if action.kind == "notice":
+        return
     if action.kind == "symlink":
         assert isinstance(action.source, str), "symlink expects a string target"
         action.target.parent.mkdir(parents=True, exist_ok=True)
@@ -477,6 +468,8 @@ def cmd_init(args: argparse.Namespace) -> int:
         return 0
     for action in actions:
         _execute(action, subs)
+        if action.kind == "notice":
+            print(f"warning: {action.note}: {action.target}", file=sys.stderr)
         log(
             "init_action",
             kind=action.kind,
