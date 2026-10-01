@@ -27,17 +27,28 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
     assert "uv run --project" in dispatcher
     assert "bubo-poller" in dispatcher
     assert "bubo-mcp" in dispatcher
+    assert 'service)' in dispatcher
+    assert 'poll)' not in dispatcher
     assert "mcp-upstream" not in dispatcher
 
 
-def test_cron_template_uses_separate_locks_per_role() -> None:
-    cron = (ROOT / "deploy" / "templates" / "bubo.cron").read_text()
-    # All three roles must use distinct flock files. A single shared lock
-    # caused a real production incident where the `*/5` health probe held
-    # the lock at `:45` and the parallel `*/15` poll silently dropped.
-    assert "flock -n" in cron
-    for lock in ("poller.lock", "outcome-sync.lock", "health.lock"):
-        assert lock in cron, f"cron template must use a dedicated {lock}"
+def test_public_container_wrapper_and_bug_template_use_service_foreground() -> None:
+    assert 'CMD ["bubo-poller", "service", "start", "--foreground"]' in (
+        ROOT / "Dockerfile"
+    ).read_text()
+    issue = (ROOT / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").read_text()
+    assert "uv run bubo-poller service start --foreground" in issue
+
+
+def test_legacy_scheduler_assets_are_not_shipped() -> None:
+    templates = ROOT / "deploy" / "templates"
+    for name in ("bubo.cron", "bubo.service", "bubo.timer"):
+        assert not (templates / name).exists()
+
+
+def test_github_action_surface_is_not_shipped() -> None:
+    assert not (ROOT / "action.yml").exists()
+    assert not (ROOT / "docs" / "pages" / "github-action.mdx").exists()
 
 
 def test_codex_config_carries_bubo_profile() -> None:

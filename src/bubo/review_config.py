@@ -342,6 +342,8 @@ class ReviewConfig:
     reconcile_command: list[str] = field(default_factory=list)
     subscription_circuit: CircuitConfig = field(default_factory=CircuitConfig)
     service_poll_interval_seconds: int = 900
+    service_outcome_sync_interval_seconds: int = 3600
+    service_outcome_sync_limit: int = 200
 
 
 def load_review_config(
@@ -591,6 +593,13 @@ def review_config_from_dict(
         ),
         service_poll_interval_seconds=positive_int(
             poller.get("interval_seconds", 900), "poller.interval_seconds"
+        ),
+        service_outcome_sync_interval_seconds=positive_int(
+            poller.get("outcome_sync_interval_seconds", 3600),
+            "poller.outcome_sync_interval_seconds",
+        ),
+        service_outcome_sync_limit=positive_int(
+            poller.get("outcome_sync_limit", 200), "poller.outcome_sync_limit"
         ),
     )
 

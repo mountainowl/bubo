@@ -254,7 +254,7 @@ def get_findings(project: str, iid: int, sha: str | None = None) -> list[dict[st
 def get_finding_outcomes(project: str, iid: int, sha: str | None = None) -> list[dict[str, Any]]:
     """Return per-finding resolution state for ``(project, iid[, sha])``.
 
-    Populated by ``bubo-poller --sync-outcomes`` (and the GitHub
+    Populated by the review service's outcome sync (and the GitHub
     equivalent). Each row tells you whether the developer resolved /
     deleted / replied to / disputed / marked false-positive / marked
     duplicate the finding's discussion, plus ``merged_unresolved`` for

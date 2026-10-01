@@ -22,5 +22,5 @@ ${ctx.os.exportLine(ctx.agentKeyEnv, `<your-${ctx.agentKeyName.toLowerCase()} ke
 bubo init        # template the agent profile from the config you just edited
 ${ctx.agentAuth}
 bubo doctor      # checks workspace, config, DB, and the agent profile
-bubo-poller      # one poll cycle — dry-run by default, so it posts nothing`,
+bubo-poller service start  # start the review service`,
 }

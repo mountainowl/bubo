@@ -124,7 +124,9 @@ Controls state location and single-MR debug targeting.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `state_dir` | string | `"var"` | Runtime state directory. Relative paths resolve under `BUBO_ROOT`. |
-| `interval_seconds` | integer | `900` | Interval for long-running wrappers and the portable `bubo-poller service` poll schedule. |
+| `interval_seconds` | integer | `900` | Review-service poll interval. |
+| `outcome_sync_interval_seconds` | integer | `3600` | Review-service outcome-sync interval. |
+| `outcome_sync_limit` | integer | `200` | Maximum findings graded by each service-owned outcome sync. |
 | `target_merge_request_iid` | integer | unset | Debug filter for one GitLab MR IID. Leave unset in production. |
 
 ## `[subscription_circuit]`
@@ -301,6 +303,8 @@ policy_mode           = "off"
 [poller]
 state_dir        = "var"
 interval_seconds = 900
+outcome_sync_interval_seconds = 3600
+outcome_sync_limit = 200
 # target_merge_request_iid = 123
 
 [subscription_circuit]

@@ -109,12 +109,12 @@ ${remoteLines}`
 
   const tick =
     install === 'docker'
-      ? '`docker run … bubo-poller`'
-      : '`bubo-poller`'
+      ? '`docker run … bubo-poller service start --foreground`'
+      : '`bubo-poller service start --foreground`'
   const sched = {
-    mac: 'cron (crontab) or a launchd agent',
-    linux: 'a systemd timer or cron',
-    windows: 'a Scheduled Task (schtasks / Task Scheduler)',
+    mac: 'a launchd agent or other external supervisor',
+    linux: 'a systemd service or other external supervisor',
+    windows: 'a service manager or Scheduled Task',
   }[os]
   const installPrompt = `Install **Bubo**, a self-hosted AI code reviewer.
 
@@ -134,7 +134,7 @@ If \`~/<context-file.toml>\` cannot be accessed or has incorrect values, ask for
 </exception>
 
 <output>
-- One short progress line per action: \`read context.toml — all good\`, \`downloading git…\`, \`installing codex cli…\`, \`wrote env.toml\`, \`bubo doctor — all checks pass\`, \`scheduled poller every 15m\`.
+- One short progress line per action: \`read context.toml — all good\`, \`downloading git…\`, \`installing codex cli…\`, \`wrote env.toml\`, \`bubo doctor — all checks pass\`, \`started review service\`.
 - No reasoning, planning, narration, or summaries.
 - Output more than a progress line only to raise an exception (ask and wait for input) or give the final report.
 </output>
@@ -147,14 +147,14 @@ On the target machine, in order:
 4. **Configure** — run \`bubo init --no-agent-config\`, write \`env.toml\` from the context (scm + token, agent + key, repository, \`dry_run\`), then run \`bubo init\` to template the agent profile from it.
 5. **Authenticate the agent** — the default Codex agent logs in from the key (\`codex login --with-api-key\`, key on stdin); a custom \`reviewer_command\` (e.g. Claude) brings its own login; a \`llm_base_url\` gateway needs none. Skip if the target already authenticates the agent.
 6. **Verify** — run \`bubo doctor\`; resolve any failure.
-7. **Schedule** — unless \`poll\` is \`off\`, run ${tick} every \`poll\` via ${sched} (one cycle per run).
+7. **Service** — unless \`poll\` is \`off\`, run ${tick} through ${sched}. Configure its poll cadence with \`[poller].interval_seconds\`.
 </install>
 
 <report>
 On completion, report:
 - the \`BUBO_ROOT\` path and \`env.toml\` location (on the target);
-- the exact command for one manual review cycle (e.g. \`bubo-poller\`);
-- scheduler start / stop / inspect commands, if scheduled;
+- the exact service command (\`bubo-poller service start [--foreground]\`);
+- service start / stop / inspect commands;
 - a non-official ${srcKind} or a pinned version, if used;
 - if \`dry_run\` is false: reviews will post live — give the exact file + line to revert to safe (\`dry_run = true\` under \`[review]\` in \`env.toml\`).
 </report>`

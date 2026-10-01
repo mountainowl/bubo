@@ -33,7 +33,7 @@ graded, and measurable feedback.
    "reviewed and happy" is distinguishable from "never ran".
 6. **Persist.** SQLite records reviewed SHAs and finding fingerprints, so Bubo
    never spams or double-posts across repeated polls.
-7. **Grade.** `--sync-outcomes` later checks which findings were resolved,
+7. **Grade.** The review service later checks which findings were resolved,
    replied to, disputed, deleted, or merged unresolved — the signal behind the
    metrics _and_ the learning loop above.
 
@@ -42,7 +42,7 @@ SQLite stores reviewed SHAs and finding fingerprints for deduplication. Outcome 
 - **State closes back on discovery.** SQLite remembers reviewed SHAs and finding
   fingerprints, so the poller skips work it has already done and never
   double-posts.
-- **Outcomes close back on precision.** `--sync-outcomes` grades what humans did
+- **Outcomes close back on precision.** The review service grades what humans did
   with each finding; those accept/dispute rates feed dispute suppression and
   per-class confidence calibration — so the filter gets sharper on the
   categories _this_ team rejects.

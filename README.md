@@ -31,7 +31,7 @@ acting on as inline threads — no chatbot noise, no praise, no summaries.
 uv tool install bubo     # or: pipx install bubo
 bubo init                # idempotent; seeds config + workspace + DB
 bubo doctor              # verify before the first poll
-bubo-poller              # one poll cycle — dry-run by default, posts nothing
+bubo-poller service start # start the review service (polling + outcome sync)
 ```
 
 Prefer a container? `docker pull ghcr.io/mountainowl/bubo` (multi-arch; the
@@ -47,7 +47,7 @@ Everything lives on the docs site — this README is just the front door.
 | [Recipes](https://mountainowl.github.io/bubo/recipes/) | Copy-paste GitLab / GitHub / in-house-model setups. |
 | [Features](https://mountainowl.github.io/bubo/features/) | The full capability list. |
 | [Configuration](https://mountainowl.github.io/bubo/configuration/) | Every setting, per section, plus a quick-start config. |
-| [Operate](https://mountainowl.github.io/bubo/operate/) | Deploy, schedule, grade outcomes, governance report. |
+| [Operate](https://mountainowl.github.io/bubo/operate/) | Deploy, run the review service, grade outcomes, governance report. |
 | [Troubleshooting](https://mountainowl.github.io/bubo/troubleshooting/) | Host / infra fixes (sandbox, AppArmor). |
 | [Metrics & telemetry](https://mountainowl.github.io/bubo/telemetry/) | Emitted `llm_review.*` metrics and dashboards. |
 

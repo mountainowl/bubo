@@ -99,12 +99,120 @@ def test_config_is_opt_in_and_parses_circuit_controls() -> None:
     assert not review_config_from_dict({}).subscription_circuit.enabled
     config = review_config_from_dict(
         {"subscription_circuit": {"enabled": True, "monitor_interval_seconds": 2,
-         "error_patterns": ["quota exhausted"]}, "poller": {"interval_seconds": 7}}
+         "error_patterns": ["quota exhausted"]}, "poller": {
+             "interval_seconds": 7, "outcome_sync_interval_seconds": 11,
+             "outcome_sync_limit": 13,
+         }}
     )
     assert config.subscription_circuit.enabled
     assert config.subscription_circuit.monitor_interval_seconds == 2
     assert config.subscription_circuit.error_patterns == ("quota exhausted",)
     assert config.service_poll_interval_seconds == 7
+    assert config.service_outcome_sync_interval_seconds == 11
+    assert config.service_outcome_sync_limit == 13
+
+
+def test_service_outcome_sync_isolated_from_review_polling(monkeypatch) -> None:
+    from bubo import service
+
+    cfg = review_config_from_dict({"poller": {"outcome_sync_limit": 17}})
+    calls: list[int] = []
+    monkeypatch.setattr("bubo.poller.sync_outcomes", lambda limit: calls.append(limit))
+    service._sync_outcomes(cfg)
+    assert calls == [17]
+
+    monkeypatch.setattr("bubo.poller.sync_outcomes", lambda _limit: (_ for _ in ()).throw(RuntimeError()))
+    logged = MagicMock()
+    monkeypatch.setattr(service, "log", logged)
+    service._sync_outcomes(cfg)
+    logged.assert_called_once_with("service_outcome_sync_failed")
+
+
+def test_service_deadlines_choose_each_due_task_order_and_do_not_drift() -> None:
+    from bubo import service
+
+    assert service._next_due_task(current=11, poll_deadline=10, outcome_deadline=12) == "poll"
+    assert service._next_due_task(current=11, poll_deadline=12, outcome_deadline=10) == "outcome_sync"
+    assert service._next_due_task(current=12, poll_deadline=12, outcome_deadline=12) == "poll"
+    # A slow task skips missed periods from its original fixed deadline rather
+    # than moving the next execution relative to completion time.
+    assert service._advance_deadline(10, 5, 23) == 25
+
+
+def test_service_poll_failure_is_redacted_and_next_deadline_remains_fixed(monkeypatch) -> None:
+    from bubo import service
+
+    logged = MagicMock()
+    monkeypatch.setattr(service, "log", logged)
+    monkeypatch.setattr(
+        "bubo.poller.poll", lambda: (_ for _ in ()).throw(RuntimeError("OPENAI_API_KEY=sk-secret"))
+    )
+    service._poll_once()
+    logged.assert_called_once_with("service_poll_failed", error="OPENAI_API_KEY=<redacted>")
+    assert service._advance_deadline(100, 60, 161) == 220
+
+
+def test_bare_poller_is_rejected_before_discovery(monkeypatch, capsys) -> None:
+    from bubo import poller
+
+    invoked = MagicMock()
+    monkeypatch.setattr(poller, "poll", invoked)
+    monkeypatch.setattr("sys.argv", ["bubo-poller"])
+    with pytest.raises(SystemExit) as excinfo:
+        poller.main()
+    assert excinfo.value.code == 2
+    assert "service start [--foreground]" in capsys.readouterr().err
+    invoked.assert_not_called()
+
+
+def test_health_remains_an_on_demand_poller_command(monkeypatch) -> None:
+    from bubo import poller
+
+    health = MagicMock(return_value=0)
+    monkeypatch.setattr(poller, "check_health", health)
+    monkeypatch.setattr("sys.argv", ["bubo-poller", "--health"])
+    assert poller.main() == 0
+    health.assert_called_once()
+
+
+def test_shared_shutdown_interrupts_a_multi_change_poll(monkeypatch) -> None:
+    from bubo import poller
+    from bubo.review_config import ReviewConfig
+    from bubo.signals import request_shutdown, reset_for_tests
+
+    reset_for_tests()
+    cfg = ReviewConfig(projects=["owner/repo"], max_merge_requests_per_poll=2)
+    provider = MagicMock()
+    provider.name = "gitlab"
+    first = {"number": 1, "sha": "one"}
+    second = {"number": 2, "sha": "two"}
+
+    def changes(*_args):
+        yield first
+        request_shutdown(source="windows_stop")
+        yield second
+
+    provider.list_open_changes.side_effect = changes
+    provider.token.return_value = "token"
+    provider.change_number.side_effect = lambda change: change["number"]
+    monkeypatch.setattr(poller, "init_db", lambda: None)
+    monkeypatch.setattr(poller, "read_config", lambda: cfg)
+    monkeypatch.setattr(poller, "subscription_gate", lambda _cfg: (True, "closed"))
+    monkeypatch.setattr(poller, "get_provider", lambda _cfg: provider)
+    monkeypatch.setattr(poller, "count_inflight_workers", lambda: 0)
+    monkeypatch.setattr(poller, "already_seen", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(poller, "sha_for", lambda change: change["sha"])
+    recorded: list[int] = []
+    monkeypatch.setattr(poller, "record", lambda _project, number, *_args: recorded.append(number))
+    monkeypatch.setattr(poller, "write_job", lambda *_args: Path("job"))
+    monkeypatch.setattr(poller, "fork_worker", lambda _job: 1)
+    monkeypatch.setattr(poller.analytics, "record_session_start", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(poller.analytics, "flush", lambda: None)
+    try:
+        assert poller.poll() == 1
+        assert recorded == [1]
+    finally:
+        reset_for_tests()
 
 
 def test_monitor_opens_then_recovers(tmp_path: Path, monkeypatch) -> None:
@@ -118,6 +226,7 @@ def test_monitor_opens_then_recovers(tmp_path: Path, monkeypatch) -> None:
     # No exporter or PostHog is configured; test transitions without network.
     monkeypatch.setattr(service, "_probe", lambda _cfg: True)
     monkeypatch.setattr(service, "log", MagicMock())
+    monkeypatch.setattr(service, "_transition", MagicMock())
     stop = threading.Event()
     ready = threading.Event()
     thread = threading.Thread(target=monitor_loop, args=(cfg, stop, ready), daemon=True)
@@ -287,16 +396,178 @@ def test_windows_heartbeat_starts_before_blocked_monitor_readiness(tmp_path: Pat
     assert not paths.SERVICE_PID.exists()
 
 
-def test_detached_service_uses_a_child_process(monkeypatch) -> None:
+def test_windows_wait_observes_cooperative_stop_without_waiting_for_poll_interval(
+    monkeypatch,
+) -> None:
+    from bubo import service
+
+    monkeypatch.setattr(service.os, "name", "nt")
+    monkeypatch.setattr(service, "_consume_stop_request", lambda _token: True)
+    stop = threading.Event()
+    assert service._wait_for_next_cycle(stop, 900, "token")
+    assert stop.is_set()
+
+
+def test_windows_stop_watcher_interrupts_active_poll(monkeypatch) -> None:
+    from bubo import service
+    from bubo.signals import reset_for_tests, shutdown_requested
+
+    reset_for_tests()
+    stop = threading.Event()
+    monkeypatch.setattr(service, "_consume_stop_request", lambda _token: True)
+    watcher = threading.Thread(target=service._watch_windows_stop, args=("token", stop))
+    watcher.start()
+    watcher.join(timeout=2)
+    try:
+        assert stop.is_set()
+        assert shutdown_requested()
+    finally:
+        reset_for_tests()
+
+
+def test_detached_service_returns_only_after_matching_ready_token(monkeypatch) -> None:
+    from bubo import service
+
+    child = MagicMock()
+    child.poll.return_value = None
+    popen = MagicMock(return_value=child)
+    monkeypatch.setattr(service, "service_status", lambda: ("stopped", None))
+    monkeypatch.setattr(service.subprocess, "Popen", popen)
+    monkeypatch.setattr(service.secrets, "token_urlsafe", lambda _size: "expected-token")
+    seen_tokens: list[str] = []
+
+    def ready(token: str) -> tuple[str, str] | None:
+        seen_tokens.append(token)
+        return ("ready", "")
+
+    monkeypatch.setattr(service, "_read_startup_result", ready)
+    assert service.start_detached() == 0
+    assert seen_tokens == ["expected-token"]
+    assert popen.call_args.args[0][-1] == "expected-token"
+
+
+def test_detached_service_ready_command_uses_foreground_child(monkeypatch) -> None:
     from bubo import service
 
     popen = MagicMock()
+    child = MagicMock()
+    child.poll.return_value = None
+    popen.return_value = child
     monkeypatch.setattr(service, "service_status", lambda: ("stopped", None))
     monkeypatch.setattr(service.subprocess, "Popen", popen)
+    monkeypatch.setattr(service, "_read_startup_result", lambda _token: ("ready", ""))
     assert service.start_detached() == 0
     command = popen.call_args.args[0]
     assert command[-5:-1] == ["service", "start", "--foreground", "--service-token"]
     assert popen.call_args.kwargs["stdout"].name.endswith("service.log")
+
+
+def test_detached_service_timeout_terminates_child_and_cleans_owned_state(monkeypatch) -> None:
+    from bubo import service
+
+    child = MagicMock()
+    child.poll.return_value = None
+    monkeypatch.setattr(service, "service_status", lambda: ("stopped", None))
+    monkeypatch.setattr(service.subprocess, "Popen", lambda *_args, **_kwargs: child)
+    monkeypatch.setattr(service, "_read_startup_result", lambda _token: None)
+    monkeypatch.setattr(service, "_STARTUP_TIMEOUT_SECONDS", 0)
+    cleanup = MagicMock()
+    monkeypatch.setattr(service, "_cleanup_failed_start", cleanup)
+    assert service.start_detached() == 1
+    child.terminate.assert_called_once()
+    cleanup.assert_called_once()
+
+
+def test_detached_service_reports_immediate_child_error_without_orphan(monkeypatch) -> None:
+    from bubo import service
+
+    child = MagicMock()
+    child.poll.return_value = 2
+    monkeypatch.setattr(service, "service_status", lambda: ("stopped", None))
+    monkeypatch.setattr(service.subprocess, "Popen", lambda *_args, **_kwargs: child)
+    monkeypatch.setattr(service, "_read_startup_result", lambda _token: ("error", "OPENAI_API_KEY=sk-secret"))
+    cleanup = MagicMock()
+    logged = MagicMock()
+    monkeypatch.setattr(service, "_cleanup_failed_start", cleanup)
+    monkeypatch.setattr(service, "log", logged)
+    assert service.start_detached() == 1
+    child.terminate.assert_not_called()
+    cleanup.assert_called_once()
+    logged.assert_called_once_with("service_start_failed", error="OPENAI_API_KEY=<redacted>")
+
+
+def test_detached_service_reports_child_launch_error_without_state(monkeypatch) -> None:
+    from bubo import service
+
+    monkeypatch.setattr(service, "service_status", lambda: ("stopped", None))
+    monkeypatch.setattr(service.subprocess, "Popen", MagicMock(side_effect=OSError("sk-secret")))
+    cleanup = MagicMock()
+    logged = MagicMock()
+    monkeypatch.setattr(service, "_cleanup_failed_start", cleanup)
+    monkeypatch.setattr(service, "log", logged)
+    assert service.start_detached() == 1
+    cleanup.assert_called_once()
+    logged.assert_called_once_with("service_start_failed", error="<redacted>")
+
+
+def test_failed_start_cleanup_only_removes_matching_token_state(tmp_path: Path, monkeypatch) -> None:
+    from bubo import paths, service
+
+    monkeypatch.setattr(paths, "SERVICE_PID", tmp_path / "service.pid")
+    paths.SERVICE_PID.write_text('{"pid":42,"token":"ours"}', encoding="utf-8")
+    lock = paths.SERVICE_PID.with_suffix(".lock")
+    lock.write_text("stale", encoding="utf-8")
+    service._write_startup_result("ours", "error")
+    service._write_startup_result("other", "ready")
+    service._cleanup_failed_start("ours")
+    assert not paths.SERVICE_PID.exists()
+    assert not lock.exists()
+    assert not service._ready_path("ours").exists()
+    assert service._ready_path("other").exists()
+    service._clear_startup_result("other")
+
+    paths.SERVICE_PID.write_text('{"pid":43,"token":"other"}', encoding="utf-8")
+    lock.write_text("other", encoding="utf-8")
+    service._cleanup_failed_start("ours")
+    assert paths.SERVICE_PID.exists()
+    assert lock.exists()
+
+
+def test_concurrent_detached_starts_keep_token_handshakes_isolated(tmp_path: Path, monkeypatch) -> None:
+    from bubo import paths, service
+
+    monkeypatch.setattr(paths, "SERVICE_PID", tmp_path / "service.pid")
+    monkeypatch.setattr(paths, "LOGS", tmp_path / "log")
+    monkeypatch.setattr(service, "service_status", lambda: ("stopped", None))
+    tokens = iter(("winner", "loser"))
+    monkeypatch.setattr(service.secrets, "token_urlsafe", lambda _size: next(tokens))
+    children: dict[str, MagicMock] = {}
+
+    def spawn(command, **_kwargs):
+        token = command[-1]
+        child = MagicMock()
+        child.poll.return_value = None if token == "winner" else 2
+        children[token] = child
+        return child
+
+    monkeypatch.setattr(service.subprocess, "Popen", spawn)
+    monkeypatch.setattr(
+        service,
+        "_read_startup_result",
+        lambda token: ("ready", "") if token == "winner" else ("error", "already running"),
+    )
+    results: list[int] = []
+    threads = [threading.Thread(target=lambda: results.append(service.start_detached())) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert sorted(results) == [0, 1]
+    assert children["winner"].poll() is None
+    children["winner"].terminate.assert_not_called()
+    assert not service._ready_path("winner").exists()
+    assert not service._ready_path("loser").exists()
 
 
 def test_probe_requires_clean_expected_response(monkeypatch) -> None:

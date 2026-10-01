@@ -43,4 +43,4 @@ WORKDIR /home/bubo
 #   docker run --rm ghcr.io/mountainowl/bubo bubo init
 #   docker run --rm ghcr.io/mountainowl/bubo bubo report
 #   docker run --rm -p 8765:8765 ghcr.io/mountainowl/bubo bubo-mcp
-CMD ["bubo-poller"]
+CMD ["bubo-poller", "service", "start", "--foreground"]

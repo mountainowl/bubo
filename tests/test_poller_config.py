@@ -38,6 +38,8 @@ def test_default_runtime_config_is_consolidated_in_env_toml() -> None:
     assert config["agents"]["llm_model"] == "gpt-5.5"
     assert config["agents"]["llm_model_effort"] == "medium"
     assert config["poller"]["interval_seconds"] == 900
+    assert config["poller"]["outcome_sync_interval_seconds"] == 3600
+    assert config["poller"]["outcome_sync_limit"] == 200
 
 
 def test_shipped_example_parses_with_governance_off() -> None:

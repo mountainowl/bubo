@@ -20,7 +20,7 @@ What stays here:
 * :func:`worker` — one MR review end-to-end (checkout → agent → parse
   → policy filter → post/plan → record).
 * :func:`sync_outcomes` — periodic GitLab-side state refresh.
-* :func:`check_health` — liveness probe for cron/systemd.
+* :func:`check_health` — on-demand liveness probe.
 * :func:`main` — argparse dispatch.
 
 Selected symbols from the extracted modules are re-exported here so the
@@ -2265,8 +2265,6 @@ def main() -> int:
     * ``--init-db`` — create or migrate the SQLite schema and exit.
     * ``--health`` — report liveness based on the freshness of the latest
       review row. Exit ``0`` healthy, ``1`` stale, ``2`` config error.
-    * ``--sync-outcomes [--sync-limit N]`` — check GitLab state for up to
-      N already-posted findings and record outcomes.
     * ``--backfill-gitlab-bot-comments-since ISO_TS`` — import GitLab bot
       discussions that predate local SQLite state, then record outcomes.
     * ``--backfill-github-bot-comments-since ISO_TS`` — the GitHub analogue:
@@ -2275,7 +2273,9 @@ def main() -> int:
     * ``--worker PATH`` — run as a single-MR worker from a queued job
       file. Used internally by :func:`fork_worker`; operators do not
       invoke this directly.
-    * (default) — run one poll cycle.
+    * ``service {start|stop|status}`` — run the supported long-lived review
+      service. Bare invocation is deliberately rejected so reviews cannot
+      run outside the subscription monitor and service-owned outcome sync.
 
     Exit codes:
 
@@ -2291,8 +2291,6 @@ def main() -> int:
         action="store_true",
         help="Report liveness based on freshness of last reviewed MR row.",
     )
-    parser.add_argument("--sync-outcomes", action="store_true")
-    parser.add_argument("--sync-limit", type=int, default=200)
     parser.add_argument("--backfill-gitlab-bot-comments-since")
     parser.add_argument("--backfill-github-bot-comments-since")
     parser.add_argument("--backfill-limit", type=int, default=500)
@@ -2343,9 +2341,6 @@ def main() -> int:
             return 0
         if args.health:
             return check_health()
-        if args.sync_outcomes:
-            sync_outcomes(args.sync_limit)
-            return 0
         if args.backfill_gitlab_bot_comments_since:
             backfill_gitlab_bot_comments(
                 args.backfill_gitlab_bot_comments_since, args.backfill_limit
@@ -2358,8 +2353,10 @@ def main() -> int:
             return 0
         if args.worker:
             return worker(args.worker)
-        poll()
-        return 0
+        parser.error(
+            "bare bubo-poller is no longer supported; run "
+            "'bubo-poller service start [--foreground]' instead"
+        )
     except ConfigError as exc:
         log("config_error", error=str(exc))
         return 2

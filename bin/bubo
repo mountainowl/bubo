@@ -5,7 +5,7 @@
 # `load_env` function every subcommand calls.
 #
 # Usage:
-#   bin/bubo poll [args...]   # one poll cycle (bubo-poller)
+#   bin/bubo service <action> [args...]  # bubo review service
 #   bin/bubo mcp  [args...]   # bubo's own read-only MCP server (bubo-mcp)
 set -eu
 
@@ -26,16 +26,16 @@ cmd="${1:-}"
 [ "$#" -gt 0 ] && shift
 
 case "$cmd" in
-    poll)
+    service)
         load_env
-        exec uv run --project "$ROOT" bubo-poller "$@"
+        exec uv run --project "$ROOT" bubo-poller service "$@"
         ;;
     mcp)
         load_env
         exec uv run --project "$ROOT" bubo-mcp "$@"
         ;;
     *)
-        echo "usage: bubo <poll|mcp> [args...]" >&2
+        echo "usage: bubo <service|mcp> [args...]" >&2
         exit 2
         ;;
 esac
