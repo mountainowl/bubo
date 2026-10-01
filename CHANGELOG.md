@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.26.0](https://github.com/mountainowl/bubo/compare/v0.25.4...v0.26.0) (2026-10-01)
+
+
+### Features
+
+* pause reviews on subscription exhaustion ([#215](https://github.com/mountainowl/bubo/issues/215)) ([7514b72](https://github.com/mountainowl/bubo/commit/7514b72ced3f8875d3979f6337eac27062748a78))
+* reconcile fixed review findings ([#214](https://github.com/mountainowl/bubo/issues/214)) ([7af2203](https://github.com/mountainowl/bubo/commit/7af220348b9638ea68d5e10295e97e8878e1bb86))
+
+
+### Bug Fixes
+
+* **ci:** align CodeQL action version ([#212](https://github.com/mountainowl/bubo/issues/212)) ([a718318](https://github.com/mountainowl/bubo/commit/a718318e3b2866214e66403a24d364c8acd39d8e))
+
 ## [0.25.4](https://github.com/mountainowl/bubo/compare/v0.25.3...v0.25.4) (2026-09-11)
 
 
