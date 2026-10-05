@@ -68,6 +68,17 @@ def test_launch_readiness_files_exist() -> None:
     assert (ROOT / "assets" / "social-preview.png").stat().st_size > 0
 
 
+def test_ci_gates_stale_release_lockfiles() -> None:
+    workflows = ROOT / ".github" / "workflows"
+    ci_workflow = (workflows / "ci.yml").read_text()
+    release_sync = (workflows / "release-please-lockfile.yml").read_text()
+
+    assert "uv lock --check" in ci_workflow
+    assert "uv sync --locked --dev" in ci_workflow
+    assert "uv lock" in release_sync
+    assert "git push" in release_sync
+
+
 def test_docs_site_present() -> None:
     # The mkdocs split docs were replaced by the Nextra site under docs/,
     # published to GitHub Pages via .github/workflows/deploy-docs.yml.
