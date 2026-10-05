@@ -1,0 +1,46 @@
+# Bubo AI Code Review
+
+> Bubo is a self-hosted AI code reviewer for GitHub pull requests and GitLab merge requests. It runs the review model you choose, posts evidence-backed inline findings or an all-clear acknowledgement, and learns from maintainer outcomes to reduce repository-specific noise.
+
+Bubo is an MIT-licensed Python 3.14+ application. Review execution stays on infrastructure and model paths controlled by the operator. The current production trigger is polling; webhook-driven triggering is not shipped.
+
+## Core capabilities
+
+- [Documentation](https://mountainowl.github.io/bubo/overview/): Product overview, security posture, and measured production results.
+- [How Bubo works](https://mountainowl.github.io/bubo/how-it-works/): Discover, review, filter, post, persist, and grade maintainer outcomes.
+- [Features](https://mountainowl.github.io/bubo/features/): Self-hosting, bring-your-own LLM, confidence gates, verification, governance, OpenTelemetry, and MCP.
+- [Recipes](https://mountainowl.github.io/bubo/recipes/): Installation and deployment recipes for GitHub, GitLab, containers, and supported review agents.
+- [Configuration](https://mountainowl.github.io/bubo/configuration/): Provider, review, confidence, learning, telemetry, and policy settings.
+- [Operations](https://mountainowl.github.io/bubo/operate/): Poller operation, outcome grading, reporting, and governance workflows.
+- [Metrics and telemetry](https://mountainowl.github.io/bubo/telemetry/): Review, finding, outcome, latency, token, cost, and privacy controls.
+- [MCP server](https://mountainowl.github.io/bubo/mcp/): Read-only metrics and on-demand review tools over stdio or HTTP.
+
+## Maintainer-outcome learning
+
+Bubo fingerprints every finding and later checks how maintainers handled it. Outcomes such as resolved, disputed, deleted, or merged unresolved feed conservative repository-scoped suppression and confidence calibration. This is an auditable control loop around the configured model, not model fine-tuning.
+
+## Installation
+
+```sh
+uv tool install bubo
+bubo init
+bubo doctor
+bubo-poller service start
+```
+
+The container image is available from `ghcr.io/mountainowl/bubo`. The configured review-agent CLI and its model credentials remain operator supplied.
+
+## Current limitations
+
+- Polling is the production trigger; webhook-driven triggering is not shipped.
+- GitHub and GitLab are supported; Bitbucket and Azure DevOps are not supported.
+- Pluggable subject-matter specialist Skills are roadmap work, not a shipped capability.
+- The public benchmark directory currently provides a reproducible harness with synthetic sample cases; it is not evidence of real-world benchmark performance by itself.
+
+## Primary sources
+
+- [Source repository](https://github.com/mountainowl/bubo): MIT-licensed source, issues, releases, and changelog.
+- [PyPI package](https://pypi.org/project/bubo/): Published Python package.
+- [Container image](https://github.com/mountainowl/bubo/pkgs/container/bubo): Multi-architecture GHCR releases.
+- [Security policy](https://github.com/mountainowl/bubo/blob/main/SECURITY.md): Vulnerability reporting and supported versions.
+- [Benchmark harness](https://github.com/mountainowl/bubo/tree/main/benchmarks): Evaluation format, scoring, and caveats.

@@ -1,12 +1,12 @@
-"""Configuration for anonymous usage analytics ("help improve Bubo").
+"""Configuration for pseudonymous usage analytics ("help improve Bubo").
 
 Bubo is free and open source; the only way the project learns what to
-improve is anonymous usage signal from real installs. This block controls
-that signal. It is **on by default** and sends *numbers only* — counts,
-durations, lines-of-code reviewed, token totals, SCM provider, and model
-name. It never sends code, file paths, repository names, review text,
-credentials, or any identifying content (see :mod:`bubo.analytics` for the
-default-deny allowlist that enforces this).
+improve is usage signal from real installs. This block controls that signal.
+It is **on by default** and sends counts, durations, fixed category labels,
+and random installation/project IDs. Verified organization namespaces may be
+sent for public or private projects; repository names require verified public
+visibility and a recognized open-source license. Code, paths, personal account
+names, review text and credentials are excluded (see :mod:`bubo.analytics`).
 
 Three independent ways to opt out, checked in :func:`bubo.analytics`:
 
@@ -23,7 +23,7 @@ endpoint/key, or blank either one to disable sending entirely.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from bubo.config_values import ConfigError, bool_value, text_value
@@ -48,6 +48,7 @@ class AnalyticsConfig:
     enabled: bool = True
     endpoint: str = DEFAULT_ANALYTICS_ENDPOINT
     api_key: str = DEFAULT_ANALYTICS_API_KEY
+    profiles: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def analytics_config_from_dict(data: dict[str, Any]) -> AnalyticsConfig:
@@ -66,6 +67,28 @@ def analytics_config_from_dict(data: dict[str, Any]) -> AnalyticsConfig:
                 fix="declare analytics as an [analytics] table in config/env.toml.",
             )
         )
+    from bubo.project_analytics import DOMAINS, PROJECT_TYPES
+
+    profiles = raw.get("profiles", {})
+    if not isinstance(profiles, dict):
+        raise ConfigError("analytics.profiles must be a table")
+    for key, profile in profiles.items():
+        if (
+            not isinstance(key, str)
+            or not key.startswith(("github:", "gitlab:"))
+            or not isinstance(profile, dict)
+        ):
+            raise ConfigError("analytics.profiles entries must be tables keyed by provider:project")
+        if (
+            not isinstance(profile.get("domain", "unknown"), str)
+            or profile.get("domain", "unknown") not in DOMAINS
+        ):
+            raise ConfigError("analytics profile domain must be a documented category")
+        if (
+            not isinstance(profile.get("project_type", "unknown"), str)
+            or profile.get("project_type", "unknown") not in PROJECT_TYPES
+        ):
+            raise ConfigError("analytics profile project_type must be a documented category")
     return AnalyticsConfig(
         # bool_value rejects the quoted-"false" footgun (truthy to bare bool()).
         enabled=bool_value(raw.get("enabled"), "analytics.enabled", default=True),
@@ -75,6 +98,7 @@ def analytics_config_from_dict(data: dict[str, Any]) -> AnalyticsConfig:
         api_key=text_value(
             raw.get("api_key"), "analytics.api_key", default=DEFAULT_ANALYTICS_API_KEY
         ),
+        profiles=profiles,
     )
 
 

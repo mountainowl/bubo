@@ -8,6 +8,101 @@ or the [static UI](#static-html-dashboard).
 
 ## Enable
 
+### Product analytics and privacy
+
+Product analytics is separate from the opt-in OpenTelemetry collector below.
+It is enabled by default and can be disabled with `DO_NOT_TRACK=1`,
+`BUBO_ANALYTICS=0`, or `[analytics] enabled = false`.
+
+On first telemetry use, Bubo creates a random UUID in `state/install_id` beside
+the state database. This same value is PostHog's `install_id` and `distinct_id`,
+and the enabled OpenTelemetry resource's `service.instance.id`, `install_id`,
+and `distinct_id`. Concurrent workers use atomic persistence and a shared lock.
+Valid existing UUIDs survive upgrades; invalid identity files are replaced.
+If persistent identity is unavailable, telemetry is skipped rather than assigning
+an ephemeral identity. A busy identity lock drops that event and retries next time.
+
+An installation means one state directory, not a person, repository, or process.
+Keep that directory on persistent storage across container restarts. Never bake it
+into an image or copy `install_id` into a new independent installation: copying
+state intentionally preserves its identity. Deleting state resets the identity.
+
+Schema version 2 adds `queue_seconds` to `review_completed` and a
+`review_language` event per changed-file language category per completed review.
+The latter contains `language`, `language_files`, `status`, `dry_run`, and
+`scm_provider`, alongside anonymous installation context. Categories come from
+file extensions (including Python, C, C++, Java, JavaScript, TypeScript, Go,
+Rust, and others); unknown extensions become `other`. Header `.h` files count
+as C. These are changed-file categories, not a full repository language inventory.
+No filenames, code, credentials, review text, or personal account names are sent.
+IP storage, GeoIP enrichment, and person-profile processing remain disabled.
+
+Schema version 3 adds `project_profile` and `project_technology` per reviewed
+project, plus project context on review events. `project_id` is a locally persisted
+random UUID scoped to an installation and SCM project. It counts project-install
+pairs, not globally unique repositories or people.
+
+Provider metadata is checked through an authenticated HTTPS read. `org` is sent
+for verified GitHub Organizations and GitLab groups for both private and public
+repositories; GitLab uses the root group namespace. Personal namespaces are omitted.
+`repo_name` is sent only when the provider confirms public visibility AND an
+allowlisted open-source license. Missing metadata, unknown licenses, proprietary
+and source-available licenses do not permit disclosure of the repository name.
+Organization labels can identify organizations: this is pseudonymous telemetry,
+not wholly anonymous data. Opting out also disables metadata reads and profiling.
+
+Stack detection reads tracked filenames and bounded manifests locally. It sends
+only fixed language, framework and database labels (including Python, JavaScript,
+Java, C, R, Oracle, MySQL, PostgreSQL and ClickHouse). Manifest references are
+heuristics, not proof of runtime usage; comments, examples and transitive references
+can affect results. `stack_coverage` distinguishes bounded, partial and unavailable
+scans. No manifest contents or paths leave the installation.
+
+Domain and project type are optional declared categories, never guessed from code
+or names. Undeclared values stay `unknown`. Local lookup keys are not transmitted:
+
+```toml
+[analytics.profiles."github:acme/repo"]
+domain = "fintech"
+project_type = "backend_api"
+```
+
+Domains: `unknown`, `travel`, `fintech`, `healthcare`, `education`, `retail`,
+`gaming`, `media`, `logistics`, `government`, `developer_tools`, `other`.
+Project types: `unknown`, `backend_api`, `frontend`, `full_stack`, `mobile`,
+`library`, `cli`, `data_pipeline`, `infrastructure`, `other`.
+Use `gitlab:group/project` for GitLab, including subgroups in the local key.
+
+Recommended product views:
+
+| View | Definition |
+|---|---|
+| Active installations | Distinct `distinct_id` across poll and review events, daily/weekly |
+| Activation | First observed successful non-dry-run review per installation |
+| Retention | Installations returning to review in subsequent weeks |
+| Reliability | `review_completed` counts by status; circuit transitions by state |
+| Language adoption | Distinct installations or event counts by `review_language.language` |
+| Language volume | Sum `language_files` by language; multi-language reviews appear in multiple categories |
+| Efficiency | Review and queue duration averages/p95; total/cached tokens; configured cost |
+| Developer engagement | Finding outcome transitions by outcome |
+
+Filter value/activation/language views to `dry_run = false`. `session_start`
+counts poll cycles, not human sessions. Outcome categories overlap and their
+counts are not acceptance rates. Cost is an estimate based on configured prices;
+zero cost does not prove free usage. First observed activity is not a download or
+installation timestamp. New fields have no historical backfill; dashboards can
+be empty until updated clients send the corresponding schema version.
+
+GitHub clone traffic is aggregate acquisition data, separate from runtime telemetry.
+Maintainers can run `python scripts/snapshot_github_traffic.py --output snapshots.jsonl`
+with an authenticated `gh` CLI that can read repository traffic. Snapshots retain
+GitHub's rolling 14-day clone/view totals and daily buckets. GitHub does not reveal
+individual cloners or provide a clone-to-install join. Daily uniques cannot be summed
+into lifetime unique users; automation, repeated installs and copied state limit
+deduplication. The script is manual and does not create a recurring collection job.
+
+### OpenTelemetry collector
+
 Configure `[telemetry]` in `config/env.toml`. `enabled = false` (the default) makes every
 metric and span a no-op. With `enabled = true` and no `otlp_endpoint`, instruments record
 in-process but nothing exports.

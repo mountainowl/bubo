@@ -11,10 +11,12 @@ from bubo.analytics_config import AnalyticsConfig
 
 
 @pytest.fixture(autouse=True)
-def _reset_analytics_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
+def _reset_analytics_singletons(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Each test starts with a clean module state and no env opt-outs."""
     monkeypatch.setattr(analytics, "_pending_events", [])
     monkeypatch.setattr(analytics, "_install_id", None)
+    monkeypatch.setattr(analytics, "_install_path", None)
+    monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
     monkeypatch.delenv("BUBO_ANALYTICS", raising=False)
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
 
@@ -142,9 +144,11 @@ def test_install_id_is_stable_and_persisted(
     assert (tmp_path / "state" / "install_id").read_text().strip() == first
 
 
-def test_install_id_falls_back_when_unwritable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_id_disables_events_when_unwritable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(analytics.paths, "DB", Path("/proc/nonexistent/reviewer.sqlite"))
-    assert len(analytics.install_id()) == 32  # ephemeral, no crash
+    assert analytics.install_id() is None
+    analytics.record_session_start(AnalyticsConfig(), scm_provider="github", projects_count=1)
+    assert analytics._pending_events == []
 
 
 # ---------------------------------------------------------------------------

@@ -89,12 +89,21 @@ def test_docs_site_present() -> None:
     assert not (ROOT / "mkdocs.yml").exists()
 
     next_config = (docs / "next.config.mjs").read_text()
+    package_json = (docs / "package.json").read_text()
     theme_config = (docs / "theme.config.tsx").read_text()
     deploy_workflow = (ROOT / ".github" / "workflows" / "deploy-docs.yml").read_text()
+    llms_text = (ROOT / "llms.txt").read_text()
     assert "../pyproject.toml" in next_config
     assert "NEXT_PUBLIC_BUBO_VERSION" in next_config
     assert "NEXT_PUBLIC_BUBO_VERSION" in theme_config
+    assert "'@type': 'SoftwareApplication'" in theme_config
+    assert "DeveloperApplication" in theme_config
     assert "v0.24.2" not in theme_config
+    assert "scripts/publish-llms.mjs" in package_json
+    assert "llms.txt" in deploy_workflow
+    assert "# Bubo AI Code Review" in llms_text
+    assert "https://mountainowl.github.io/bubo/" in llms_text
+    assert "webhook-driven triggering is not shipped" in llms_text
     assert "pyproject.toml" in deploy_workflow
 
 

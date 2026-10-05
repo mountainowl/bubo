@@ -1,8 +1,8 @@
-"""Anonymous usage analytics — "help improve Bubo".
+"""Pseudonymous usage analytics — "help improve Bubo".
 
 Bubo is free and open source. The only way the project learns what real
 installs actually use — which SCM, which models, how many reviews, how much
-gets reviewed — is anonymous usage signal. This module ships that signal to
+gets reviewed — is usage signal. This module ships that signal to
 PostHog through its Product Analytics batch API. It is **on by default**; see
 :mod:`bubo.analytics_config` for the three opt-outs.
 
@@ -11,9 +11,9 @@ Design — privacy is the whole point, so it is enforced structurally:
 * **Default-deny allowlist.** Every attribute that may leave the machine is
   named in :data:`_ALLOWED_ATTRS`. Anything not on the list is dropped by
   :func:`_clean` before an event is built. There is no code path that sends
-  an un-allowlisted field. The list is *numbers and low-cardinality enums
-  only* — never project/repo names, file paths, SHAs, finding text, review
-  bodies, error strings, or credentials.
+  an un-allowlisted field. Names require verified provider metadata: organization
+  namespaces for any visibility, repository names only for public OSS projects.
+  File paths, SHAs, finding text, review bodies, errors and credentials stay out.
 * **No stdlib logging at all.** Product Analytics events are assembled here
   and sent directly over HTTPS. The Python stdlib :mod:`logging` package is
   never involved, so there is structurally no way for the rest of bubo's logs
@@ -22,20 +22,24 @@ Design — privacy is the whole point, so it is enforced structurally:
 * **Best-effort, never fatal.** Every public function swallows all
   exceptions. Events are buffered until :func:`flush`, which uses one request
   per configured destination with a short timeout.
-* **Anonymous, not identified.** A random install id (see :func:`install_id`)
-  lets us count distinct installs without identifying anyone; it is a UUID
-  with no link to user, host, or repo.
+* **Pseudonymous identity.** Random installation and project IDs count usage
+  without personal account IDs. Approved organization metadata can identify
+  organizations, so these events are not described as fully anonymous.
 """
 
 from __future__ import annotations
 
 import atexit
+import fcntl
 import json
 import os
 import platform
+import tempfile
 import threading
 import uuid
+from collections.abc import Iterable
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
@@ -43,11 +47,11 @@ from bubo import paths
 from bubo.analytics_config import AnalyticsConfig
 
 # Bump when the event field set changes in a way PostHog dashboards care about.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 # Every key that is permitted to leave the machine. Default-deny: anything not
-# here is dropped by `_clean`. Keep this list to NUMBERS and low-cardinality
-# ENUMS only. Deliberately absent (and must stay absent): project, repo, iid,
+# here is dropped by `_clean`. Organization/repo names have additional gates.
+# Deliberately absent (and must stay absent): project, repo, iid,
 # sha, file, line, body, report, error, discussion_id, note_id, fingerprint,
 # matched_rule, reason, sensitive_paths, tokens/credentials, any URL.
 _ALLOWED_ATTRS = frozenset(
@@ -83,8 +87,25 @@ _ALLOWED_ATTRS = frozenset(
         "findings_planned",
         "findings_skipped",
         "files_changed",
-    "lines_changed",
-    "circuit_state",
+        "lines_changed",
+        "circuit_state",
+        "language",
+        "language_files",
+        "queue_seconds",
+        "project_id",
+        "domain",
+        "project_type",
+        "profile_source",
+        "stack_source",
+        "stack_coverage",
+        "metadata_status",
+        "visibility",
+        "namespace_kind",
+        "org",
+        "repo_name",
+        "license",
+        "technology_kind",
+        "technology",
         # per-outcome engagement event — one per finding-outcome transition
         # (see `record_finding_outcome`). The value is the outcome name only.
         "outcome",
@@ -96,7 +117,15 @@ _ALLOWED_ATTRS = frozenset(
 _KNOWN_PROVIDERS = frozenset({"gitlab", "github"})
 _KNOWN_AGENTS = frozenset({"codex", "claude"})
 _KNOWN_EVENTS = frozenset(
-    {"session_start", "review_completed", "finding_outcome", "subscription_circuit"}
+    {
+        "session_start",
+        "review_completed",
+        "review_language",
+        "project_profile",
+        "project_technology",
+        "finding_outcome",
+        "subscription_circuit",
+    }
 )
 # Developer-engagement outcome dimensions. Mirrors the per-finding flags the
 # poller's outcome sync writes to SQLite; a value outside the set normalizes to
@@ -116,6 +145,56 @@ _MAX_STR = 64
 _pending_events: list[tuple[str, str, dict[str, Any]]] = []
 _pending_lock = threading.Lock()
 _install_id: str | None = None
+_install_path: Path | None = None
+_identity_lock = threading.Lock()
+
+# Only these labels may leave the machine; paths are used locally and discarded.
+_LANGUAGES = {
+    ".py": "python",
+    ".pyi": "python",
+    ".c": "c",
+    ".h": "c",
+    ".cc": "cpp",
+    ".cpp": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
+    ".java": "java",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".go": "go",
+    ".rs": "rust",
+    ".rb": "ruby",
+    ".php": "php",
+    ".cs": "csharp",
+    ".swift": "swift",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".scala": "scala",
+    ".sh": "shell",
+    ".bash": "shell",
+    ".sql": "sql",
+    ".r": "r",
+    ".dart": "dart",
+    ".ex": "elixir",
+    ".exs": "elixir",
+    ".html": "html",
+    ".css": "css",
+    ".scss": "css",
+    ".vue": "vue",
+    ".svelte": "svelte",
+}
+
+
+def language_counts(files: Iterable[str]) -> dict[str, int]:
+    """Count changed files by fixed extension categories, never returning paths."""
+    counts: dict[str, int] = {}
+    for filename in files:
+        label = _LANGUAGES.get(Path(filename).suffix.lower(), "other")
+        counts[label] = counts.get(label, 0) + 1
+    return counts
 
 
 def _truthy(value: str) -> bool:
@@ -139,32 +218,47 @@ def analytics_enabled(cfg: AnalyticsConfig) -> bool:
     return cfg.enabled and has_dest
 
 
-def install_id() -> str:
+def install_id() -> str | None:
     """Return this install's anonymous id, creating it on first use.
 
     A random UUID persisted next to the state DB. Not tied to user, host, or
-    repository — purely a counter so distinct installs can be told apart. If
-    the file cannot be read or written, a process-local ephemeral id is used
-    so analytics still works (it just won't be stable across runs).
+    repository. Concurrent workers share a lock and atomic publication. Failure
+    returns None: dropping analytics is preferable to inventing extra installs.
     """
-    global _install_id
-    if _install_id is not None:
-        return _install_id
+    global _install_id, _install_path
     path = paths.DB.parent / "install_id"
-    try:
-        if path.exists():
-            existing = path.read_text(encoding="utf-8").strip()
-            if existing:
-                _install_id = existing
-                return _install_id
-        new_id = uuid.uuid4().hex
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(new_id + "\n", encoding="utf-8")
-        _install_id = new_id
-    except OSError:
-        # Read-only state dir, race, etc. — fall back to an ephemeral id.
-        _install_id = uuid.uuid4().hex
-    return _install_id
+    with _identity_lock:
+        if _install_id is not None and _install_path == path:
+            return _install_id
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with (path.parent / "install_id.lock").open("a") as lock:
+                # Never stall a review behind another process's telemetry.
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    existing = path.read_text(encoding="utf-8").strip()
+                    parsed = uuid.UUID(existing)
+                    if parsed.version != 4:
+                        raise ValueError("Expected a random UUID")
+                except FileNotFoundError, ValueError, UnicodeError:
+                    existing = uuid.uuid4().hex
+                    temporary: str | None = None
+                    try:
+                        with tempfile.NamedTemporaryFile(
+                            mode="w", dir=path.parent, delete=False, encoding="utf-8"
+                        ) as output:
+                            temporary = output.name
+                            output.write(existing + "\n")
+                            output.flush()
+                            os.fsync(output.fileno())
+                        os.replace(temporary, path)
+                    finally:
+                        if temporary is not None:
+                            Path(temporary).unlink(missing_ok=True)
+                _install_id, _install_path = existing, path
+                return existing
+        except OSError:
+            return None
 
 
 def _bubo_version() -> str:
@@ -189,6 +283,8 @@ def agent_label(reviewer_command: list[str]) -> str:
 def _base_attrs() -> dict[str, Any]:
     py = platform.python_version_tuple()
     iid = install_id()
+    if iid is None:
+        raise OSError("Persistent analytics identity unavailable")
     return {
         # PostHog keys events on `distinct_id`; setting it to the anonymous
         # install id is what lets "count distinct installs" actually work
@@ -211,8 +307,8 @@ def _base_attrs() -> dict[str, Any]:
 def _clean(attrs: dict[str, Any]) -> dict[str, Any]:
     """Default-deny filter: keep only allowlisted, scalar, sanitized values.
 
-    This is the single chokepoint that guarantees no identifying content
-    leaves the machine. Unknown keys, ``None`` values, and unsupported types
+    This chokepoint enforces the approved disclosure boundary.
+    Unknown keys, ``None`` values, and unsupported types
     are dropped; strings are stripped, rejected if they contain whitespace or
     control characters, and truncated.
     """
@@ -220,6 +316,22 @@ def _clean(attrs: dict[str, Any]) -> dict[str, Any]:
     for key, value in attrs.items():
         if key not in _ALLOWED_ATTRS or value is None:
             continue
+        if key in {"org", "repo_name"}:
+            from bubo.project_analytics import _SLUG, OSS_LICENSES
+
+            if not isinstance(value, str) or not _SLUG.fullmatch(value):
+                continue
+            if attrs.get("metadata_status") != "verified":
+                continue
+            if key == "repo_name" and (
+                attrs.get("visibility") != "public" or attrs.get("license") not in OSS_LICENSES
+            ):
+                continue
+            if key == "org" and (attrs.get("scm_provider"), attrs.get("namespace_kind")) not in {
+                ("github", "organization"),
+                ("gitlab", "group"),
+            }:
+                continue
         # bool is a subclass of int, so `bool | int | float` covers it.
         if isinstance(value, bool | int | float):
             out[key] = value
@@ -236,7 +348,7 @@ def _emit(cfg: AnalyticsConfig, event: str, attrs: dict[str, Any]) -> None:
     try:
         if not analytics_enabled(cfg) or event not in _KNOWN_EVENTS:
             return
-        payload = _clean({**_base_attrs(), **attrs})
+        payload = _clean({**attrs, **_base_attrs()})
         # These controls are fixed after cleaning so no caller can override
         # them while adding event-specific attributes.
         payload["$geoip_disable"] = True
@@ -286,12 +398,35 @@ def record_review_completed(
     findings_skipped: int,
     files_changed: int | None,
     lines_changed: int | None,
+    languages: dict[str, int] | None = None,
+    queue_seconds: float | None = None,
+    profile: dict[str, Any] | None = None,
 ) -> None:
     """The primary signal: one anonymized event per completed review."""
+    context = {
+        key: value
+        for key, value in (profile or {}).items()
+        if key
+        in {
+            "project_id",
+            "domain",
+            "project_type",
+            "profile_source",
+            "stack_source",
+            "stack_coverage",
+            "metadata_status",
+            "visibility",
+            "namespace_kind",
+            "org",
+            "repo_name",
+            "license",
+        }
+    }
     _emit(
         cfg,
         "review_completed",
         {
+            **context,
             "scm_provider": _provider(scm_provider),
             "agent": agent,
             "model": model,
@@ -310,8 +445,42 @@ def record_review_completed(
             "findings_skipped": findings_skipped,
             "files_changed": files_changed,
             "lines_changed": lines_changed,
+            "queue_seconds": queue_seconds,
         },
     )
+    if context.get("project_id"):
+        common = {
+            **context,
+            "scm_provider": _provider(scm_provider),
+            "status": status,
+            "dry_run": dry_run,
+        }
+        _emit(cfg, "project_profile", common)
+        from bubo.project_analytics import _DEPENDENCIES
+
+        known = set(_DEPENDENCIES.values()) | {("language", label) for label in _LANGUAGES.values()}
+        for kind, technology in (profile or {}).get("technologies", []):
+            if (kind, technology) in known:
+                _emit(
+                    cfg,
+                    "project_technology",
+                    {**common, "technology_kind": kind, "technology": technology},
+                )
+    for language, count in (languages or {}).items():
+        if language not in {*_LANGUAGES.values(), "other"} or count <= 0:
+            continue
+        _emit(
+            cfg,
+            "review_language",
+            {
+                **context,
+                "scm_provider": _provider(scm_provider),
+                "language": language,
+                "language_files": count,
+                "status": status,
+                "dry_run": dry_run,
+            },
+        )
 
 
 def record_finding_outcome(cfg: AnalyticsConfig, *, scm_provider: str, outcome: str) -> None:
