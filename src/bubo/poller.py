@@ -901,6 +901,7 @@ def changed_loc(
     token: str,
     project: str,
     number: int,
+    languages: dict[str, int] | None = None,
 ) -> tuple[int | None, int | None]:
     """Best-effort ``(files_changed, lines_changed)`` for anonymous analytics.
 
@@ -915,6 +916,8 @@ def changed_loc(
         return None, None
     files = len(changed)
     lines = sum(len(entry.get("new_lines") or ()) for entry in changed.values())
+    if languages is not None:
+        languages.update(analytics.language_counts(changed))
     return files, lines
 
 
@@ -1475,6 +1478,9 @@ def worker(job: Path) -> int:
     repo: Path | None = None
     files_changed: int | None = None
     lines_changed: int | None = None
+    languages: dict[str, int] = {}
+    queued_seconds: float | None = None
+    project_profile: dict[str, Any] = {}
     review_run_started = False
 
     def defer_review_run() -> None:
@@ -1543,7 +1549,12 @@ def worker(job: Path) -> int:
             # Anonymous LoC for analytics — computed ONLY when analytics is
             # enabled, so an opted-out user pays no extra API round-trip.
             if analytics.analytics_enabled(cfg.analytics_config):
-                files_changed, lines_changed = changed_loc(provider, cfg, token, project, iid)
+                files_changed, lines_changed = changed_loc(
+                    provider, cfg, token, project, iid, languages
+                )
+                from bubo.project_analytics import collect_profile
+
+                project_profile = collect_profile(cfg, token, project, repo)
             # Opt-in governance (off by default). Captures provenance and
             # evaluates the policy gate; returns a heightened-scrutiny directive
             # to inject into the prompt when the change escalates. No-op + no API
@@ -1709,6 +1720,9 @@ def worker(job: Path) -> int:
                 findings_skipped=skipped,
                 files_changed=files_changed,
                 lines_changed=lines_changed,
+                languages=languages,
+                queue_seconds=queued_seconds,
+                profile=project_profile,
             )
             log(
                 "review_done",
@@ -1793,6 +1807,9 @@ def worker(job: Path) -> int:
                 findings_skipped=0,
                 files_changed=files_changed,
                 lines_changed=lines_changed,
+                languages=languages,
+                queue_seconds=queued_seconds,
+                profile=project_profile,
             )
         log(
             "review_failed",

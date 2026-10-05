@@ -288,10 +288,18 @@ def configure_otel(config: TelemetryConfig) -> None:
     if _CONFIGURED or not config.enabled:
         return
     try:
+        from bubo.analytics import install_id
+
+        identity = install_id()
+        if identity is None:
+            return
         resource = Resource.create(
             {
                 "service.name": config.service_name,
                 "deployment.environment.name": config.environment,
+                "service.instance.id": identity,
+                "install_id": identity,
+                "distinct_id": identity,
             }
         )
         if config.otlp_endpoint:
