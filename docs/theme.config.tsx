@@ -3,6 +3,36 @@ import { DocsThemeConfig } from 'nextra-theme-docs'
 import { SiteFooter } from './components/SiteFooter'
 import { asset } from './components/asset'
 
+const softwareApplicationSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  '@id': 'https://mountainowl.github.io/bubo/#software',
+  name: 'Bubo AI Code Review',
+  alternateName: 'Bubo',
+  applicationCategory: 'DeveloperApplication',
+  applicationSubCategory: 'AI code review',
+  operatingSystem: 'Linux, macOS, Windows',
+  description:
+    'Self-hosted AI code reviewer for GitHub and GitLab that learns from maintainer outcomes to reduce repository-specific noise.',
+  url: 'https://mountainowl.github.io/bubo/',
+  downloadUrl: 'https://pypi.org/project/bubo/',
+  softwareVersion: process.env.NEXT_PUBLIC_BUBO_VERSION,
+  isAccessibleForFree: true,
+  license: 'https://opensource.org/license/mit',
+  featureList: [
+    'Self-hosted deployment',
+    'GitHub pull request review',
+    'GitLab merge request review',
+    'Bring-your-own LLM',
+    'Repository-scoped learning from maintainer outcomes',
+    'OpenTelemetry metrics',
+  ],
+  sameAs: [
+    'https://github.com/mountainowl/bubo',
+    'https://pypi.org/project/bubo/',
+  ],
+}
+
 const config: DocsThemeConfig = {
   logo: (
     <span
@@ -102,6 +132,10 @@ const config: DocsThemeConfig = {
       <meta
         property="og:description"
         content="Agentic AI code review — with the LLM of your choice."
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareApplicationSchema) }}
       />
     </>
   ),
