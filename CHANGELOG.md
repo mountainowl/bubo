@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.0](https://github.com/mountainowl/bubo/compare/v0.27.0...v0.28.0) (2026-10-05)
+
+
+### Features
+
+* restore GitHub Marketplace action ([#219](https://github.com/mountainowl/bubo/issues/219)) ([3b72eb0](https://github.com/mountainowl/bubo/commit/3b72eb0f50d559fb2b00a19e0302ed637d3e55ea))
+
 ## [0.27.0](https://github.com/mountainowl/bubo/compare/v0.26.0...v0.27.0) (2026-10-01)
 
 
