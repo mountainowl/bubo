@@ -165,6 +165,33 @@ def test_bare_poller_is_rejected_before_discovery(monkeypatch, capsys) -> None:
     invoked.assert_not_called()
 
 
+def test_run_once_poller_uses_inline_worker(monkeypatch) -> None:
+    from bubo import poller
+
+    invoked = MagicMock(return_value=1)
+    monkeypatch.setattr(poller, "poll", invoked)
+    monkeypatch.setattr("sys.argv", ["bubo-poller", "run-once"])
+
+    assert poller.main() == 0
+    invoked.assert_called_once_with(worker_mode="inline")
+
+
+def test_run_once_poller_redacts_failure(monkeypatch) -> None:
+    from bubo import poller
+
+    logged = MagicMock()
+    monkeypatch.setattr(
+        poller,
+        "poll",
+        MagicMock(side_effect=RuntimeError("OPENAI_API_KEY=secret")),
+    )
+    monkeypatch.setattr(poller, "log", logged)
+    monkeypatch.setattr("sys.argv", ["bubo-poller", "run-once"])
+
+    assert poller.main() == 1
+    logged.assert_called_once_with("run_once_failed", error="OPENAI_API_KEY=<redacted>")
+
+
 def test_health_remains_an_on_demand_poller_command(monkeypatch) -> None:
     from bubo import poller
 
@@ -213,6 +240,67 @@ def test_shared_shutdown_interrupts_a_multi_change_poll(monkeypatch) -> None:
         assert recorded == [1]
     finally:
         reset_for_tests()
+
+
+def test_inline_poll_waits_for_worker_and_does_not_fork(monkeypatch) -> None:
+    from bubo import poller
+    from bubo.review_config import ReviewConfig
+
+    cfg = ReviewConfig(projects=["owner/repo"], max_merge_requests_per_poll=1)
+    provider = MagicMock()
+    provider.name = "github"
+    change = {"number": 7, "sha": "head"}
+    provider.list_open_changes.return_value = [change]
+    provider.token.return_value = "token"
+    provider.change_number.return_value = 7
+    inline_worker = MagicMock(return_value=0)
+    detached_worker = MagicMock()
+
+    monkeypatch.setattr(poller, "init_db", lambda: None)
+    monkeypatch.setattr(poller, "read_config", lambda: cfg)
+    monkeypatch.setattr(poller, "subscription_gate", lambda _cfg: (True, "closed"))
+    monkeypatch.setattr(poller, "get_provider", lambda _cfg: provider)
+    monkeypatch.setattr(poller, "count_inflight_workers", lambda: 0)
+    monkeypatch.setattr(poller, "already_seen", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(poller, "sha_for", lambda _change: "head")
+    monkeypatch.setattr(poller, "record", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(poller, "write_job", lambda *_args: Path("job.json"))
+    monkeypatch.setattr(poller, "worker", inline_worker)
+    monkeypatch.setattr(poller, "fork_worker", detached_worker)
+    monkeypatch.setattr(poller.analytics, "record_session_start", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(poller.analytics, "flush", lambda: None)
+
+    assert poller.poll(worker_mode="inline") == 1
+    inline_worker.assert_called_once_with(Path("job.json"))
+    detached_worker.assert_not_called()
+
+
+def test_inline_poll_fails_when_worker_fails(monkeypatch) -> None:
+    from bubo import poller
+    from bubo.review_config import ReviewConfig
+
+    cfg = ReviewConfig(projects=["owner/repo"], max_merge_requests_per_poll=1)
+    provider = MagicMock()
+    provider.name = "github"
+    change = {"number": 7, "sha": "head"}
+    provider.list_open_changes.return_value = [change]
+    provider.token.return_value = "token"
+    provider.change_number.return_value = 7
+
+    monkeypatch.setattr(poller, "init_db", lambda: None)
+    monkeypatch.setattr(poller, "read_config", lambda: cfg)
+    monkeypatch.setattr(poller, "subscription_gate", lambda _cfg: (True, "closed"))
+    monkeypatch.setattr(poller, "get_provider", lambda _cfg: provider)
+    monkeypatch.setattr(poller, "count_inflight_workers", lambda: 0)
+    monkeypatch.setattr(poller, "already_seen", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(poller, "sha_for", lambda _change: "head")
+    monkeypatch.setattr(poller, "record", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(poller, "write_job", lambda *_args: Path("job.json"))
+    monkeypatch.setattr(poller, "worker", MagicMock(return_value=7))
+    monkeypatch.setattr(poller.analytics, "record_session_start", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="review worker failed with exit code 7"):
+        poller.poll(worker_mode="inline")
 
 
 def test_monitor_opens_then_recovers(tmp_path: Path, monkeypatch) -> None:

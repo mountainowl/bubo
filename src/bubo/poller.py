@@ -15,8 +15,8 @@ heavy lifting lives in dedicated sibling modules:
 
 What stays here:
 
-* :func:`poll` — one poll cycle, plus the SIGTERM-aware loop and the
-  in-flight backpressure check.
+* :func:`poll` — one poll cycle, with detached service workers or a
+  synchronous CI worker, plus shutdown and in-flight backpressure checks.
 * :func:`worker` — one MR review end-to-end (checkout → agent → parse
   → policy filter → post/plan → record).
 * :func:`sync_outcomes` — periodic GitLab-side state refresh.
@@ -760,8 +760,8 @@ def fork_worker(job: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
-def poll() -> int:
-    """Run one poll cycle: scan projects, queue eligible changes, fork workers.
+def poll(*, worker_mode: Literal["detached", "inline"] = "detached") -> int:
+    """Run one poll cycle and launch each eligible review in the requested mode.
 
     Provider-agnostic — obtains the configured provider via
     :func:`bubo.scm.get_provider` and drives it. Returns the number
@@ -774,9 +774,14 @@ def poll() -> int:
     * SIGTERM/SIGINT (cooperative) — the loop checks
       :func:`signals.shutdown_requested` between changes and exits cleanly.
 
-    Every emitted log line carries ``poll_run_id`` so events from the
-    same cycle correlate across the JSON-line stream.
+    ``detached`` is the service path: workers survive the poll cycle and run in
+    their own process groups. ``inline`` is the CI path: the poll cycle waits
+    for each worker and fails if a review fails. Every emitted log line carries
+    ``poll_run_id`` so events from the same cycle correlate across the
+    JSON-line stream.
     """
+    if worker_mode not in {"detached", "inline"}:
+        raise ValueError(f"unsupported worker mode: {worker_mode}")
     init_db()
     cfg = read_config()
     allowed, reason = subscription_gate(cfg)
@@ -833,7 +838,12 @@ def poll() -> int:
                 continue
             record(project, number, sha, ReviewStatus.QUEUED)
             job = write_job(project, change)
-            fork_worker(job)
+            if worker_mode == "inline":
+                exit_code = worker(job)
+                if exit_code != 0:
+                    raise RuntimeError(f"review worker failed with exit code {exit_code}")
+            else:
+                fork_worker(job)
             queued += 1
             inflight += 1
             if queued >= cfg.max_merge_requests_per_poll or inflight >= inflight_cap:
@@ -850,6 +860,18 @@ def poll() -> int:
     analytics.flush()
     log("poll_done", poll_run_id=poll_run_id, queued=queued)
     return queued
+
+
+def run_once() -> int:
+    """Run one synchronous poll cycle for CI and return a process exit status."""
+    try:
+        poll(worker_mode="inline")
+    except ConfigError:
+        raise
+    except Exception as exc:
+        log("run_once_failed", error=redact_secrets(str(exc)))
+        return 1
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -2273,9 +2295,11 @@ def main() -> int:
     * ``--worker PATH`` — run as a single-MR worker from a queued job
       file. Used internally by :func:`fork_worker`; operators do not
       invoke this directly.
+    * ``run-once`` — synchronously review the configured target and wait for
+      completion. Intended for CI jobs such as the GitHub Marketplace Action.
     * ``service {start|stop|status}`` — run the supported long-lived review
-      service. Bare invocation is deliberately rejected so reviews cannot
-      run outside the subscription monitor and service-owned outcome sync.
+      service. Bare invocation is deliberately rejected so scheduled reviews
+      cannot run outside the subscription monitor and service-owned outcome sync.
 
     Exit codes:
 
@@ -2295,15 +2319,19 @@ def main() -> int:
     parser.add_argument("--backfill-github-bot-comments-since")
     parser.add_argument("--backfill-limit", type=int, default=500)
     parser.add_argument("--worker", type=Path)
-    parser.add_argument("service", nargs="?")
+    parser.add_argument("command", nargs="?")
     parser.add_argument("service_action", nargs="?")
     parser.add_argument("--foreground", action="store_true")
     parser.add_argument("--service-token", help=argparse.SUPPRESS)
     args = parser.parse_args()
     _install_signal_handlers()
     try:
-        if args.service is not None:
-            if args.service != "service" or args.service_action not in {"start", "stop", "status"}:
+        if args.command == "run-once":
+            if args.service_action is not None:
+                parser.error("usage: bubo-poller run-once")
+            return run_once()
+        if args.command is not None:
+            if args.command != "service" or args.service_action not in {"start", "stop", "status"}:
                 parser.error("usage: bubo-poller service {start|stop|status} [--foreground]")
             from bubo.service import run_foreground, service_status, start_detached, stop_service
 
@@ -2407,6 +2435,7 @@ __all__ = [
     "reviewer_env",
     "reviewer_model",
     "run",
+    "run_once",
     "sha_for",
     "slug",
     "status_age_seconds",
