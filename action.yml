@@ -1,0 +1,203 @@
+name: "Bubo AI Code Review"
+description: "Review the current pull request with your LLM and post evidence-backed inline findings."
+author: "mountainowl"
+branding:
+  icon: "eye"
+  color: "purple"
+
+# The action scopes Bubo to the pull request that triggered the workflow and
+# runs the review synchronously. The job does not finish until the review has
+# succeeded or failed, so GitHub Actions reports a meaningful status.
+
+inputs:
+  llm-api-key:
+    description: "API key for the review LLM (for example, an OpenAI key for Codex). Pass a secret."
+    required: true
+  llm-api-key-env:
+    description: "Deprecated. The agent normally authenticates through its own login; honored when set."
+    required: false
+    default: ""
+  llm-model:
+    description: "Model for the review. bubo init writes it to the generated agent profile."
+    required: false
+    default: "gpt-5.5"
+  llm-model-effort:
+    description: "Reasoning effort: low, medium, or high."
+    required: false
+    default: "medium"
+  llm-base-url:
+    description: "Optional OpenAI-compatible endpoint. When set, the key is passed to the agent environment."
+    required: false
+    default: ""
+  github-token:
+    description: "Token used to read the PR and post comments. Needs pull-requests: write."
+    required: false
+    default: "${{ github.token }}"
+  reviewer-command:
+    description: "Space-separated agent CLI argv. Empty uses Bubo's generated Codex profile."
+    required: false
+    default: ""
+  dry-run:
+    description: "When true, complete the review but post nothing. Start with true."
+    required: false
+    default: "true"
+  tone:
+    description: "Review voice: terse, collaborative, socratic, formal, or casual."
+    required: false
+    default: "terse"
+  min-confidence:
+    description: "Drop findings below this confidence (0.0-1.0). Empty uses the Bubo default."
+    required: false
+    default: ""
+  max-findings:
+    description: "Maximum findings posted per PR. Empty uses the Bubo default."
+    required: false
+    default: ""
+  bubo-version:
+    description: "Bubo PyPI version. Empty uses the version matching a semver Action tag, otherwise latest."
+    required: false
+    default: ""
+  install-agent:
+    description: "Best-effort Codex and Superpowers install. Leave false on pre-provisioned runners."
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Require pull-request context
+      shell: bash
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+          echo "::error::Bubo requires a pull_request event with a numeric PR number."
+          exit 1
+        fi
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+    - name: Install compatible Bubo
+      shell: bash
+      env:
+        ACTION_REF: ${{ github.action_ref }}
+        REQUESTED_VERSION: ${{ inputs.bubo-version }}
+      run: |
+        set -euo pipefail
+        version="${REQUESTED_VERSION}"
+        if [[ -z "${version}" && "${ACTION_REF}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?)$ ]]; then
+          version="${BASH_REMATCH[1]}"
+        fi
+        if [[ -n "${version}" ]]; then
+          uv tool install --force "bubo==${version}"
+        else
+          uv tool install --force bubo
+        fi
+
+    - name: Provision review agent
+      if: ${{ inputs.install-agent == 'true' }}
+      shell: bash
+      run: |
+        npm install -g @openai/codex \
+          || echo "::warning::Codex install failed; ensure the agent CLI is on PATH."
+        npx -y @obra/superpowers install 2>/dev/null \
+          || echo "::warning::Superpowers install skipped; ensure the code-reviewer skill is configured."
+
+    - name: Initialize Bubo workspace
+      shell: bash
+      env:
+        BUBO_ROOT: ${{ runner.temp }}/bubo
+      run: bubo init --root "${BUBO_ROOT}" --no-agent-config
+
+    - name: Write pull-request configuration
+      shell: bash
+      env:
+        BUBO_ROOT: ${{ runner.temp }}/bubo
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+        LLM_API_KEY_ENV: ${{ inputs.llm-api-key-env }}
+        LLM_MODEL: ${{ inputs.llm-model }}
+        LLM_MODEL_EFFORT: ${{ inputs.llm-model-effort }}
+        LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        REVIEWER_COMMAND: ${{ inputs.reviewer-command }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        TONE: ${{ inputs.tone }}
+        MIN_CONFIDENCE: ${{ inputs.min-confidence }}
+        MAX_FINDINGS: ${{ inputs.max-findings }}
+      run: |
+        set -euo pipefail
+        cfg="${BUBO_ROOT}/config/env.toml"
+        {
+          echo '[scm]'
+          echo 'provider = "github"'
+          echo
+          echo '[github]'
+          printf 'token = "%s"\n' "${GH_TOKEN}"
+          echo
+          echo '[agents]'
+          printf 'llm_model = "%s"\n' "${LLM_MODEL}"
+          printf 'llm_model_effort = "%s"\n' "${LLM_MODEL_EFFORT}"
+          printf 'llm_api_key = "%s"\n' "${LLM_API_KEY}"
+          printf 'dry_run = %s\n' "${DRY_RUN}"
+          [[ -n "${LLM_BASE_URL}" ]] && printf 'llm_base_url = "%s"\n' "${LLM_BASE_URL}"
+          [[ -n "${LLM_API_KEY_ENV}" ]] && printf 'llm_api_key_env = "%s"\n' "${LLM_API_KEY_ENV}"
+          if [[ -n "${REVIEWER_COMMAND}" ]]; then
+            printf 'reviewer_command = ['
+            first=1
+            for token in ${REVIEWER_COMMAND}; do
+              [[ ${first} -eq 1 ]] || printf ', '
+              printf '"%s"' "${token}"
+              first=0
+            done
+            printf ']\n'
+          fi
+          echo
+          echo '[review]'
+          printf 'dry_run = %s\n' "${DRY_RUN}"
+          printf 'tone = "%s"\n' "${TONE}"
+          [[ -n "${MIN_CONFIDENCE}" ]] && printf 'min_confidence = %s\n' "${MIN_CONFIDENCE}"
+          [[ -n "${MAX_FINDINGS}" ]] && printf 'max_findings_per_merge_request = %s\n' "${MAX_FINDINGS}"
+          echo
+          echo '[poller]'
+          echo 'max_merge_requests_per_poll = 1'
+          printf 'target_merge_request_iid = %s\n' "${PR_NUMBER}"
+          echo
+          echo '[[projects]]'
+          printf 'path = "%s"\n' "${REPO}"
+          echo 'enabled = true'
+        } > "${cfg}"
+        echo "Configured Bubo for ${REPO} PR #${PR_NUMBER} (dry_run=${DRY_RUN})."
+
+    - name: Generate agent profile
+      shell: bash
+      env:
+        BUBO_ROOT: ${{ runner.temp }}/bubo
+      run: bubo init --root "${BUBO_ROOT}"
+
+    - name: Authenticate default Codex agent
+      if: ${{ inputs.reviewer-command == '' }}
+      shell: bash
+      env:
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+      run: |
+        if command -v codex >/dev/null 2>&1; then
+          printf '%s' "${LLM_API_KEY}" | codex login --with-api-key 2>/dev/null \
+            && echo "Codex authenticated." \
+            || echo "::warning::Codex login failed; pre-authentication is required for the review."
+        else
+          echo "::warning::Codex is not on PATH; enable install-agent or pre-provision the runner."
+        fi
+
+    - name: Review pull request
+      shell: bash
+      env:
+        BUBO_ROOT: ${{ runner.temp }}/bubo
+        BUBO_PROVIDER: github
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        bubo doctor --root "${BUBO_ROOT}" --no-agent-config
+        bubo-poller run-once

@@ -41,6 +41,7 @@ def test_launch_readiness_files_exist() -> None:
         ".github/PULL_REQUEST_TEMPLATE.md",
         ".github/ISSUE_TEMPLATE/bug_report.yml",
         ".github/ISSUE_TEMPLATE/feature_request.yml",
+        "action.yml",
     ]
 
     missing = [path for path in required if not (ROOT / path).is_file()]
@@ -74,7 +75,14 @@ def test_docs_site_present() -> None:
     assert (docs / "package.json").is_file()
     assert (docs / "next.config.mjs").is_file()
     assert (docs / "theme.config.tsx").is_file()
-    for page in ("configuration", "operate", "telemetry", "troubleshooting", "mcp"):
+    for page in (
+        "configuration",
+        "github-action",
+        "operate",
+        "telemetry",
+        "troubleshooting",
+        "mcp",
+    ):
         assert (docs / "pages" / f"{page}.mdx").is_file(), f"missing docs page: {page}.mdx"
     # the old mkdocs layout is gone
     assert not (docs / "configuration.md").exists()
@@ -88,6 +96,15 @@ def test_docs_site_present() -> None:
     assert "NEXT_PUBLIC_BUBO_VERSION" in theme_config
     assert "v0.24.2" not in theme_config
     assert "pyproject.toml" in deploy_workflow
+
+
+def test_github_action_runs_the_matching_bubo_release_synchronously() -> None:
+    action = (ROOT / "action.yml").read_text()
+
+    assert 'using: "composite"' in action
+    assert "github.action_ref" in action
+    assert "bubo-poller run-once" in action
+    assert "bubo-poller\n" not in action
 
 
 def test_meta_prompt_includes_concise_review_style_example() -> None:

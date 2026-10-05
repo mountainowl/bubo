@@ -28,6 +28,7 @@ export default {
   'how-it-works': 'How it works',
   recipes: 'Recipes',
   mcp: 'MCP server',
+  'github-action': 'GitHub Action',
   operate: 'Operate',
   telemetry: 'Metrics & telemetry',
   troubleshooting: 'Troubleshooting',

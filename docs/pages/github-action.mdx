@@ -1,0 +1,93 @@
+import { Badge } from '../components/Badge'
+import { Footnote } from '../components/Footnote'
+
+# GitHub Action <Badge href="#experimental">Experimental</Badge>
+
+Run Bubo on a pull request from GitHub Actions. The Action scopes discovery to
+the triggering PR, waits for the review to finish, and posts evidence-backed
+findings through the GitHub REST API. It runs on GitHub-hosted Linux and macOS
+runners or pre-provisioned self-hosted runners with Bash.
+
+## Quick start
+
+```yaml
+# .github/workflows/bubo.yml
+name: Bubo review
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mountainowl/bubo@v0.28.0
+        with:
+          llm-api-key: ${{ secrets.OPENAI_API_KEY }}
+          dry-run: "true"
+          install-agent: "true"
+          tone: "collaborative"
+```
+
+Start with `dry-run: "true"`. The review still runs to completion but does not
+post comments. Inspect its transcript before changing the input to `"false"`.
+Use the latest Marketplace release if it is newer than the example tag.
+
+## Why `run-once` exists
+
+`bubo-poller service` remains the only supported long-running scheduler. The
+Action instead invokes `bubo-poller run-once`, which runs the configured PR
+synchronously and returns a failure status when the review worker fails. This
+keeps GitHub's check alive until Bubo has actually finished.
+
+When the Action is referenced by an exact semver tag, it installs the matching
+Bubo PyPI version by default. This prevents an older Action from silently using
+a newer incompatible CLI. Set `bubo-version` only when intentionally testing a
+different release.
+
+## Inputs
+
+| Input | Default | What it does |
+|---|---|---|
+| `llm-api-key` | *(required)* | Review-model key. Pass a GitHub Actions secret. |
+| `llm-model` | `gpt-5.5` | Model written to the generated agent profile. |
+| `llm-model-effort` | `medium` | Reasoning effort: `low`, `medium`, or `high`. |
+| `llm-base-url` | *(unset)* | Custom OpenAI-compatible endpoint. |
+| `llm-api-key-env` | *(deprecated)* | Legacy additional key environment variable. |
+| `github-token` | `${{ github.token }}` | Reads the PR and posts comments; requires `pull-requests: write`. |
+| `reviewer-command` | *(generated Codex profile)* | Space-separated alternative agent command. |
+| `dry-run` | `true` | Complete the review without posting. |
+| `tone` | `terse` | `terse`, `collaborative`, `socratic`, `formal`, or `casual`. |
+| `min-confidence` | *(Bubo default)* | Discard findings below this value. |
+| `max-findings` | *(Bubo default)* | Maximum findings for this PR. |
+| `bubo-version` | *(matching Action tag)* | Explicit PyPI version override. Non-semver Action refs use latest. |
+| `install-agent` | `false` | Best-effort Codex and Superpowers installation. |
+
+## Self-hosted runners
+
+Pre-provision the agent CLI, authentication, the `code-reviewer` skill, `uv`,
+and `git`, then leave `install-agent: false`. Repository data and the review
+process remain on the runner; the configured model endpoint still receives the
+model request.
+
+## Execution flow
+
+1. Resolve the compatible Bubo version and install it from PyPI.
+2. Optionally install Codex and Superpowers on a hosted runner.
+3. Initialize an ephemeral Bubo root below `${{ runner.temp }}`.
+4. Write a configuration containing one GitHub repository and the triggering
+   PR number as `target_merge_request_iid`.
+5. Validate the installation with `bubo doctor`.
+6. Run `bubo-poller run-once` and wait for the review result.
+
+<Footnote id="experimental">
+
+**Experimental.** Validate with `dry-run: "true"` on a real pull request before
+allowing comments. Do not use `pull_request_target` for untrusted fork code with
+repository secrets. The review agent must be installed and authenticated on the
+runner.
+
+</Footnote>
