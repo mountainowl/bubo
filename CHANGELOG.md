@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.1](https://github.com/mountainowl/bubo/compare/v0.28.0...v0.28.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **deps:** refresh lockfile for 0.28.0 ([#223](https://github.com/mountainowl/bubo/issues/223)) ([cbf3a56](https://github.com/mountainowl/bubo/commit/cbf3a56377c5949b9228d53f818afb284339a013))
+
 ## [0.28.0](https://github.com/mountainowl/bubo/compare/v0.27.0...v0.28.0) (2026-10-05)
 
 
