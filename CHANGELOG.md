@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.2](https://github.com/mountainowl/bubo/compare/v0.28.1...v0.28.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **ci:** gate releases on current lockfile ([#225](https://github.com/mountainowl/bubo/issues/225)) ([0ee9cf0](https://github.com/mountainowl/bubo/commit/0ee9cf01860f422540959e00215425e73e5994fa))
+
 ## [0.28.1](https://github.com/mountainowl/bubo/compare/v0.28.0...v0.28.1) (2026-10-05)
 
 
