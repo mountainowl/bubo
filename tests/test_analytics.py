@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -16,6 +17,7 @@ def _reset_analytics_singletons(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     monkeypatch.setattr(analytics, "_pending_events", [])
     monkeypatch.setattr(analytics, "_install_id", None)
     monkeypatch.setattr(analytics, "_install_path", None)
+    monkeypatch.setattr(analytics, "_install_node", None)
     monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
     monkeypatch.delenv("BUBO_ANALYTICS", raising=False)
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
@@ -133,15 +135,20 @@ def test_install_id_is_stable_and_persisted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
+    monkeypatch.setattr(analytics.uuid, "getnode", lambda: 0x112233445566)
     first = analytics.install_id()
     assert first
-    assert len(first) == 32  # uuid4 hex
+    assert len(first) == 64
+    assert set(first) <= set("0123456789abcdef")
+    seed = (tmp_path / "state" / "install_id").read_text().strip()
+    assert first == hashlib.sha256(f"{seed}:{0x112233445566}".encode()).hexdigest()
+    assert analytics.uuid.UUID(seed).version == 4
     # cached within the process
     assert analytics.install_id() == first
     # persisted to disk and reused by a fresh process (cache cleared)
     monkeypatch.setattr(analytics, "_install_id", None)
     assert analytics.install_id() == first
-    assert (tmp_path / "state" / "install_id").read_text().strip() == first
+    assert (tmp_path / "state" / "install_id").read_text().strip() == seed
 
 
 def test_install_id_disables_events_when_unwritable(monkeypatch: pytest.MonkeyPatch) -> None:
