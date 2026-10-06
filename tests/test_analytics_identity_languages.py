@@ -1,5 +1,6 @@
 """Identity isolation/concurrency and privacy regressions for product analytics."""
 
+import hashlib
 import json
 import os
 import subprocess
@@ -19,6 +20,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
     monkeypatch.setattr(analytics, "_install_id", None)
     monkeypatch.setattr(analytics, "_install_path", None)
+    monkeypatch.setattr(analytics, "_install_node", None)
     monkeypatch.setattr(analytics, "_pending_events", [])
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     monkeypatch.delenv("BUBO_ANALYTICS", raising=False)
@@ -39,8 +41,26 @@ def test_invalid_identity_is_repaired(content):
     path.parent.mkdir(parents=True)
     path.write_text(content)
     identity = analytics.install_id()
-    assert uuid.UUID(identity).version == 4
-    assert path.read_text().strip() == identity
+    seed = path.read_text().strip()
+    assert uuid.UUID(seed).version == 4
+    assert identity == hashlib.sha256(f"{seed}:{uuid.getnode()}".encode()).hexdigest()
+
+
+def test_copied_identity_seed_changes_on_another_machine(monkeypatch):
+    path = analytics.paths.DB.parent / "install_id"
+    path.parent.mkdir(parents=True)
+    seed = uuid.uuid4().hex
+    path.write_text(seed)
+
+    monkeypatch.setattr(analytics.uuid, "getnode", lambda: 0x112233445566)
+    first = analytics.install_id()
+    monkeypatch.setattr(analytics.uuid, "getnode", lambda: 0xAABBCCDDEEFF)
+    second = analytics.install_id()
+
+    assert first == hashlib.sha256(f"{seed}:{0x112233445566}".encode()).hexdigest()
+    assert second == hashlib.sha256(f"{seed}:{0xAABBCCDDEEFF}".encode()).hexdigest()
+    assert second != first
+    assert path.read_text().strip() == seed
 
 
 def test_concurrent_first_run_uses_one_persisted_identity(tmp_path):
@@ -70,7 +90,9 @@ print(json.dumps(identity))
     identities = [json.loads(worker.communicate(timeout=10)[0]) for worker in workers]
     assert all(worker.returncode == 0 for worker in workers)
     assert len(set(identities)) == 1
-    assert identities[0] == (tmp_path / "state" / "install_id").read_text().strip()
+    seed = (tmp_path / "state" / "install_id").read_text().strip()
+    assert uuid.UUID(seed).version == 4
+    assert identities[0] == hashlib.sha256(f"{seed}:{uuid.getnode()}".encode()).hexdigest()
 
 
 def test_identity_cannot_be_overridden():
