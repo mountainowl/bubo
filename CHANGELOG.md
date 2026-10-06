@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.3](https://github.com/mountainowl/bubo/compare/v0.28.2...v0.28.3) (2026-10-06)
+
+
+### Bug Fixes
+
+* **analytics:** bind install identity to machine ([#228](https://github.com/mountainowl/bubo/issues/228)) ([028c7ba](https://github.com/mountainowl/bubo/commit/028c7ba6a50aed97b1e0e7e079a6d5ee0b81ca94))
+
 ## [0.28.2](https://github.com/mountainowl/bubo/compare/v0.28.1...v0.28.2) (2026-10-05)
 
 
