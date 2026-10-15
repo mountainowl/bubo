@@ -12,18 +12,11 @@
 [![Docs](https://img.shields.io/badge/docs-mountainowl.github.io%2Fbubo-4f62ad)](https://mountainowl.github.io/bubo/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827)](https://github.com/mountainowl/bubo/blob/main/LICENSE)
 
-**Agentic AI code review with the LLM of your choice.** Bubo reviews your GitLab
-MRs and GitHub PRs with the model *you* run, and posts only the findings worth
-acting on as inline threads — no chatbot noise, no praise, no summaries.
+<img src="assets/bubo-readme-features.gif" width="960" alt="Bubo AI code review tone examples">
 
--  **Self-hosted** — code, diffs, and review data stay on your infrastructure
--  **Bring-your-own-LLM** — Codex, Claude, or any model your CLI drives
--  **SCM** — Currently supports Gitlab and Github 
--  **findings** — Inline or "all good" if clean
--  **Governance, provenance & an auditable on-prem report** - cosign-signed releases with SBOMs
--  **Metrics** — Opentelemetry 
+## Just facts • No noise • Always learning • Compliant • Auditable • Proven ROI
 
-**Full documentation → [mountainowl.github.io/bubo](https://mountainowl.github.io/bubo/)**
+**[See metrics & ROI →](https://mountainowl.github.io/bubo/operate/#governance-report) · [Install Bubo →](#install)**
 
 ## Install
 
