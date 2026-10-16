@@ -9,8 +9,8 @@ findings through the GitHub REST API. It runs on GitHub-hosted Linux and macOS
 runners or pre-provisioned self-hosted runners with Bash. The hardened reviewer
 requires a host that permits its filesystem sandbox: installing Bubblewrap alone
 is insufficient on Linux. Current ubuntu-latest CI rejected UID mapping; use a
-validated host without weakening its security policy. Nested Codex/Bubblewrap
-execution remains a release validation requirement. These requirements apply to
+validated host without weakening its security policy. Credential-free Codex 0.154.0/Bubblewrap filesystem nesting passes CI on
+Ubuntu 22.04; authenticated Linux reviewer execution still needs validation. These requirements apply to
 the upcoming hardened runner, not retroactively to the released example tag.
 
 ## Quick start

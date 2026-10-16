@@ -35,5 +35,6 @@ separate benchmark is not semantic adjudication. Small paired samples cannot
 establish universal format superiority.
 
 No live format comparison results are currently claimed. macOS filesystem
-isolation was exercised independently; Linux nested Codex/Bubblewrap compatibility
-still requires runtime validation.
+isolation was exercised independently; credential-free Linux Codex 0.154.0/Bubblewrap
+filesystem nesting passed on Ubuntu 22.04. Authenticated Linux reviews and network
+isolation are separate checks; this pilot does not establish either.

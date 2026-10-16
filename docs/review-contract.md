@@ -12,7 +12,7 @@ Incomplete worker runs use the existing failed/backoff state and preserve public
 
 ## Read-only execution
 
-All reviewer, verifier, and reconciliation subprocesses enter a filesystem sandbox. macOS requires `sandbox-exec`; Linux requires `bubblewrap` (`bwrap`) and permitted namespaces. Unsupported or denied sandbox setup fails closed. Provision and verify the sandbox before upgrading service, container, or GitHub Action deployments; custom launchers do not bypass this requirement. CI requires a real outer Linux filesystem-isolation test. That test runs Python under Bubblewrap; it does not exercise Codex's native read-only sandbox nested inside Bubblewrap. Nested Linux reviewer usability remains unverified until tested on the deployment host. No live model authentication run is claimed here.
+All reviewer, verifier, and reconciliation subprocesses enter a filesystem sandbox. macOS requires `sandbox-exec`; Linux requires `bubblewrap` (`bwrap`) and permitted namespaces. Unsupported or denied sandbox setup fails closed. Provision and verify the sandbox before upgrading service, container, or GitHub Action deployments; custom launchers do not bypass this requirement. CI requires real outer Linux filesystem isolation and credential-free native Codex nesting tests. On Ubuntu 22.04 with Codex 0.154.0, an outer-only scratch write succeeds while standalone and nested native sandboxes deny the same write and permit reads. This verifies composition for that runner and CLI, not authenticated Linux reviews or network isolation. Validate the deployment host before upgrading.
 
 The source checkout and host filesystem are read-only to the child. A disposable home/cache/temp directory is writable. Selected provider authentication files are copied with private permissions so session writes do not modify the originals; refreshes are not persisted back, and subscription/provider authentication should be smoke-tested before rollout. SCM credentials are removed from the child environment. Explicitly configured custom-provider credentials remain allowed. MCP prepares a target checkout and passes its cwd instead of reviewing the server's directory.
 
@@ -28,5 +28,5 @@ The mandatory Linux filesystem test runs on Ubuntu 22.04; the ordinary test suit
 continues on ubuntu-latest. The current ubuntu-latest CI host rejected Bubblewrap
 UID mapping. Installing Bubblewrap alone is insufficient: deployment-host namespace
 policy must permit the unchanged sandbox command. Bubo does not relax that policy
-or fall back to an unsandboxed review. This platform selection does not establish
-nested Codex sandbox compatibility.
+or fall back to an unsandboxed review. The separate pinned native-sandbox test establishes filesystem nesting on that
+runner; other hosts and authenticated Linux reviews still require validation.
