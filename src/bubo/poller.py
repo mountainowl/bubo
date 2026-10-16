@@ -111,6 +111,8 @@ from bubo.reconciliation import (
     verified_fixed_reply,
 )
 from bubo.review_config import ReviewConfig, load_review_config, review_config_from_dict
+from bubo.review_environment import REVIEWER_ENV_ALLOWLIST
+from bubo.review_environment import reviewer_env as _reviewer_env
 from bubo.review_runner import run_review as run
 from bubo.scm import ScmProvider, get_provider
 from bubo.scm.base import FindingThreadState
@@ -189,59 +191,14 @@ _NOTE_HEADER = re.compile(
 )
 _NOTE_CONFIDENCE = re.compile(r"\*\*Confidence:\*\*\s*([0-9.]+)", re.IGNORECASE)
 
-# Allowlist of env-var names forwarded into the agent subprocess. Anything
-# not on this list (including every credential the wrapper exported into
-# our own environment) is stripped. This is the primary defense against
-# prompt-injection exfiltration of secrets.
-REVIEWER_ENV_ALLOWLIST = {
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "SHELL",
-    "TMPDIR",
-    "TEMP",
-    "TMP",
-    "LANG",
-    "LC_ALL",
-    "SSL_CERT_FILE",
-    "REQUESTS_CA_BUNDLE",
-    "CODEX_HOME",
-    "CLAUDE_CONFIG_DIR",
-    "XDG_CONFIG_HOME",
-}
-
-
 # ---------------------------------------------------------------------------
 # Subprocess env + config glue
 # ---------------------------------------------------------------------------
 
 
 def reviewer_env(source: Mapping[str, str], cfg: ReviewConfig | None = None) -> dict[str, str]:
-    """Build the env dict for the agent subprocess.
-
-    Filters ``source`` through :data:`REVIEWER_ENV_ALLOWLIST` — dropping
-    every credential the wrapper exported into our own environment (the
-    primary anti-exfiltration defense) — and injects ``BUBO_ROOT`` so any
-    MCP server the agent spawns via ``bin/bubo`` resolves the install
-    root. The review prompt (with its contract + findings cap) is passed to
-    the agent as a command argument, not via the environment.
-
-    **base_url exception:** a custom OpenAI-compatible endpoint
-    (``cfg.llm_base_url``) reads the API key from the environment at request
-    time — there is no login flow to stash it in ``auth.json``. So, and *only*
-    when a base URL is configured, exactly ``LLM_API_KEY`` and ``LLM_BASE_URL``
-    are let through the allowlist. This deliberately re-exposes one credential
-    to the agent, which is why it is gated on the operator opting into a base
-    URL rather than widening the static allowlist for everyone.
-    """
-    env = {key: value for key, value in source.items() if key in REVIEWER_ENV_ALLOWLIST}
-    env["BUBO_ROOT"] = str(ROOT)
-    if cfg is not None and cfg.llm_base_url:
-        for name in ("LLM_API_KEY", "LLM_BASE_URL"):
-            if source.get(name):
-                env[name] = source[name]
-    return env
+    """Compatibility entrypoint preserving the poller's patchable ROOT binding."""
+    return _reviewer_env(source, cfg, root=ROOT)
 
 
 def run_verification(
@@ -1427,8 +1384,15 @@ def post_or_plan_findings(
                         )
                         if diff_result.returncode == 0:
                             evidence = diff_result.stdout
-                    except OSError, subprocess.TimeoutExpired:
-                        pass
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        # The verifier can inspect the pinned checkout directly.
+                        # Missing diff text is not evidence confirming/refuting a finding.
+                        log(
+                            "verification_diff_unavailable",
+                            project=project,
+                            iid=number,
+                            error=type(exc).__name__,
+                        )
                 verdicts = run_verification(
                     finding,
                     repo,
@@ -2603,6 +2567,7 @@ def main() -> int:
 # here documents the intent and tells the linter the re-exports are
 # deliberate, not dead imports.
 __all__ = [
+    "REVIEWER_ENV_ALLOWLIST",
     # re-exports (canonical home in sibling modules)
     "already_seen",
     "backfill_gitlab_bot_comments",
@@ -2614,6 +2579,7 @@ __all__ = [
     "connect_db",
     "count_inflight_workers",
     "emit_finding_metric",
+    "extract_findings",
     "finding_seen",
     "fork_worker",
     # config glue

@@ -23,3 +23,10 @@ This is a filesystem boundary, not a network firewall: model-provider network ac
 Deploy prompt and runtime versions together. Provider wrappers embed the trusted packaged contract; they no longer depend on ambient global skill discovery. Requirements and escaped XML metadata remain evidence, never execution authorization. Older supported reviewers must emit the new object; arbitrary custom launchers are not supported. Check the installed CLI version and feature help before deployment: Codex must support `--ignore-user-config`, `--ignore-rules`, `--output-last-message`, and read-only sandboxing; Claude must support the enforced safe/restricted mode and tool/MCP flags. No numeric minimum version is asserted. Unsupported CLI flags fail explicitly. Enterprise pass-through adapters can continue reading `findings` through the compatibility extractor, while transformed live output must preserve the envelope. The Marketplace Action installs the selected Bubo package: keep its pinned package/runtime compatible and pre-provision the OS sandbox before releasing this branch. No independent mirror repository is changed automatically.
 
 See `benchmarks/README.md` for the held-out evaluation protocol. The default benchmark matcher now requires exact normalized summaries as well as location, so location-only coincidences receive no quality credit. Exact string matching is conservative, not a substitute for independent semantic adjudication.
+
+The mandatory Linux filesystem test runs on Ubuntu 22.04; the ordinary test suite
+continues on ubuntu-latest. The current ubuntu-latest CI host rejected Bubblewrap
+UID mapping. Installing Bubblewrap alone is insufficient: deployment-host namespace
+policy must permit the unchanged sandbox command. Bubo does not relax that policy
+or fall back to an unsandboxed review. This platform selection does not establish
+nested Codex sandbox compatibility.

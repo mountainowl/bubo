@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from bubo.review_environment import reviewer_env
 from bubo.subproc import run_bounded
 
 
@@ -156,8 +157,6 @@ def sandbox_command(command: list[str], scratch: Path, cwd: Path) -> list[str]:
     """Fail closed when no supported OS sandbox is available."""
     if sys.platform == "darwin" and shutil.which("sandbox-exec"):
         # JSON string quoting is also valid for Sandbox profile path strings.
-        import json
-
         profile = (
             "(version 1)(allow default)(deny file-write*)"
             f'(allow file-write* (subpath {json.dumps(str(scratch))}) (literal "/dev/null"))'
@@ -196,8 +195,6 @@ def run_review(
     **kwargs: Any,
 ):
     """Run an agent with read-only source and a disposable writable home."""
-    from bubo.poller import reviewer_env  # Shared credential policy, no import-time cycle.
-
     source_env = dict(os.environ if env is None else env)
     child_env = reviewer_env(source_env, review_config)
     if endpoint := getattr(review_config, "llm_base_url", None):

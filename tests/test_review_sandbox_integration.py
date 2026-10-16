@@ -45,6 +45,7 @@ def test_kernel_blocks_writes_outside_disposable_scratch(tmp_path: Path):
         if required:
             pytest.fail(str(exc))
         pytest.skip(str(exc))
+        return  # Explicit exit for static analyzers unaware that pytest.skip raises.
     # Give the child no account/provider environment or interpreter path overrides.
     env = {"PATH": os.defpath, "HOME": str(scratch), "TMPDIR": str(scratch)}
     baseline = subprocess.run(
