@@ -94,3 +94,85 @@ print(json.dumps({"denied": len(denied)}))
     for path in protected:
         assert path.read_text() == "original"
     assert not (source / "new-file").exists()
+
+
+def test_codex_native_sandbox_runs_inside_linux_outer_gate(tmp_path: Path):
+    """Exercise sandbox nesting without a provider, login files, or model calls."""
+    import shutil
+
+    required = os.environ.get("BUBO_REQUIRE_CODEX_SANDBOX_TEST") == "1"
+    if not required:
+        pytest.skip("Opt-in pinned Codex runtime integration check")
+    if not sys.platform.startswith("linux"):
+        if required:
+            pytest.fail("The mandatory nested Codex check requires Linux")
+        pytest.skip("Linux-specific sandbox nesting check")
+    codex = shutil.which("codex")
+    if not codex:
+        if required:
+            pytest.fail("The mandatory nested Codex check requires Codex CLI")
+        pytest.skip("Codex CLI is not installed")
+        return
+    source = tmp_path.resolve() / "nested-source"
+    scratch = tmp_path.resolve() / "nested-scratch"
+    source.mkdir()
+    scratch.mkdir()
+    protected = source / "source.txt"
+    protected.write_text("original", encoding="utf-8")
+    sentinel = scratch / "native-protected.txt"
+    sentinel.write_text("original", encoding="utf-8")
+    home = scratch / "home"
+    temporary = scratch / "tmp"
+    home.mkdir()
+    temporary.mkdir()
+    # Sentinel is writable through the outer gate, outside native temp/home paths.
+    env = {
+        "PATH": os.environ.get("PATH", os.defpath), "HOME": str(home),
+        "CODEX_HOME": str(home), "TMPDIR": str(temporary),
+    }
+    version = subprocess.run(
+        [codex, "--version"], env=env, capture_output=True, text=True, timeout=15,
+    )
+    assert version.returncode == 0, version.stderr
+    assert version.stdout.strip() == "codex-cli 0.154.0"
+    probe = r'''
+import sys
+from pathlib import Path
+for p in (Path("source.txt"), Path(sys.argv[1])):
+    assert p.read_text() == "original"
+    try:
+        p.write_text("changed")
+    except OSError:
+        pass
+    else:
+        raise AssertionError(f"Native sandbox permitted write to {p}")
+print("native-read-ok-write-denied")
+'''
+    child = [
+        codex, "sandbox", "-c", 'sandbox_mode="read-only"', "--",
+        sys.executable, "-I", "-c", probe, str(sentinel),
+    ]
+    try:
+        nested = sandbox_command(child, scratch, source)
+        control = sandbox_command([
+            sys.executable, "-I", "-c",
+            "import sys; from pathlib import Path; Path(sys.argv[1]).write_text('original')",
+            str(sentinel),
+        ], scratch, source)
+    except RuntimeError as exc:
+        if required:
+            pytest.fail(str(exc))
+        pytest.skip(str(exc))
+        return
+    outer = subprocess.run(
+        control, cwd=source, env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert outer.returncode == 0, outer.stderr
+    for command in (child, nested):
+        result = subprocess.run(
+            command, cwd=source, env=env, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "native-read-ok-write-denied" in result.stdout
+        assert protected.read_text(encoding="utf-8") == "original"
+        assert sentinel.read_text(encoding="utf-8") == "original"

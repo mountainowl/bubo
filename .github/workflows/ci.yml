@@ -57,3 +57,11 @@ jobs:
         env:
           BUBO_REQUIRE_SANDBOX_TEST: "1"
         run: uv run pytest -q tests/test_review_sandbox_integration.py
+
+      - name: Install pinned Codex for credential-free nesting check
+        run: npm install --global @openai/codex@0.154.0
+
+      - name: Verify nested native Codex sandbox
+        env:
+          BUBO_REQUIRE_CODEX_SANDBOX_TEST: "1"
+        run: uv run pytest -q tests/test_review_sandbox_integration.py -k codex_native
