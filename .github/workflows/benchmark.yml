@@ -17,6 +17,9 @@ on:
 permissions:
   contents: read
 
+env:
+  BUBO_ANALYTICS: "0"
+
 jobs:
   benchmark:
     name: Score the corpus (replay)

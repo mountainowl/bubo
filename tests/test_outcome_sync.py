@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from bubo import db, gitlab, paths, poller
+from bubo import analytics, db, gitlab, paths, poller
 from bubo.review_config import ReviewConfig
 from bubo.telemetry.config import TelemetryConfig
 
@@ -151,6 +151,7 @@ def test_outcome_sync_flag_suppresses_outcome_metric_emission() -> None:
                 )
             fake = FakeTelemetry()
             cfg = ReviewConfig(gitlab_url="https://gitlab.com", telemetry_config=fake.config)
+            assert not analytics.analytics_enabled(cfg.analytics_config)
             provider = _FakeProvider(
                 outcome={
                     "resolved": True,
@@ -170,6 +171,7 @@ def test_outcome_sync_flag_suppresses_outcome_metric_emission() -> None:
                         assert poller.sync_outcomes(limit=1) == 1
 
             assert fake.finding_metrics == 0
+            assert analytics._pending_events == []
     finally:
         paths.DB = original_db
 
