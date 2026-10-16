@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.28.4](https://github.com/mountainowl/bubo/compare/v0.28.3...v0.28.4) (2026-10-16)
+
+
+### Bug Fixes
+
+* **tests:** isolate product analytics from production PostHog ([#247](https://github.com/mountainowl/bubo/issues/247)) ([a171b8b](https://github.com/mountainowl/bubo/commit/a171b8bd60069b0963ff031dd7c3ba5761efdd35))
+
+
+### Documentation
+
+* add badges and remove GIF framing ([#243](https://github.com/mountainowl/bubo/issues/243)) ([4820d20](https://github.com/mountainowl/bubo/commit/4820d20a26dafa2a8b83fb11037ce1979970c1c8))
+* add README feature animation ([#241](https://github.com/mountainowl/bubo/issues/241)) ([e85534d](https://github.com/mountainowl/bubo/commit/e85534dbbd2a39b6729c78022000696f8bfec010))
+* reduce README GIF padding ([#244](https://github.com/mountainowl/bubo/issues/244)) ([5cd4f23](https://github.com/mountainowl/bubo/commit/5cd4f2392ca17510cd2c4fbfca103fa9fda27185))
+
 ## [0.28.3](https://github.com/mountainowl/bubo/compare/v0.28.2...v0.28.3) (2026-10-06)
 
 
