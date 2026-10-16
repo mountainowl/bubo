@@ -18,7 +18,7 @@ from bubo.review_config import ReviewConfig
 
 
 @pytest.fixture(autouse=True)
-def isolated(tmp_path, monkeypatch):
+def isolated(tmp_path, monkeypatch, disable_product_analytics):
     monkeypatch.setattr(profiles.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
     monkeypatch.setattr(analytics, "_install_id", None)
     monkeypatch.setattr(analytics, "_install_path", None)
