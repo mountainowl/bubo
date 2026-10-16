@@ -438,9 +438,9 @@ No findings for optional categories: []
             ReviewConfig(max_findings_per_merge_request=5),
         )
 
-        self.assertIn("type must be one of: issue, suggestion, question", prompt)
-        self.assertIn("severity must be one of: blocking, non-blocking", prompt)
-        self.assertIn("confidence must be a number from 0 to 1", prompt)
+        self.assertIn("type (issue|suggestion)", prompt)
+        self.assertIn("(blocking|non-blocking)", prompt)
+        self.assertIn("confidence (0..1)", prompt)
 
     def test_read_config_defaults_max_findings_to_five(self):
         original_config = poller.CONFIG

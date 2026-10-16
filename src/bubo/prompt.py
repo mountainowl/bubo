@@ -13,6 +13,7 @@ the rendering work happens at most once per unique value combination.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from bubo.config_values import positive_int
@@ -55,3 +56,24 @@ def write_rendered_meta_prompt(prompt_file: Path, output_dir: Path, max_findings
     if not target.exists() or target.read_text(encoding="utf-8") != rendered:
         target.write_text(rendered, encoding="utf-8")
     return target
+
+
+def review_instructions(max_findings: int) -> str:
+    """Load trusted installed instructions, not instructions from reviewed code."""
+    from importlib import resources
+
+    override = os.environ.get("BUBO_PROMPT_SOURCE")
+    if override:
+        source = Path(override).read_text(encoding="utf-8")
+    else:
+        try:
+            source = (
+                resources.files("bubo._assets")
+                .joinpath("prompts/00-meta.md")
+                .read_text(encoding="utf-8")
+            )
+        except ModuleNotFoundError, FileNotFoundError:
+            source = (Path(__file__).resolve().parents[2] / "prompts" / "00-meta.md").read_text(
+                encoding="utf-8"
+            )
+    return render_meta_prompt(source, max_findings)

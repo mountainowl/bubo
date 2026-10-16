@@ -7,11 +7,14 @@ The pure filter behaviour lives in ``test_inline_review.py``.
 
 from __future__ import annotations
 
+import json
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
+
+from review_output import review_output
 
 from bubo import db, paths
 
@@ -204,6 +207,9 @@ def test_post_or_plan_does_not_consult_db_when_disabled() -> None:
         def get_change(self, *a, **k):
             return {}
 
+        def head_sha(self, change):
+            return "sha"
+
         def changed_lines(self, *a, **k):
             return {}
 
@@ -219,7 +225,7 @@ def test_post_or_plan_does_not_consult_db_when_disabled() -> None:
             token="t",
             project="g/r",
             mr={"iid": 1, "sha": "sha"},
-            raw_review=raw_review,
+            raw_review=review_output(json.loads(raw_review)),
             provider=_Provider(),
         )
 
@@ -260,6 +266,9 @@ def test_post_or_plan_suppresses_a_disputed_class_when_enabled() -> None:
         def get_change(self, *a, **k):  # pragma: no cover - must not be reached
             raise AssertionError("suppressed finding must not reach change fetch")
 
+        def head_sha(self, change):
+            return "sha"
+
         def changed_lines(self, *a, **k):  # pragma: no cover - must not be reached
             raise AssertionError("suppressed finding must not reach diff fetch")
 
@@ -284,7 +293,7 @@ def test_post_or_plan_suppresses_a_disputed_class_when_enabled() -> None:
                 token="t",
                 project="g/r",
                 mr={"iid": 1, "sha": "sha"},
-                raw_review=raw_review,
+                raw_review=review_output(json.loads(raw_review)),
                 provider=_Provider(),
             )
 
