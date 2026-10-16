@@ -30,6 +30,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --dev
 
+      - name: Install Linux review sandbox
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: Verify kernel-enforced review isolation
+        env:
+          BUBO_REQUIRE_SANDBOX_TEST: "1"
+        run: uv run pytest -q tests/test_review_sandbox_integration.py
+
       - name: Run tests
         run: uv run pytest -q
 
