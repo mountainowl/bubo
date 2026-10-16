@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from bubo.review_environment import reviewer_env
-from bubo.subproc import run_bounded
+from bubo.subproc import DEFAULT_TIMEOUT_SECONDS, run_bounded
 
 
 class ReviewProcessResult(subprocess.CompletedProcess[str]):
@@ -192,9 +192,16 @@ def run_review(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     review_config: Any = None,
-    **kwargs: Any,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    max_stdout_bytes: int = 2_000_000,
 ):
-    """Run an agent with read-only source and a disposable writable home."""
+    """Run an agent with read-only source and a disposable writable home.
+
+    max_stdout_bytes limits the final response, not the diagnostic transcript
+    captured by the subprocess runner.
+    """
+    if type(max_stdout_bytes) is not int or max_stdout_bytes < 1:
+        raise ValueError("Final response limit must be a positive integer")
     source_env = dict(os.environ if env is None else env)
     child_env = reviewer_env(source_env, review_config)
     if endpoint := getattr(review_config, "llm_base_url", None):
@@ -235,12 +242,16 @@ def run_review(
             CODEX_HOME=str(scratch / ".codex"),
         )
         result = run_bounded(
-            sandbox_command(cmd, scratch, target), cwd=target, env=child_env, **kwargs
+            sandbox_command(cmd, scratch, target), cwd=target, env=child_env, timeout=timeout
         )
         if codex and result.returncode == 0:
-            if not final.is_file() or final.stat().st_size > kwargs.get(
-                "max_stdout_bytes", 2_000_000
-            ):
+            if not final.is_file():
                 raise ValueError("Reviewer did not produce a bounded final message")
-            return ReviewProcessResult(result, final.read_text(encoding="utf-8"))
+            with final.open("rb") as final_file:
+                payload = final_file.read(max_stdout_bytes + 1)
+            if len(payload) > max_stdout_bytes:
+                raise ValueError("Reviewer did not produce a bounded final message")
+            return ReviewProcessResult(result, payload.decode("utf-8"))
+        if result.returncode == 0 and len(result.stdout.encode("utf-8")) > max_stdout_bytes:
+            raise ValueError("Reviewer did not produce a bounded final message")
         return result

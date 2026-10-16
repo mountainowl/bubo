@@ -89,12 +89,11 @@ def run_one(job: tuple[dict, str, int], output: Path, timeout: int, model: str) 
                 review_config=cfg,
                 timeout=timeout,
                 max_stdout_bytes=300_000,
-                max_stderr_bytes=20_000,
             )
         record["exit_code"] = result.returncode
         record["raw_final"] = result.stdout
         diagnostic = getattr(result, "diagnostic_stdout", result.stdout) or ""
-        reported = re.search(r"(?m)^model:\s*(.+)$", diagnostic + "\n" + result.stderr)
+        reported = re.search(r"(?m)^model:\s*(.+)$", diagnostic + "\n" + (result.stderr or ""))
         record["reported_model"] = reported[1] if reported else "unreported"
         record["diagnostic_output"] = diagnostic
         if result.returncode:

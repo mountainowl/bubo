@@ -4,6 +4,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from subprocess import CompletedProcess
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -82,6 +83,57 @@ def test_missing_or_oversized_final_never_salvages_transcript(
             env={"HOME": str(tmp_path)},
             max_stdout_bytes=32,
         )
+
+
+def test_final_limit_uses_real_subprocess_runner_interface(mocked_runner, tmp_path):
+    process = MagicMock()
+    process.returncode = 0
+    process.communicate.return_value = ("diagnostic transcript beyond final limit", None)
+
+    def start(command, **kwargs):
+        final = Path(command[command.index("--output-last-message") + 1])
+        final.write_text("{}")
+        return process
+
+    # Mock only process creation, so unsupported kwargs cannot be hidden by a
+    # permissive replacement for run_bounded.
+    with patch("bubo.subproc.subprocess.Popen", side_effect=start):
+        result = review_runner.run_review(
+            ["codex", "exec"],
+            cwd=tmp_path,
+            env={"HOME": str(tmp_path)},
+            timeout=7,
+            max_stdout_bytes=2,
+        )
+    assert result.stdout == "{}"
+    assert result.diagnostic_stdout == "diagnostic transcript beyond final limit"
+    process.communicate.assert_called_once_with(timeout=7)
+
+
+@pytest.mark.parametrize(("payload", "oversized"), [("null", False), ("ééé", True)])
+def test_claude_final_limit_counts_bytes_through_real_runner(
+    mocked_runner, tmp_path, payload, oversized
+):
+    process = MagicMock()
+    process.returncode = 0
+    process.communicate.return_value = (payload, None)
+    with patch("bubo.subproc.subprocess.Popen", return_value=process):
+        if oversized:
+            with pytest.raises(ValueError, match="bounded final"):
+                review_runner.run_review(
+                    ["claude", "-p", "prompt"],
+                    cwd=tmp_path,
+                    env={"HOME": str(tmp_path)},
+                    max_stdout_bytes=4,
+                )
+        else:
+            result = review_runner.run_review(
+                ["claude", "-p", "prompt"],
+                cwd=tmp_path,
+                env={"HOME": str(tmp_path)},
+                max_stdout_bytes=4,
+            )
+            assert result.stdout == payload
 
 
 def test_child_credentials_stripped_and_writes_redirected(mocked_runner, monkeypatch, tmp_path):

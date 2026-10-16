@@ -17,6 +17,7 @@ Covers the load-bearing guarantees:
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -103,13 +104,72 @@ def _refute_verdicts() -> list[Verdict]:
     ]
 
 
+def test_verification_receives_bounded_pinned_diff_using_real_runner_signature(tmp_path):
+    class RevisionProvider(_PlanProvider):
+        def get_change(self, *args, **kwargs):
+            return {"diff_refs": {"base_sha": "base-revision"}}
+
+    complete_diff = "x" * 32768 + "omitted remainder"
+
+    def diff_runner(args, *, cwd, env, timeout):
+        # Match run_bounded's actual signature: byte-limit kwargs must fail this
+        # regression rather than disappearing into a permissive mock.
+        assert args == [
+            "git",
+            "--no-pager",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--end-of-options",
+            "base-revision",
+            "sha",
+            "--",
+            "f.py",
+        ]
+        assert cwd == tmp_path
+        assert timeout == 30
+        assert "BUBO_ROOT" in env
+        return subprocess.CompletedProcess(args, 0, stdout=complete_diff)
+
+    def verifier(finding, repo, cfg, *, base_sha, head_sha, diff_excerpt):
+        assert repo == tmp_path
+        assert base_sha == "base-revision"
+        assert head_sha == "sha"
+        assert diff_excerpt == "x" * 32768 + (
+            "\n[Diff truncated; inspect the pinned checkout for remaining evidence.]"
+        )
+        assert "omitted remainder" not in diff_excerpt
+        return _real_verdicts()
+
+    with (
+        _temp_db(),
+        patch.object(poller, "run_bounded", side_effect=diff_runner) as run,
+        patch.object(poller, "run_verification", side_effect=verifier) as verify,
+    ):
+        result = poller.post_or_plan_findings(
+            cfg=ReviewConfig(dry_run=True, verify_findings=True, verify_min_votes=2),
+            token="t",
+            project="g/r",
+            mr={"iid": 1, "sha": "sha"},
+            raw_review=_raw(_finding()),
+            provider=RevisionProvider(),
+            repo=tmp_path,
+        )
+    assert result == (0, 1, 0)
+    run.assert_called_once()
+    verify.assert_called_once()
+
+
 # --- OFF by default -------------------------------------------------------
 
 
 def test_verify_off_never_calls_seam_and_plans_normally() -> None:
     cfg = ReviewConfig(dry_run=True, verify_findings=False)
-    with _temp_db(), patch.object(
-        poller, "run_verification", side_effect=AssertionError("verifier must not run")
+    with (
+        _temp_db(),
+        patch.object(
+            poller, "run_verification", side_effect=AssertionError("verifier must not run")
+        ),
     ):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
@@ -133,9 +193,11 @@ def test_verify_refute_drops_and_records_refuted() -> None:
     cfg = ReviewConfig(dry_run=True, verify_findings=True, verify_min_votes=2)
     events: list[tuple[str, dict[str, object]]] = []
 
-    with _temp_db(), patch.object(
-        poller, "run_verification", return_value=_refute_verdicts()
-    ), patch.object(poller, "log", lambda e, **f: events.append((e, f))):
+    with (
+        _temp_db(),
+        patch.object(poller, "run_verification", return_value=_refute_verdicts()),
+        patch.object(poller, "log", lambda e, **f: events.append((e, f))),
+    ):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
             token="t",
@@ -210,8 +272,10 @@ def test_verify_cap_withholds_extra_findings() -> None:
         return _real_verdicts()
 
     events: list[tuple[str, dict[str, object]]] = []
-    with _temp_db(), patch.object(poller, "run_verification", side_effect=_fake), patch.object(
-        poller, "log", lambda e, **f: events.append((e, f))
+    with (
+        _temp_db(),
+        patch.object(poller, "run_verification", side_effect=_fake),
+        patch.object(poller, "log", lambda e, **f: events.append((e, f))),
     ):
         posted, planned, skipped = poller.post_or_plan_findings(
             cfg=cfg,
@@ -354,12 +418,18 @@ def test_undecided_finding_is_reverified_on_retry_before_posting():
     cfg = ReviewConfig(dry_run=False, verify_findings=True, verify_min_votes=2)
     provider = _PostProvider()
     blockers: list[str] = []
-    with _temp_db(), patch.object(
-        poller, "run_verification", side_effect=[[], _real_verdicts()]
-    ) as verifier:
+    with (
+        _temp_db(),
+        patch.object(poller, "run_verification", side_effect=[[], _real_verdicts()]) as verifier,
+    ):
         first = poller.post_or_plan_findings(
-            cfg=cfg, token="t", project="g/r", mr={"iid": 1, "sha": "sha"},
-            raw_review=_raw(_finding()), provider=provider, verification_blockers=blockers,
+            cfg=cfg,
+            token="t",
+            project="g/r",
+            mr={"iid": 1, "sha": "sha"},
+            raw_review=_raw(_finding()),
+            provider=provider,
+            verification_blockers=blockers,
         )
         assert first == (0, 0, 1)
         assert blockers
@@ -367,8 +437,13 @@ def test_undecided_finding_is_reverified_on_retry_before_posting():
         assert db.findings_for("g/r", 1, "sha")[0]["status"] == FindingStatus.VERIFY_CAPPED
         blockers.clear()
         second = poller.post_or_plan_findings(
-            cfg=cfg, token="t", project="g/r", mr={"iid": 1, "sha": "sha"},
-            raw_review=_raw(_finding()), provider=provider, verification_blockers=blockers,
+            cfg=cfg,
+            token="t",
+            project="g/r",
+            mr={"iid": 1, "sha": "sha"},
+            raw_review=_raw(_finding()),
+            provider=provider,
+            verification_blockers=blockers,
         )
         assert second == (1, 0, 0)
         assert not blockers
@@ -377,12 +452,23 @@ def test_undecided_finding_is_reverified_on_retry_before_posting():
 
 
 def test_retry_cap_does_not_reverify_previously_refuted_finding():
-    cfg = ReviewConfig(dry_run=True, verify_findings=True, verify_min_votes=2, verify_max_findings=1)
-    with _temp_db(), patch.object(
-        poller, "run_verification", side_effect=[_refute_verdicts(), _real_verdicts()]
-    ) as verifier:
-        kwargs = dict(cfg=cfg, token="t", project="g/r", mr={"iid": 1, "sha": "sha"},
-                      raw_review=_raw(_finding(1), _finding(2)), provider=_PlanProvider())
+    cfg = ReviewConfig(
+        dry_run=True, verify_findings=True, verify_min_votes=2, verify_max_findings=1
+    )
+    with (
+        _temp_db(),
+        patch.object(
+            poller, "run_verification", side_effect=[_refute_verdicts(), _real_verdicts()]
+        ) as verifier,
+    ):
+        kwargs = dict(
+            cfg=cfg,
+            token="t",
+            project="g/r",
+            mr={"iid": 1, "sha": "sha"},
+            raw_review=_raw(_finding(1), _finding(2)),
+            provider=_PlanProvider(),
+        )
         assert poller.post_or_plan_findings(**kwargs) == (0, 0, 2)
         assert poller.post_or_plan_findings(**kwargs) == (0, 1, 1)
         assert verifier.call_count == 2

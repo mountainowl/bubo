@@ -140,8 +140,8 @@ def test_pilot_requires_requested_mode_and_records_model(tmp_path, monkeypatch, 
                 "omitted_findings_count": 0,
             }
         ),
-        diagnostic_stdout="",
-        stderr="model: test-model\n",
+        diagnostic_stdout="model: test-model\n",
+        stderr=None,
         returncode=0,
     )
 

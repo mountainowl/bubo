@@ -1378,12 +1378,15 @@ def post_or_plan_findings(
                             ],
                             cwd=repo,
                             timeout=30,
-                            max_stdout_bytes=32_768,
-                            max_stderr_bytes=4_096,
                             env=reviewer_env(os.environ, cfg),
                         )
                         if diff_result.returncode == 0:
-                            evidence = diff_result.stdout
+                            evidence = diff_result.stdout[:32768]
+                            if len(diff_result.stdout) > 32768:
+                                evidence += (
+                                    "\n[Diff truncated; inspect the pinned checkout "
+                                    "for remaining evidence.]"
+                                )
                     except (OSError, subprocess.TimeoutExpired) as exc:
                         # The verifier can inspect the pinned checkout directly.
                         # Missing diff text is not evidence confirming/refuting a finding.
