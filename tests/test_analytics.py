@@ -12,7 +12,9 @@ from bubo.analytics_config import AnalyticsConfig
 
 
 @pytest.fixture(autouse=True)
-def _reset_analytics_singletons(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def _reset_analytics_singletons(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, disable_product_analytics
+) -> None:
     """Each test starts with a clean module state and no env opt-outs."""
     monkeypatch.setattr(analytics, "_pending_events", [])
     monkeypatch.setattr(analytics, "_install_id", None)
@@ -348,7 +350,11 @@ def test_flush_failure_is_nonfatal(monkeypatch: pytest.MonkeyPatch) -> None:
         raise OSError("offline")
 
     monkeypatch.setattr(analytics, "urlopen", _fail)
-    analytics.record_session_start(AnalyticsConfig(), scm_provider="gitlab", projects_count=1)
+    analytics.record_session_start(
+        AnalyticsConfig(endpoint="https://example.test/batch/", api_key="phc_test"),
+        scm_provider="gitlab",
+        projects_count=1,
+    )
     analytics.flush()
     assert analytics._pending_events == []
 
@@ -359,6 +365,10 @@ def test_product_analytics_transport_uses_no_stdlib_logging(
     root = logging.getLogger()
     before = list(root.handlers)
     monkeypatch.setattr(analytics, "urlopen", lambda request, timeout: _FakeResponse())
-    analytics.record_session_start(AnalyticsConfig(), scm_provider="gitlab", projects_count=1)
+    analytics.record_session_start(
+        AnalyticsConfig(endpoint="https://example.test/batch/", api_key="phc_test"),
+        scm_provider="gitlab",
+        projects_count=1,
+    )
     analytics.flush()
     assert root.handlers == before
