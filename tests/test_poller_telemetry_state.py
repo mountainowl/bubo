@@ -7,6 +7,8 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
+from review_output import review_output
+
 from bubo import gitlab, paths, poller
 from bubo.findings import build_position, changed_lines_from_diffs
 from bubo.review_config import ReviewConfig
@@ -34,6 +36,9 @@ class _FakeProvider:
 
     def get_change(self, cfg, token, project, number):
         return self._mr
+
+    def head_sha(self, change):
+        return change["sha"]
 
     def changed_lines(self, cfg, token, project, number):
         return changed_lines_from_diffs([self._diff])
@@ -108,7 +113,7 @@ def test_empty_gitlab_discussion_id_is_not_marked_posted() -> None:
                 token="token",
                 project="group/repo",
                 mr=mr,
-                raw_review=raw,
+                raw_review=review_output(json.loads(raw)),
                 run_id="run1",
                 provider=_FakeProvider(mr, diff, post_id=""),
             )
@@ -158,7 +163,7 @@ def test_finding_metric_flag_suppresses_finding_emission() -> None:
                 token="token",
                 project="group/repo",
                 mr=mr,
-                raw_review=raw,
+                raw_review=review_output(json.loads(raw)),
                 telemetry=telemetry,
                 provider=_FakeProvider(mr, diff),
             )

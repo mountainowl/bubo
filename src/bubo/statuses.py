@@ -63,6 +63,7 @@ class FindingStatus(StrEnum):
     SKIPPED = "skipped"
     PENDING_EXTERNAL_ID = "pending_external_id"
     REFUTED = "refuted"
+    VERIFY_CAPPED = "verify_capped"
 
 
 class ReviewMode(StrEnum):

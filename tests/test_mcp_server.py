@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from review_output import review_output
 
 from bubo import db, mcp_server, paths
 from bubo.review_config import ReviewConfig
@@ -379,12 +380,17 @@ class _FakeReviewProvider:
 
     def __init__(self, prompt: str = "REVIEW PROMPT") -> None:
         self._prompt = prompt
+        self.checkout_path = None
 
     def token(self) -> str:
         return "tok"
 
     def get_change(self, cfg, token, project, number):
         return {"web_url": f"https://example/{project}/{number}"}
+
+    def checkout(self, cfg, project, change, destination):
+        self.checkout_path = destination
+        destination.mkdir()
 
     def review_prompt(self, project, change, cfg) -> str:
         return self._prompt
@@ -423,7 +429,8 @@ def test_review_change_dispatches_with_parsed_url() -> None:
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         captured["args"] = args
         captured["timeout"] = kwargs.get("timeout")
-        return subprocess.CompletedProcess(args, 0, '[{"title": "ok"}]', None)
+        captured["cwd"] = kwargs.get("cwd")
+        return subprocess.CompletedProcess(args, 0, review_output([{"title": "ok"}]), None)
 
     cfg = ReviewConfig(reviewer_command=["codex", "exec"], timeout_seconds=1800)
     with (
@@ -439,7 +446,8 @@ def test_review_change_dispatches_with_parsed_url() -> None:
     assert result["project"] == "owner/repo"
     assert result["number"] == 5
     assert result["exit_code"] == 0
-    assert result["findings"] == [{"title": "ok"}]
+    assert result["findings"][0]["title"] == "ok"
+    assert result["status"] == "complete"
     assert "raw_output" in result
     # review_change runs the configured reviewer_command with the
     # contract-carrying review prompt (provider.review_prompt), not a
@@ -447,6 +455,8 @@ def test_review_change_dispatches_with_parsed_url() -> None:
     assert captured["args"][:2] == ["codex", "exec"]
     assert captured["args"][-1] == "REVIEW PROMPT"
     assert captured["timeout"] == 10
+    assert captured["cwd"].name == "source"
+    assert not captured["cwd"].exists()
 
 
 def test_review_change_requires_url_or_project_plus_number() -> None:
@@ -468,7 +478,8 @@ def test_review_change_returns_raw_output_when_findings_unparseable() -> None:
             provider="gitlab", project="g/p", number=1, timeout_seconds=10
         )
 
-    assert result["findings"] is None
+    assert result["findings"] == []
+    assert result["status"] == "failed"
     assert result["raw_output"] == "Codex crashed mid-stream"
     assert result["exit_code"] == 1
 
@@ -950,3 +961,29 @@ def test_secrets_secret_env_names_includes_mcp_bearer() -> None:
     from bubo.secrets import SECRET_ENV_NAMES
 
     assert "BUBO_MCP_BEARER_TOKEN" in SECRET_ENV_NAMES
+
+
+@pytest.mark.parametrize(("mode", "exit_code"), [("audit", 0), ("diff", 1)])
+def test_live_review_rejects_wrong_mode_or_failed_process(mode, exit_code):
+    cfg = ReviewConfig(reviewer_command=["codex", "exec"])
+    with (
+        patch("bubo.mcp_server.load_review_config", return_value=cfg),
+        patch("bubo.mcp_server.get_provider", return_value=_FakeReviewProvider()),
+        patch("bubo.mcp_server.run_bounded", return_value=subprocess.CompletedProcess([], exit_code, review_output(mode=mode), None)),
+    ):
+        result = mcp_server.review_change(provider="github", project="o/r", number=5)
+    assert result["status"] == "failed"
+    assert result["findings"] == []
+
+
+def test_live_review_preserves_incomplete_findings_and_coverage():
+    raw = review_output([{"title": "Concrete failure"}], status="incomplete", unreviewed=["dependency"])
+    with (
+        patch("bubo.mcp_server.load_review_config", return_value=ReviewConfig()),
+        patch("bubo.mcp_server.get_provider", return_value=_FakeReviewProvider()),
+        patch("bubo.mcp_server.run_bounded", return_value=subprocess.CompletedProcess([], 0, raw, None)),
+    ):
+        result = mcp_server.review_change(provider="github", project="o/r", number=5)
+    assert result["status"] == "incomplete"
+    assert result["findings"][0]["title"] == "Concrete failure"
+    assert result["coverage"]["unreviewed"] == ["dependency"]

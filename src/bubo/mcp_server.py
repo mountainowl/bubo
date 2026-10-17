@@ -34,8 +34,10 @@ import json
 import os
 import re
 import secrets
+import tempfile
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -44,15 +46,16 @@ from bubo import db, paths
 from bubo.config_values import ConfigError
 from bubo.errors import describe
 from bubo.events import log
+from bubo.findings import parse_review_result
 from bubo.paths import CONFIG as ENV_CONFIG
 from bubo.review_config import (
     DEFAULT_PROVIDER,
     SUPPORTED_PROVIDERS,
     load_review_config,
 )
+from bubo.review_runner import run_review as run_bounded
 from bubo.scm import get_provider
 from bubo.secrets import redact_secrets
-from bubo.subproc import run_bounded
 from bubo.subscription import (
     is_subscription_failure,
     review_gate,
@@ -344,9 +347,7 @@ def get_governance_report(
     """
     from bubo import report
 
-    return report.build_report(
-        since_hours=since_hours, since=since, until=until, project=project
-    )
+    return report.build_report(since_hours=since_hours, since=since, until=until, project=project)
 
 
 @mcp.tool()
@@ -388,7 +389,7 @@ def get_dispute_classes(project: str) -> dict[str, Any]:
         cfg = load_review_config(ENV_CONFIG)
         threshold = cfg.dispute_suppress_threshold
         min_samples = cfg.dispute_suppress_min_samples
-    except (ConfigError, OSError):
+    except ConfigError, OSError:
         # Config unreadable: fall back to raw stats (no would_suppress flag)
         # rather than guessing thresholds and misreporting reality.
         threshold = None
@@ -474,7 +475,12 @@ def review_change(
     prompt = scm.review_prompt(project, change, cfg)
     timeout = int(timeout_seconds) if timeout_seconds is not None else cfg.timeout_seconds
     started = time.monotonic()
-    result = run_bounded([*cfg.reviewer_command, prompt], timeout=timeout)
+    with tempfile.TemporaryDirectory(prefix="bubo-mcp-checkout-") as temporary:
+        repository = Path(temporary) / "source"
+        scm.checkout(cfg, project, change, repository)
+        result = run_bounded(
+            [*cfg.reviewer_command, prompt], timeout=timeout, cwd=repository, review_config=cfg
+        )
     duration = time.monotonic() - started
     raw = redact_secrets(result.stdout or "")
     if cfg.subscription_circuit.enabled and is_subscription_failure(
@@ -484,13 +490,26 @@ def review_change(
         log("mcp_review_deferred_subscription", reason="subscription_failure")
         return {"status": "deferred_subscription", "reason": "subscription_failure"}
 
+    try:
+        review = parse_review_result(raw)
+        if result.returncode or review.mode != "diff":
+            raise ValueError("Reviewer failed or returned the wrong review mode")
+        outcome = {
+            "status": review.status,
+            "findings": review.findings if review.status != "failed" else [],
+            "coverage": review.coverage,
+            "questions": review.questions,
+            "omitted_findings_count": review.omitted_findings_count,
+        }
+    except ValueError as exc:
+        outcome = {"status": "failed", "findings": [], "error": str(exc)}
     return {
         "provider": provider,
         "project": project,
         "number": number,
         "exit_code": result.returncode,
         "duration_seconds": round(duration, 3),
-        "findings": _extract_findings(raw),
+        **outcome,
         "raw_output": raw,
     }
 
