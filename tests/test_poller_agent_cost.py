@@ -25,6 +25,7 @@ def temp_db(tmp_path, monkeypatch):
 def _review(tmp: Path, cfg: ReviewConfig, stdout: str) -> tuple[MagicMock, MagicMock, MagicMock]:
     job = tmp / "job.json"
     job.write_text(json.dumps({"project": "o/r", "mr": {"iid": 1, "sha": "b" * 40}}))
+    (tmp / "prompt").write_text("rules")
     provider = MagicMock()
     provider.token.return_value = "token"
     provider.review_prompt.return_value = "prompt"

@@ -98,7 +98,7 @@ from bubo.hash_utils import stable_hash
 from bubo.outcome_classifier import classify_developer_reply
 from bubo.paths import CONFIG, ROOT
 from bubo.prompt import render_meta_prompt as _render_meta_prompt
-from bubo.prompt import write_rendered_meta_prompt as write_rendered_prompt_file
+from bubo.prompt import rendered_meta_prompt
 from bubo.provenance import ProvenanceSignal, compile_patterns, compute_provenance
 from bubo.reconciliation import (
     ReconciliationOutcome,
@@ -628,6 +628,8 @@ def normalize_config(cfg: JsonObject) -> ReviewConfig:
 
 def reviewer_model(cfg: ReviewConfig) -> str:
     """Return the configured model label for telemetry, or ``"unknown"``."""
+    if cfg.reviewer_command and Path(cfg.reviewer_command[0]).name == "claude":
+        return cfg.claude_model or "unknown"
     return cfg.model or "unknown"
 
 
@@ -707,18 +709,7 @@ def write_rendered_meta_prompt(cfg: ReviewConfig) -> Path:
     ``BUBO_PROMPT_SOURCE`` lets tests point at a different
     source file without touching the install directory.
     """
-    source = Path(os.environ.get("BUBO_PROMPT_SOURCE", paths.ROOT / "prompts" / "00-meta.md"))
-    if not source.is_file():
-        raise RuntimeError(
-            describe(
-                f"meta prompt is not readable: {source}",
-                reason="the rendered meta-prompt file is missing/unreadable",
-                fix="ensure the prompt template renders and the path is readable.",
-            )
-        )
-    return write_rendered_prompt_file(
-        source, paths.RENDERED_PROMPTS, cfg.max_findings_per_merge_request
-    )
+    return rendered_meta_prompt(cfg.max_findings_per_merge_request)
 
 
 def render_meta_prompt(prompt_text: str, max_findings: int) -> str:
@@ -1701,7 +1692,13 @@ def worker(job: Path) -> int:
                 result = run(
                     [
                         *structured_output_command(cfg.reviewer_command),
-                        provider.review_prompt(project, mr, cfg, extra_directive=extra_directive),
+                        provider.review_prompt(
+                            project,
+                            mr,
+                            cfg,
+                            extra_directive=extra_directive,
+                            meta_prompt=rendered_prompt.read_text(encoding="utf-8"),
+                        ),
                     ],
                     cwd=repo,
                     timeout=cfg.timeout_seconds,

@@ -154,7 +154,11 @@ class ReviewConfig:
         run directly with the review prompt as the final argument (defaults
         to :data:`DEFAULT_REVIEWER_COMMAND`, a ``codex exec`` invocation).
     model:
-        Model identifier used for cost-attribution metric labels.
+        Model identifier used for cost-attribution metric labels
+        (``[agents].llm_model``, the Codex model).
+    claude_model:
+        ``[agents].claude_model``; the metric label when the reviewer
+        command runs Claude Code.
     post_summary:
         Reserved for a future "post one summary comment per MR" path.
     telemetry_config:
@@ -308,6 +312,7 @@ class ReviewConfig:
     target_merge_request_iid: int | None = None
     reviewer_command: list[str] = field(default_factory=lambda: list(DEFAULT_REVIEWER_COMMAND))
     model: str | None = None
+    claude_model: str | None = None
     model_effort: str | None = None
     llm_base_url: str | None = None
     post_summary: bool = False
@@ -462,6 +467,7 @@ def review_config_from_dict(
             str(item) for item in agent.get("reviewer_command", DEFAULT_REVIEWER_COMMAND)
         ],
         model=str(agent["llm_model"]) if agent.get("llm_model") else None,
+        claude_model=str(agent["claude_model"]) if agent.get("claude_model") else None,
         model_effort=_agent_model_effort(agent, log_event),
         llm_base_url=str(agent["llm_base_url"]) if agent.get("llm_base_url") else None,
         telemetry_config=telemetry_config,

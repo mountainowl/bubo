@@ -57,7 +57,8 @@ different release.
 | Input | Default | What it does |
 |---|---|---|
 | `llm-api-key` | *(required)* | Review-model key. Pass a GitHub Actions secret. |
-| `llm-model` | `gpt-5.5` | Model written to the generated agent profile. |
+| `llm-model` | `gpt-6.1-sol` | Codex model written to the generated Codex profile. |
+| `claude-model` | `claude-opus-5-5` | Claude model written to the Claude settings; used when `reviewer-command` runs Claude Code. |
 | `llm-model-effort` | `medium` | Reasoning effort: `low`, `medium`, or `high`. |
 | `llm-base-url` | *(unset)* | Custom OpenAI-compatible endpoint. |
 | `llm-api-key-env` | *(deprecated)* | Legacy additional key environment variable. |
@@ -68,19 +69,18 @@ different release.
 | `min-confidence` | *(Bubo default)* | Discard findings below this value. |
 | `max-findings` | *(Bubo default)* | Maximum findings for this PR. |
 | `bubo-version` | *(matching Action tag)* | Explicit PyPI version override. Non-semver Action refs use latest. |
-| `install-agent` | `false` | Best-effort Codex and Superpowers installation. |
+| `install-agent` | `false` | Best-effort Codex installation. |
 
 ## Self-hosted runners
 
-Pre-provision the agent CLI, authentication, the `code-reviewer` skill, `uv`,
-and `git`, then leave `install-agent: false`. Repository data and the review
+Pre-provision the agent CLI, authentication, `uv`, and `git`, then leave `install-agent: false`. Repository data and the review
 process remain on the runner; the configured model endpoint still receives the
 model request.
 
 ## Execution flow
 
 1. Resolve the compatible Bubo version and install it from PyPI.
-2. Optionally install Codex and Superpowers on a hosted runner.
+2. Optionally install Codex on a hosted runner.
 3. Initialize an ephemeral Bubo root below `${{ runner.temp }}`.
 4. Write a configuration containing one GitHub repository and the triggering
    PR number as `target_merge_request_iid`.

@@ -35,14 +35,6 @@ project_doc_max_bytes = 8192
 hide_agent_reasoning = true
 {{MODEL_PROVIDER_LINE}}
 
-[marketplaces.llm-code-review]
-last_updated = "2026-05-20T20:11:22Z"
-source_type = "local"
-source = "{{ROOT}}"
-
-[plugins."superpowers@llm-code-review"]
-enabled = true
-
 [mcp_servers.git]
 command = "/usr/local/bin/uvx"
 args = ["mcp-server-git==2026.1.14"]

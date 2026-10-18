@@ -13,7 +13,6 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
         "deploy/templates/claude-settings.json",
         "prompts/00-meta.md",
         "skills/code-reviewer/SKILL.md",
-        "plugins/superpowers/.codex-plugin/plugin.json",
         "pyproject.toml",
         "uv.lock",
     ]

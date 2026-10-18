@@ -13,9 +13,12 @@ the rendering work happens at most once per unique value combination.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+from bubo import paths
 from bubo.config_values import positive_int
+from bubo.errors import describe
 
 # Token replaced with ``max_findings_per_merge_request`` at render time.
 # Kept as a module constant so the meta prompt template and the renderer
@@ -55,3 +58,22 @@ def write_rendered_meta_prompt(prompt_file: Path, output_dir: Path, max_findings
     if not target.exists() or target.read_text(encoding="utf-8") != rendered:
         target.write_text(rendered, encoding="utf-8")
     return target
+
+
+def rendered_meta_prompt(max_findings: int) -> Path:
+    """Render the installed meta prompt (``$BUBO_ROOT/prompts/00-meta.md``).
+
+    ``BUBO_PROMPT_SOURCE`` lets tests point at a different source file without
+    touching the install directory. The rendered copy lands under
+    ``var/rendered-prompts/``; its text is what the reviewer agent receives.
+    """
+    source = Path(os.environ.get("BUBO_PROMPT_SOURCE", paths.ROOT / "prompts" / "00-meta.md"))
+    if not source.is_file():
+        raise RuntimeError(
+            describe(
+                f"meta prompt is not readable: {source}",
+                reason="the rendered meta-prompt file is missing/unreadable",
+                fix="ensure the prompt template renders and the path is readable.",
+            )
+        )
+    return write_rendered_meta_prompt(source, paths.RENDERED_PROMPTS, max_findings)

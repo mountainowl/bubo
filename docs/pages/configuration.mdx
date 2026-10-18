@@ -156,7 +156,8 @@ Controls the review agent command and agent-facing environment.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `reviewer_command` | string array | `["codex", "--ask-for-approval", "never", "exec", "--profile", "bubo", "--skip-git-repo-check"]` | Command prefix used to run the review agent. The review prompt is appended as the final argument. |
-| `llm_model` | string | `"gpt-5.5"` | Review model. Exported as `LLM_MODEL`; `bubo init` templates it into the agent profile (so it actually drives the model) and the `model` metric label reads it. Re-run `bubo init` after changing. |
+| `llm_model` | string | `"gpt-6.1-sol"` | Codex review model. Exported as `LLM_MODEL`; `bubo init` templates it into the Codex profile (so it actually drives the model) and the `model` metric label reads it. Re-run `bubo init` after changing. |
+| `claude_model` | string | `"claude-opus-5-5"` | Claude review model, used when `reviewer_command` runs Claude Code. `bubo init` templates it into `~/.claude/settings.json`; it is the `model` metric label on that path. Must be a Claude model id. |
 | `llm_model_effort` | string | `"medium"` | Reasoning effort — `"low"`, `"medium"`, or `"high"`. Exported as `LLM_MODEL_EFFORT`; `bubo init` templates it into the agent profile. Falls back to the deprecated `reasoning_effort` key. |
 | `llm_api_key` | string | unset | LLM API key, exported as `LLM_API_KEY`. By default the review agent authenticates via its own login (written by `bubo init`), so the key is **not** injected into the agent environment. The one exception is `llm_base_url`, which reads the key from the environment at request time. |
 | `llm_base_url` | string | unset | Optional OpenAI-compatible endpoint (in-house gateway, proxy, local server). When set, `bubo init` points the Codex profile at it via a `[model_providers]` block, and the agent reads `LLM_API_KEY` from its environment. Exported as `LLM_BASE_URL`. Security: this is the one mode that exposes the key to the agent — leave unset unless you need it. |
@@ -241,9 +242,9 @@ One block per repository.
 | `$BUBO_BASE_DIR/work/` | Per-change worktrees. |
 | `$BUBO_BASE_DIR/reports/` | Agent transcripts. |
 | `$BUBO_BASE_DIR/log/` | JSON-line logs. |
-| `$BUBO_BASE_DIR/rendered-prompts/` | Rendered prompt files. |
+| `$BUBO_BASE_DIR/rendered-prompts/` | Rendered review rules, inlined into every review prompt. |
 | `$BUBO_ROOT/prompts/00-meta.md` | Default prompt template. |
-| `$BUBO_ROOT/skills/code-reviewer/` | Bundled review skill. |
+| `$BUBO_ROOT/skills/code-reviewer/` | Review skill for interactive Codex use; automated reviews do not need it. |
 | `~/.codex/config.toml` | Codex client config written by `bubo init`, unless skipped. |
 | `~/.claude/settings.json` | Claude settings written by `bubo init`, unless skipped. |
 
@@ -324,7 +325,8 @@ reviewer_command = [
   "bubo",
   "--skip-git-repo-check",
 ]
-llm_model                  = "gpt-5.5"
+llm_model                  = "gpt-6.1-sol"
+claude_model               = "claude-opus-5-5"
 llm_model_effort           = "medium"
 llm_api_key                = "${LLM_API_KEY}"
 # llm_base_url             = "https://llm.internal.example/v1"  # OpenAI-compatible endpoint

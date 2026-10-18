@@ -6,7 +6,7 @@ Covers:
   agent-config actions for both fresh and existing roots.
 * ``cmd_init --dry-run`` exits 0 without touching the filesystem.
 * A real ``cmd_init`` against an empty tmpdir writes env.toml, copies
-  prompts/skills/plugins, initializes the SQLite DB, and is idempotent
+  prompts/skills, initializes the SQLite DB, and is idempotent
   on re-run.
 * ``cmd_doctor`` returns 0 on a successful install and non-zero on
   missing env.toml / missing DB / missing Codex profile.
@@ -18,6 +18,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -57,7 +58,7 @@ def test_plan_init_includes_workspace_env_runtime_and_db(tmp_path: Path) -> None
     assert any(a.target.name == "env.toml" and a.kind == "write_file" for a in actions)
     # The three runtime copies.
     copy_targets = {a.target.name for a in actions if a.kind == "copy_tree"}
-    assert copy_targets == {"prompts", "skills", "plugins"}
+    assert copy_targets == {"prompts", "skills"}
     # DB init runs last.
     assert actions[-1].kind == "init_db"
 
@@ -139,7 +140,7 @@ def test_cmd_init_real_run_creates_full_workspace(isolated_root: Path) -> None:
     assert (isolated_root / "var" / "state" / "reviewer.sqlite").is_file()
     assert (isolated_root / "prompts" / "00-meta.md").is_file()
     assert (isolated_root / "skills" / "code-reviewer" / "SKILL.md").is_file()
-    assert (isolated_root / "plugins" / "superpowers").is_dir()
+    assert not (isolated_root / "plugins").exists()
 
 
 def test_cmd_init_does_not_materialize_legacy_scheduler_templates(
@@ -260,7 +261,11 @@ def test_cmd_init_agent_config_writes_codex_with_profile(
     assert str(isolated_root) in codex_config
     # Default (no base_url): model/effort come from the seeded example, and the
     # custom-provider plumbing renders away to nothing.
-    assert 'model = "gpt-5.5"' in codex_config
+    assert 'model = "gpt-6.1-sol"' in codex_config
+    # Claude Code gets a Claude model, never the Codex one (it rejects
+    # "gpt-*" with "There's an issue with the selected model").
+    claude = json.loads((fake_home / ".claude" / "settings.json").read_text())
+    assert claude["model"] == "claude-opus-5-5"
     lines = codex_config.splitlines()
     assert "[model_providers.bubo]" not in lines  # table header, not the doc comment
     assert 'model_provider = "bubo"' not in lines
@@ -292,9 +297,57 @@ def test_cmd_init_templates_model_and_base_url_into_agent_config(
     assert 'env_key = "LLM_API_KEY"' in codex
     assert 'model_provider = "bubo"' in lines
     assert "{{" not in codex
-    # Claude settings get the model too.
+    # Claude settings keep their own model: llm_model is the Codex model.
     claude = (fake_home / ".claude" / "settings.json").read_text()
-    assert '"model": "my-model"' in claude
+    assert '"model": "claude-opus-5-5"' in claude
+
+
+def test_cmd_init_repairs_codex_model_in_existing_claude_settings(
+    isolated_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    settings = fake_home / ".claude" / "settings.json"
+    settings.write_text(json.dumps({"model": "gpt-5.5", "permissions": {"allow": ["x"]}}))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
+
+    assert json.loads(settings.read_text()) == {
+        "model": "claude-opus-5-5",
+        "permissions": {"allow": ["x"]},
+    }
+
+
+def test_cmd_init_keeps_operator_claude_model(
+    isolated_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    settings = fake_home / ".claude" / "settings.json"
+    settings.write_text('{"model": "sonnet"}')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
+
+    assert settings.read_text() == '{"model": "sonnet"}'
+
+
+def test_cmd_init_templates_claude_model_into_claude_settings(
+    isolated_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    (isolated_root / "config").mkdir(parents=True, exist_ok=True)
+    (isolated_root / "config" / "env.toml").write_text(
+        '[agents]\nllm_model = "gpt-x"\nclaude_model = "claude-sonnet-5-5"\n'
+    )
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
+
+    claude = json.loads((fake_home / ".claude" / "settings.json").read_text())
+    assert claude["model"] == "claude-sonnet-5-5"
+    assert 'model = "gpt-x"' in (fake_home / ".codex" / "config.toml").read_text()
 
 
 # ---------------------------------------------------------------------------

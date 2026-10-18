@@ -386,8 +386,16 @@ class _FakeReviewProvider:
     def get_change(self, cfg, token, project, number):
         return {"web_url": f"https://example/{project}/{number}"}
 
-    def review_prompt(self, project, change, cfg) -> str:
+    def review_prompt(self, project, change, cfg, *, meta_prompt: str = "") -> str:
+        self.meta_prompt = meta_prompt
         return self._prompt
+
+
+@pytest.fixture(autouse=True)
+def _packaged_meta_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """review_change renders the installed meta prompt; use the repo's copy."""
+    prompt = Path(__file__).resolve().parents[1] / "prompts" / "00-meta.md"
+    monkeypatch.setenv("BUBO_PROMPT_SOURCE", str(prompt))
 
 
 # ---------------------------------------------------------------------------
@@ -425,10 +433,13 @@ def test_review_change_dispatches_with_parsed_url() -> None:
         captured["timeout"] = kwargs.get("timeout")
         return subprocess.CompletedProcess(args, 0, '[{"title": "ok"}]', None)
 
-    cfg = ReviewConfig(reviewer_command=["codex", "exec"], timeout_seconds=1800)
+    cfg = ReviewConfig(
+        reviewer_command=["codex", "exec"], timeout_seconds=1800, max_findings_per_merge_request=4
+    )
+    provider = _FakeReviewProvider()
     with (
         patch("bubo.mcp_server.load_review_config", return_value=cfg),
-        patch("bubo.mcp_server.get_provider", return_value=_FakeReviewProvider()),
+        patch("bubo.mcp_server.get_provider", return_value=provider),
         patch("bubo.mcp_server.run_bounded", side_effect=fake_run),
     ):
         result = mcp_server.review_change(
@@ -447,6 +458,9 @@ def test_review_change_dispatches_with_parsed_url() -> None:
     assert captured["args"][:2] == ["codex", "exec"]
     assert captured["args"][-1] == "REVIEW PROMPT"
     assert captured["timeout"] == 10
+    # Like the poller, the rendered review rules are handed to the prompt.
+    assert "<code_review_prompt" in provider.meta_prompt
+    assert "Maximum 4 findings total" in provider.meta_prompt
 
 
 def test_review_change_requires_url_or_project_plus_number() -> None:

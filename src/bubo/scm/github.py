@@ -357,9 +357,15 @@ class GitHubProvider:
         return FindingThreadResolution(FindingThreadState.RESOLVED, applied_by_bubo=applied)
 
     def review_prompt(
-        self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
+        self,
+        project: str,
+        change: JsonObject,
+        cfg: ReviewConfig,
+        *,
+        extra_directive: str = "",
+        meta_prompt: str = "",
     ) -> str:
-        contract = build_review_contract(cfg)
+        contract = build_review_contract(cfg, meta_prompt)
         head = change.get("head") or {}
         base = change.get("base") or {}
         suffix = f"\n\n{extra_directive}" if extra_directive else ""
