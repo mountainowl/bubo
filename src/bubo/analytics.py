@@ -456,6 +456,7 @@ def record_review_completed(
     languages: dict[str, int] | None = None,
     queue_seconds: float | None = None,
     profile: dict[str, Any] | None = None,
+    prompt_version: str | None = None,
 ) -> None:
     """The primary signal: one anonymized event per completed review."""
     context = {
@@ -501,6 +502,7 @@ def record_review_completed(
             "files_changed": files_changed,
             "lines_changed": lines_changed,
             "queue_seconds": queue_seconds,
+            "prompt_version": _prompt_version(prompt_version),
         },
     )
     if context.get("project_id"):
@@ -543,6 +545,11 @@ _SEVERITIES = frozenset({"blocking", "non-blocking"})
 _PROMPT_VERSION = re.compile(r"[0-9a-f]{12}")
 
 
+def _prompt_version(value: object) -> str | None:
+    """Only the 12-hex digest :func:`bubo.db.prompt_version` writes."""
+    return value if isinstance(value, str) and _PROMPT_VERSION.fullmatch(value) else None
+
+
 def finding_dimensions(finding: dict[str, Any]) -> dict[str, Any]:
     """Bounded labels of the finding and the review that posted it.
 
@@ -557,7 +564,6 @@ def finding_dimensions(finding: dict[str, Any]) -> dict[str, Any]:
 
     finding_type = str(finding.get("type") or "").strip().lower()
     severity = str(finding.get("severity") or "").strip().lower().replace("_", "-")
-    prompt = finding.get("prompt_version")
     tone = finding.get("tone")
     verified = finding.get("verified")
     return {
@@ -566,9 +572,7 @@ def finding_dimensions(finding: dict[str, Any]) -> dict[str, Any]:
         "category": normalize_category(finding.get("category")),
         "verified": verified if isinstance(verified, bool) else None,
         "model": finding.get("model"),
-        "prompt_version": (
-            prompt if isinstance(prompt, str) and _PROMPT_VERSION.fullmatch(prompt) else None
-        ),
+        "prompt_version": _prompt_version(finding.get("prompt_version")),
         "tone": tone if tone in VALID_TONES else None,
     }
 
