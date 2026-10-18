@@ -272,6 +272,20 @@ def init_db() -> None:
             )
             """
         )
+        # Secondary indexes. Without them the report readers full-scan, and
+        # audit_rows' correlated finding_outcomes subqueries scan the whole
+        # table once per review run, so report time grows quadratically.
+        for statement in (
+            "create index if not exists ix_fo_change on finding_outcomes(project, iid, sha)",
+            "create index if not exists ix_fo_checked on finding_outcomes(last_checked_at)",
+            "create index if not exists ix_rm_updated on reviewed_mrs(updated_at)",
+            "create index if not exists ix_rm_status on reviewed_mrs(status)",
+            "create index if not exists ix_rr_started on review_runs(started_at)",
+            "create index if not exists ix_rf_updated on review_findings(updated_at)",
+            "create index if not exists ix_rf_status on review_findings(status)",
+            "create index if not exists ix_gd_created on governance_decisions(created_at)",
+        ):
+            db.execute(statement)
 
 
 def ensure_column(db: sqlite3.Connection, table: str, name: str, definition: str) -> None:
