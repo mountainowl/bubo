@@ -32,6 +32,7 @@ instead.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import re
@@ -109,7 +110,7 @@ from bubo.reconciliation import (
 )
 from bubo.review_config import ReviewConfig, load_review_config, review_config_from_dict
 from bubo.scm import ScmProvider, get_provider
-from bubo.scm.base import FindingThreadState
+from bubo.scm.base import FindingThreadState, OutcomeMemo
 from bubo.secrets import redact_secrets
 from bubo.signals import (
     install_signal_handlers as _install_signal_handlers,
@@ -1018,6 +1019,8 @@ def changed_loc(
     project: str,
     number: int,
     languages: dict[str, int] | None = None,
+    *,
+    changed: dict[str, JsonObject] | None = None,
 ) -> tuple[int | None, int | None]:
     """Best-effort ``(files_changed, lines_changed)`` for anonymous analytics.
 
@@ -1025,11 +1028,15 @@ def changed_loc(
     poster uses for position mapping). Returns ``(None, None)`` on any failure
     — analytics must never break a review, and an unknown count must not
     masquerade as zero.
+
+    ``changed`` is an already-fetched changed-line map; when given, no SCM
+    call is made (the worker fetches the diff once and shares it).
     """
-    try:
-        changed = provider.changed_lines(cfg, token, project, number)
-    except Exception:
-        return None, None
+    if changed is None:
+        try:
+            changed = provider.changed_lines(cfg, token, project, number)
+        except Exception:
+            return None, None
     files = len(changed)
     lines = sum(len(entry.get("new_lines") or ()) for entry in changed.values())
     if languages is not None:
@@ -1124,6 +1131,7 @@ def capture_provenance(
     run_id: str,
     provider: ScmProvider,
     telemetry: ReviewTelemetry | None = None,
+    changed: dict[str, JsonObject] | None = None,
 ) -> tuple[ProvenanceSignal, str] | None:
     """Capture provenance + evaluate governance policy (opt-in, off by default).
 
@@ -1138,7 +1146,9 @@ def capture_provenance(
     (``""`` when rigor is off or the change did not escalate), or ``None`` when
     governance is disabled or any step soft-fails — a governance hiccup must
     never fail a review. The commit/diff fetch happens only when governance is
-    enabled, so a disabled install makes zero extra API calls.
+    enabled, so a disabled install makes zero extra API calls. ``changed`` is
+    an already-fetched changed-line map; when given, the diff is not fetched
+    again.
     """
     governance = cfg.governance_config
     if not governance.enabled:
@@ -1146,7 +1156,8 @@ def capture_provenance(
     try:
         commits = provider.list_commits(cfg, token, project, number)
         messages = [str(commit.get("message") or "") for commit in commits]
-        changed = provider.changed_lines(cfg, token, project, number)
+        if changed is None:
+            changed = provider.changed_lines(cfg, token, project, number)
         signal = compute_provenance(
             messages,
             changed.keys(),
@@ -1653,21 +1664,29 @@ def worker(job: Path) -> int:
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
             with telemetry.span("llm_review.checkout", repo=project, sha=sha):
                 provider.checkout(cfg, project, mr, repo)
-            # Lines of code reviewed: added lines across the change's diff,
-            # captured for EVERY review (independent of whether findings exist,
-            # so a clean review still records its size). Soft-fail — a metric
-            # must never break a review (mirrors capture_provenance).
+            # Fetch the change's diff ONCE before the agent runs and share it
+            # with every pre-review consumer (lines reviewed, analytics LoC,
+            # governance provenance). It is captured for EVERY review
+            # (independent of whether findings exist, so a clean review still
+            # records its size). Soft-fail — a metric must never break a
+            # review: on failure lines_reviewed is 0, analytics LoC is unknown
+            # and provenance is skipped. Posting re-fetches the diff on purpose
+            # (the change may have moved while the agent ran).
+            changed: dict[str, JsonObject] | None
             try:
-                lines_reviewed = count_added_lines(provider.changed_lines(cfg, token, project, iid))
+                changed = provider.changed_lines(cfg, token, project, iid)
+                lines_reviewed = count_added_lines(changed)
             except Exception as exc:
                 log("lines_reviewed_failed", project=project, iid=iid, error=type(exc).__name__)
+                changed = None
                 lines_reviewed = 0
             # Anonymous LoC for analytics — computed ONLY when analytics is
-            # enabled, so an opted-out user pays no extra API round-trip.
+            # enabled; it reuses the diff above, so it costs no extra API call.
             if analytics.analytics_enabled(cfg.analytics_config):
-                files_changed, lines_changed = changed_loc(
-                    provider, cfg, token, project, iid, languages
-                )
+                if changed is not None:
+                    files_changed, lines_changed = changed_loc(
+                        provider, cfg, token, project, iid, languages, changed=changed
+                    )
                 from bubo.project_analytics import collect_profile
 
                 project_profile = collect_profile(cfg, token, project, repo)
@@ -1675,16 +1694,26 @@ def worker(job: Path) -> int:
             # evaluates the policy gate; returns a heightened-scrutiny directive
             # to inject into the prompt when the change escalates. No-op + no API
             # calls unless enabled; soft-fails so it never breaks a review.
-            with telemetry.span("llm_review.provenance", repo=project):
-                governance = capture_provenance(
-                    cfg,
-                    token=token,
+            governance = None
+            if changed is not None:
+                with telemetry.span("llm_review.provenance", repo=project):
+                    governance = capture_provenance(
+                        cfg,
+                        token=token,
+                        project=project,
+                        number=iid,
+                        sha=sha,
+                        run_id=run_id,
+                        provider=provider,
+                        telemetry=telemetry,
+                        changed=changed,
+                    )
+            elif cfg.governance_config.enabled:
+                log(
+                    "provenance_capture_skipped",
                     project=project,
-                    number=iid,
-                    sha=sha,
-                    run_id=run_id,
-                    provider=provider,
-                    telemetry=telemetry,
+                    iid=iid,
+                    reason="diff_unavailable",
                 )
             extra_directive = governance[1] if governance else ""
             env = reviewer_env(os.environ, cfg)
@@ -2025,6 +2054,23 @@ def check_health() -> int:
 MAX_REPLY_CLASSIFICATIONS_PER_SYNC = 20
 
 
+def _accepts_outcome_memo(provider: ScmProvider) -> bool:
+    """True when ``provider.fetch_outcome`` declares the optional ``memo`` kwarg.
+
+    Third-party and test providers written against the original six-argument
+    signature keep working: they are simply called without a memo.
+    """
+    try:
+        params = inspect.signature(provider.fetch_outcome).parameters
+    except TypeError, ValueError:
+        return False
+    param = params.get("memo")
+    return param is not None and param.kind in (
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+
+
 @admitted(writable=True)
 def sync_outcomes(limit: int = 200) -> int:
     """Refresh provider-side outcomes for up to ``limit`` posted findings.
@@ -2046,12 +2092,17 @@ def sync_outcomes(limit: int = 200) -> int:
     bot_username = provider.bot_username()
     synced = 0
     classifications = 0
+    # One memo per run: the provider fetches each change (and, on GitHub, its
+    # review-thread list) once per change instead of once per finding.
+    # Providers whose fetch_outcome predates the ``memo`` kwarg are called
+    # exactly as before.
+    memo_kwargs: dict[str, OutcomeMemo] = {"memo": {}} if _accepts_outcome_memo(provider) else {}
     for finding in posted_findings_for_outcome_sync(limit):
         project = finding["project"]
         iid = int(finding["iid"])
         try:
             outcome = provider.fetch_outcome(
-                cfg, token, project, iid, finding["discussion_id"], bot_username
+                cfg, token, project, iid, finding["discussion_id"], bot_username, **memo_kwargs
             )
             # When the developer replied but no explicit dispute marker was
             # found, ask the configured agent whether the reply accepts or

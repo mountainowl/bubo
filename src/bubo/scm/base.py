@@ -13,16 +13,42 @@ requests and GitHub pull requests.
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from bubo.errors import describe
 from bubo.review_config import ReviewConfig
 from bubo.secrets import redact_secrets
 from bubo.subproc import run_bounded
 from bubo.types import JsonObject
+
+OutcomeMemo = dict[tuple[str, str, int], Any]
+"""Per-run cache for :meth:`ScmProvider.fetch_outcome`.
+
+Keyed by ``(kind, project, change number)``. One ``sync_outcomes`` run
+creates a fresh memo and passes it to every ``fetch_outcome`` call so a
+change (and, on GitHub, its review-thread list) is fetched once per change
+rather than once per finding. Only successful fetches are cached: a failure
+is retried for the next finding exactly as without a memo.
+"""
+
+
+def memoized[T](memo: OutcomeMemo | None, key: tuple[str, str, int], fetch: Callable[[], T]) -> T:
+    """Return ``memo[key]``, filling it from ``fetch()`` on a miss.
+
+    ``memo=None`` disables caching (every call fetches). Exceptions from
+    ``fetch`` propagate and leave the memo unchanged.
+    """
+    if memo is None:
+        return fetch()
+    if key in memo:
+        return cast(T, memo[key])
+    value = fetch()
+    memo[key] = value
+    return value
 
 
 class FindingThreadState(StrEnum):
@@ -339,8 +365,15 @@ class ScmProvider(Protocol):
         number: int,
         thread_id: str,
         bot_username: str,
+        *,
+        memo: OutcomeMemo | None = None,
     ) -> JsonObject:
-        """Fetch a posted comment's current state and classify its outcome."""
+        """Fetch a posted comment's current state and classify its outcome.
+
+        ``memo`` (optional) is a per-sync :data:`OutcomeMemo`; providers use it
+        to fetch per-change data once per change instead of once per finding.
+        Callers must treat it as opaque and create a fresh one per run.
+        """
         ...
 
     def finding_thread(
