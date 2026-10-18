@@ -57,6 +57,7 @@ from bubo.review_config import (
 )
 from bubo.review_runner import run_review as run_bounded
 from bubo.scm import get_provider
+from bubo.scm.base import change_bases, change_diff_evidence
 from bubo.secrets import redact_secrets
 from bubo.statuses import ReviewStatus
 from bubo.subscription import (
@@ -512,6 +513,8 @@ def review_change(
     with tempfile.TemporaryDirectory(prefix="bubo-mcp-checkout-") as temporary:
         repository = Path(temporary) / "source"
         scm.checkout(cfg, project, change, repository)
+        diff = change_diff_evidence(repository, change_bases(change), "HEAD")
+        prompt = f"{prompt}\n{diff}"
         result = run_bounded(
             [*cfg.reviewer_command, prompt], timeout=timeout, cwd=repository, review_config=cfg
         )
