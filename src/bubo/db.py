@@ -1137,7 +1137,9 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     """Return up to ``limit`` posted findings ordered by sync staleness.
 
     Never-synced findings come first; then oldest ``last_checked_at``.
-    The poller uses this list to drive ``--sync-outcomes``.
+    The poller uses this list to drive ``--sync-outcomes``. A finding whose
+    comment was observed deleted is terminal (a deleted comment cannot come
+    back) and is never selected again, so it costs no further API calls.
 
     Each row carries ``prior_outcome`` — the currently-stored outcome flags
     (all ``False`` if never synced) — so the caller can detect the
@@ -1157,6 +1159,7 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
                 rf.fingerprint
             where rf.status=? and rf.discussion_id is not null and rf.discussion_id != ''
+              and coalesce(fo.deleted,0)=0
             order by
               case when fo.last_checked_at is null then 0 else 1 end,
               fo.last_checked_at asc,
