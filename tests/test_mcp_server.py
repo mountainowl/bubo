@@ -453,7 +453,10 @@ def test_review_change_dispatches_with_parsed_url() -> None:
     # contract-carrying review prompt (provider.review_prompt), not a
     # bundled review wrapper.
     assert captured["args"][:2] == ["codex", "exec"]
-    assert captured["args"][-1] == "REVIEW PROMPT"
+    prompt, diff_note = captured["args"][-1].split("\n", 1)
+    assert prompt == "REVIEW PROMPT"
+    # The fake checkout has no git history, so the diff block says it is missing.
+    assert "diff could not be computed" in diff_note
     assert captured["timeout"] == 10
     assert captured["cwd"].name == "source"
     assert not captured["cwd"].exists()
