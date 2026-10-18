@@ -2086,9 +2086,10 @@ def sync_outcomes(limit: int = 200) -> int:
                         outcome["disposition_evidence"] = "reply_classifier"
                     if verdict["false_positive"]:
                         outcome["false_positive"] = True
-                    # Agreement requires an explicit classifier conclusion;
-                    # resolution, code edits, and silence remain unknown.
-                    if verdict["verdict"] == "agrees":
+                    # Agreement requires an explicit classifier conclusion
+                    # ("accepted" is only "will fix"); resolution, code edits,
+                    # and silence remain unknown. A false positive wins.
+                    elif verdict["verdict"] == "agrees":
                         outcome["developer_agreed"] = True
                         outcome["developer_disposition"] = "agrees"
                         outcome["disposition_evidence"] = "reply_classifier"

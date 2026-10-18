@@ -40,7 +40,9 @@ CLASSIFY_TIMEOUT_SECONDS = 120
 # more, and it bounds token cost on long threads.
 _MAX_TEXT_CHARS = 4000
 
-_VERDICTS = frozenset({"accepted", "rejected", "unclear"})
+# "agrees" is explicit agreement that the finding is correct; "accepted" is
+# the weaker "will fix / acknowledged", which is not evidence of correctness.
+_VERDICTS = frozenset({"agrees", "accepted", "rejected", "unclear"})
 
 # Terminal "we looked but can't decide" verdict — empty reply, no usable
 # command, or output we could not parse. Marked classified; not retried.
@@ -125,9 +127,12 @@ def build_prompt(finding_text: str, reply_text: str) -> str:
         "DEVELOPER REPLY:\n"
         f"{reply}\n\n"
         "Respond with ONLY a single JSON object, no prose and no code fence:\n"
-        '{"verdict": "accepted" | "rejected" | "unclear", '
+        '{"verdict": "agrees" | "accepted" | "rejected" | "unclear", '
         '"false_positive": true | false}\n\n'
-        '- "accepted": the developer agrees, will fix, or already fixed it.\n'
+        '- "agrees": the developer explicitly confirms the finding is correct '
+        '(for example "good catch", "you\'re right") or says they fixed it.\n'
+        '- "accepted": the developer acknowledges it or says they will look at '
+        "it, without confirming it is correct.\n"
         '- "rejected": the developer disagrees — says it is working as '
         "intended, not a real problem, or a false positive.\n"
         '- "unclear": the reply neither clearly accepts nor rejects.\n'
@@ -178,8 +183,8 @@ def _failure_reason(output: str) -> str:
 def classify_developer_reply(cfg: ReviewConfig, finding_text: str, reply_text: str) -> JsonObject:
     """Classify a developer reply as accept/reject via the configured agent.
 
-    Returns ``{"verdict": "accepted"|"rejected"|"unclear", "false_positive":
-    bool}``. Degrades to ``unclear`` on any failure so it never raises into
+    Returns ``{"verdict": "agrees"|"accepted"|"rejected"|"unclear",
+    "false_positive": bool}``. Degrades to ``unclear`` on any failure so it never raises into
     the outcome-sync loop.
     """
     if not reply_text.strip():
