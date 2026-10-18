@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from bubo.errors import describe
 from bubo.review_config import ReviewConfig
@@ -36,7 +36,7 @@ is retried for the next finding exactly as without a memo.
 """
 
 
-def memoized[T](memo: OutcomeMemo | None, key: tuple[str, str, int], fetch: Callable[[], T]) -> T:
+def memoized(memo: OutcomeMemo | None, key: tuple[str, str, int], fetch: Callable[[], Any]) -> Any:
     """Return ``memo[key]``, filling it from ``fetch()`` on a miss.
 
     ``memo=None`` disables caching (every call fetches). Exceptions from
@@ -45,7 +45,7 @@ def memoized[T](memo: OutcomeMemo | None, key: tuple[str, str, int], fetch: Call
     if memo is None:
         return fetch()
     if key in memo:
-        return cast(T, memo[key])
+        return memo[key]
     value = fetch()
     memo[key] = value
     return value
