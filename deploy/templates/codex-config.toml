@@ -14,32 +14,12 @@ hooks = false
 [shell_environment_policy]
 inherit = "core"
 
-# Optional interactive Codex profile. The hardened review runner ignores this
-# user config and generates read-only policy from ReviewConfig; only auth is copied.
-# Custom LLM_BASE_URL endpoints used by that runner must implement Responses,
-# not only Chat Completions. An interactive profile can be selected as
-#   codex --ask-for-approval never exec --profile bubo ...
-# (see [agents].reviewer_command / [agents].codex_profile in
-# config/env.toml). MUST live in the main config under [profiles.NAME] —
-# Codex does NOT auto-load `~/.codex/<NAME>.config.toml` for `--profile`,
-# despite what the filename suggests. Edits here affect interactive profile
-# use; hardened reviews ignore this file.
-# model / model_reasoning_effort are filled in by `bubo init` from
-# [agents].llm_model / llm_model_effort (LLM_MODEL / LLM_MODEL_EFFORT). When
-# [agents].llm_base_url is set, init also points this profile at a custom
-# Responses-compatible provider (wire_api = "responses" in the generated
-# [model_providers.bubo] block). Chat Completions-only endpoints are unsupported.
-[profiles.bubo]
-model = "{{LLM_MODEL}}"
-model_reasoning_effort = "{{LLM_MODEL_EFFORT}}"
-model_reasoning_summary = "none"
-model_verbosity = "low"
-review_model = "{{LLM_MODEL}}"
-approval_policy = "never"
-sandbox_mode = "read-only"
-web_search = "disabled"
-project_doc_max_bytes = 8192
-hide_agent_reasoning = true
-{{MODEL_PROVIDER_LINE}}
+# Optional interactive Codex profile. The hardened review runner ignores user
+# config and generates read-only policy from ReviewConfig; only auth is copied.
+# The `bubo` profile lives in its own file, ~/.codex/bubo.config.toml (written
+# by `bubo init` from codex-bubo.config.toml). Codex >= 0.134.0 refuses
+# `--profile bubo` while this file still carries a legacy [profiles.bubo]
+# table, so keep it out of here. Custom LLM_BASE_URL endpoints must implement
+# Responses, not only Chat Completions.
 
 {{MODEL_PROVIDER_BLOCK}}

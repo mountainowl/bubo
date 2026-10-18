@@ -83,7 +83,7 @@ strict = true
 
 [build-system]
 # Switched from uv_build to hatchling per #22 — hatchling's force-include
-# lets us ship the deploy assets (prompts, skills, plugins, deploy templates,
+# lets us ship the deploy assets (prompts, skills, deploy templates,
 # env.example.toml) at importlib.resources-reachable locations inside the
 # wheel WITHOUT physically moving the source files. uv_build's data-dir
 # directives are too narrow for this (scripts/data/headers only) and have
@@ -105,10 +105,10 @@ packages = ["src/bubo"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "deploy/templates/codex-config.toml" = "bubo/_assets/codex-config.toml"
+"deploy/templates/codex-bubo.config.toml" = "bubo/_assets/codex-bubo.config.toml"
 "deploy/templates/claude-settings.json" = "bubo/_assets/claude-settings.json"
 "prompts/00-meta.md" = "bubo/_assets/prompts/00-meta.md"
 "skills/code-reviewer/SKILL.md" = "bubo/_assets/skills/code-reviewer/SKILL.md"
-"plugins/superpowers/.codex-plugin/plugin.json" = "bubo/_assets/plugins/superpowers/.codex-plugin/plugin.json"
 "config/env.example.toml" = "bubo/_assets/env.example.toml"
 # Built operator-UI SPA (Svelte/Vite, see ui/). For v1 the build output is
 # COMMITTED so the wheel ships it without a Node build in CI; regenerate with
@@ -129,7 +129,6 @@ include = [
   "deploy/",
   "prompts/",
   "skills/",
-  "plugins/",
   "ui/dist/",
   "config/env.example.toml",
   "README.md",

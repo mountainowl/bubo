@@ -44,6 +44,20 @@ def parse_codex_token_usage(text: str) -> TokenUsage:
     )
 
 
+def add_usage(a: TokenUsage, b: TokenUsage) -> TokenUsage:
+    """Sum two usages; a counter stays None only when neither side has it."""
+
+    def plus(x: int | None, y: int | None) -> int | None:
+        return None if x is None and y is None else (x or 0) + (y or 0)
+
+    return TokenUsage(
+        input=plus(a.input, b.input),
+        output=plus(a.output, b.output),
+        cached=plus(a.cached, b.cached),
+        total=plus(a.total, b.total),
+    )
+
+
 def estimate_cost_usd(usage: TokenUsage, pricing: ModelPricing) -> float:
     if usage.total is not None and usage.input is None and usage.output is None:
         return round(usage.total * pricing.input_per_1m / 1_000_000, 8)

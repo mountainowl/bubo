@@ -291,7 +291,7 @@ Reviews fail at the agent stage, or the agent cannot authenticate.
   from the agent subprocess env. Codex uses its own `auth.json` (`codex login
   --with-api-key` on the host); Claude uses `ANTHROPIC_API_KEY` in the agent env or an
   `apiKeyHelper`. Pre-authenticate the agent on the poller host. `bubo doctor` checks the
-  Codex `[profiles.bubo]` block, not credentials.
+  Codex `bubo` profile file, not credentials.
 - **Claude selected but not wired.** Set `reviewer_command = ["claude", "-p"]` in
   `[agents]`; without it, the bundled Codex default runs.
 - **Model unavailable.** A model your provider does not serve fails the agent stage; the
@@ -316,7 +316,7 @@ Two traps:
 - The failure can surface as `no_findings` when the agent exits `0` on the error (rule 1
   above). A no-findings spike across every repo right after a billing change is this, not
   clean code.
-- `bubo doctor` does not catch it — it checks the Codex profile block, not live provider
+- `bubo doctor` does not catch it — it checks the Codex profile file, not live provider
   auth.
 
 **Fix.**
@@ -332,10 +332,14 @@ Two traps:
 ## Upgrades
 
 - **Re-run `bubo init` after every upgrade.** It refreshes the packaged
-  prompts/skills/plugins and leaves `config/env.toml` untouched (`--force` overwrites
+  prompts/skills and leaves `config/env.toml` untouched (`--force` overwrites
   config — only use it deliberately). See [Operate → install](/operate#install).
-- **Stale Codex config.** An old `~/.codex/config.toml` missing `[profiles.bubo]` fails
-  `bubo doctor`; re-running `bubo init` restores it.
+- **Stale Codex config.** The Codex `bubo` profile lives in `~/.codex/bubo.config.toml`.
+  Codex 0.134.0 and later abort every review with ``--profile `bubo` cannot be used while
+  config.toml contains legacy [profiles.bubo]`` when an older `~/.codex/config.toml` still
+  carries that table. `bubo doctor` flags it; re-running `bubo init` moves the table into
+  `bubo.config.toml` (keeping your values) and saves the old file as `config.toml.bak`.
+  Bubo's profile layout needs Codex 0.134.0 or later.
 - **Old binary on `PATH`.** After `uv tool install --reinstall bubo`, run `hash -r` to
   drop the shell's cached path to the previous `bubo`.
 - **Schema migrations.** Columns are added additively; `bubo-poller --init-db` (which

@@ -89,6 +89,8 @@ def _run_worker(
     tmp: Path, cfg: ReviewConfig, http: _FakeScmHttp
 ) -> tuple[int, list[str], MagicMock]:
     events: list[str] = []
+    # The worker inlines the rendered review rules from this file.
+    (tmp / "prompt").write_text("rules")
     finding = {
         "file": "a.py",
         "line": 2,

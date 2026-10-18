@@ -20,7 +20,11 @@ inputs:
   llm-model:
     description: "Model for the review. bubo init writes it to the generated agent profile."
     required: false
-    default: "gpt-5.5"
+    default: "gpt-6.1-sol"
+  claude-model:
+    description: "Claude model, used when reviewer-command runs Claude Code."
+    required: false
+    default: "claude-opus-5-5"
   llm-model-effort:
     description: "Reasoning effort: low, medium, or high."
     required: false
@@ -58,7 +62,7 @@ inputs:
     required: false
     default: ""
   install-agent:
-    description: "Best-effort Codex and Superpowers install. Leave false on pre-provisioned runners."
+    description: "Best-effort Codex install. Leave false on pre-provisioned runners."
     required: false
     default: "false"
 
@@ -116,8 +120,6 @@ runs:
       run: |
         npm install -g @openai/codex \
           || echo "::warning::Codex install failed; ensure the agent CLI is on PATH."
-        npx -y @obra/superpowers install 2>/dev/null \
-          || echo "::warning::Superpowers install skipped; ensure the code-reviewer skill is configured."
 
     - name: Initialize Bubo workspace
       shell: bash
@@ -135,6 +137,7 @@ runs:
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         LLM_API_KEY_ENV: ${{ inputs.llm-api-key-env }}
         LLM_MODEL: ${{ inputs.llm-model }}
+        CLAUDE_MODEL: ${{ inputs.claude-model }}
         LLM_MODEL_EFFORT: ${{ inputs.llm-model-effort }}
         LLM_BASE_URL: ${{ inputs.llm-base-url }}
         REVIEWER_COMMAND: ${{ inputs.reviewer-command }}
@@ -154,6 +157,7 @@ runs:
           echo
           echo '[agents]'
           printf 'llm_model = "%s"\n' "${LLM_MODEL}"
+          printf 'claude_model = "%s"\n' "${CLAUDE_MODEL}"
           printf 'llm_model_effort = "%s"\n' "${LLM_MODEL_EFFORT}"
           printf 'llm_api_key = "%s"\n' "${LLM_API_KEY}"
           printf 'dry_run = %s\n' "${DRY_RUN}"

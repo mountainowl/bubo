@@ -102,7 +102,7 @@ class FindingThreadResolution:
 # The finding-output contract shared by every provider's review prompt. Only
 # the change-specific header differs per provider; the JSON shape the agent
 # must return is identical. ``{max_findings}`` is filled in per review.
-REVIEW_CONTRACT = """Use the `code-reviewer` skill and Bubo review contract.
+REVIEW_CONTRACT = """Follow the Bubo review contract below.
 # Trusted run configuration
 - Mode: diff. Review the declared change at the given head; establish its base before judging
 causality.

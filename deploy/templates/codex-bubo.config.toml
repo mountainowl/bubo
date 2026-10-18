@@ -1,0 +1,22 @@
+# Codex profile used by the default reviewer_command as
+#   codex --ask-for-approval never exec --profile bubo ...
+# (see [agents].reviewer_command / [agents].codex_profile in
+# config/env.toml). `bubo init` writes this to ~/.codex/bubo.config.toml;
+# Codex (>= 0.134.0) layers it over ~/.codex/config.toml when `--profile bubo`
+# is passed. Keys are top-level here: no [profiles.bubo] header. Edits here
+# change every review run on this host.
+# model / model_reasoning_effort are filled in by `bubo init` from
+# [agents].llm_model / llm_model_effort (LLM_MODEL / LLM_MODEL_EFFORT). When
+# [agents].llm_base_url is set, init also points this profile at a custom
+# OpenAI-compatible provider (the [model_providers.bubo] block in config.toml).
+model = "{{LLM_MODEL}}"
+model_reasoning_effort = "{{LLM_MODEL_EFFORT}}"
+model_reasoning_summary = "none"
+model_verbosity = "low"
+review_model = "{{LLM_MODEL}}"
+approval_policy = "never"
+sandbox_mode = "read-only"
+web_search = "disabled"
+project_doc_max_bytes = 8192
+hide_agent_reasoning = true
+{{MODEL_PROVIDER_LINE}}

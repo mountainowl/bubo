@@ -52,6 +52,7 @@ from bubo import analytics, github, gitlab, paths
 from bubo.config_values import ConfigError
 from bubo.db import (
     active_review_sha,
+    add_review_run_usage,
     already_seen,
     claim_finding_reconciliation,
     connect_db,
@@ -147,10 +148,14 @@ from bubo.subscription import (
     state_path,
 )
 from bubo.telemetry import (
+    AgentOutput,
     ReviewTelemetry,
     TokenUsage,
-    estimate_cost_usd,
-    parse_codex_token_usage,
+    add_usage,
+    parse_agent_output,
+    record_agent_usage,
+    start_metering,
+    stop_metering,
 )
 from bubo.types import JsonObject
 from bubo.update_admission import MaintenanceInProgress, activity, admitted, handoff_fds
@@ -242,6 +247,22 @@ def reviewer_env(source: Mapping[str, str], cfg: ReviewConfig | None = None) -> 
     return _reviewer_env(source, cfg, root=ROOT)
 
 
+def metered_agent_output(
+    operation: str, result: subprocess.CompletedProcess[str], command: list[str], cfg: ReviewConfig
+) -> AgentOutput:
+    """Read one agent call's usage and add its tokens and cost to the review's meter.
+
+    The review runner returns the final message as ``stdout`` and keeps the CLI's
+    JSON transcript, which carries the usage, as ``diagnostic_stdout``.
+    """
+    transcript = getattr(result, "diagnostic_stdout", None)
+    output = parse_agent_output(transcript if transcript is not None else result.stdout or "")
+    if transcript is not None:
+        output = AgentOutput(result.stdout or "", output.usage, output.cost_usd)
+    record_agent_usage(operation, output, model=cfg.model_for(command), cfg=cfg.telemetry_config)
+    return output
+
+
 def run_verification(
     finding: JsonObject,
     repo: Path | None,
@@ -301,6 +322,7 @@ def run_verification(
             log("verify_check_failed", lens=lens, error=type(exc).__name__)
             verdicts.append(Verdict(lens=lens, real=False, confidence=0.0, reason="", ok=False))
             continue
+        metered_agent_output("verify", result, command, cfg)
         if result.returncode:
             log("verify_check_nonzero", lens=lens, returncode=result.returncode)
             verdicts.append(Verdict(lens=lens, real=False, confidence=0.0, reason="", ok=False))
@@ -339,6 +361,7 @@ def run_reconciliation_verification(
         return ReconciliationResult(
             ReconciliationVerdict.UNCERTAIN, 0.0, "Verifier unavailable", ok=False
         )
+    metered_agent_output("reconcile", result, command, cfg)
     if result.returncode:
         return ReconciliationResult(
             ReconciliationVerdict.UNCERTAIN, 0.0, "Verifier returned non-zero", ok=False
@@ -649,7 +672,7 @@ def normalize_config(cfg: JsonObject) -> ReviewConfig:
 
 def reviewer_model(cfg: ReviewConfig) -> str:
     """Return the configured model label for telemetry, or ``"unknown"``."""
-    return cfg.model or "unknown"
+    return cfg.model_for(cfg.reviewer_command) or "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -1947,6 +1970,8 @@ def worker(job: Path) -> int:
     started = time.monotonic()
     tokens = TokenUsage()
     cost_usd = 0.0
+    # Every agent call this review makes (review, verify, reconcile) adds to it.
+    usage_meter, usage_meter_token = start_metering()
     lines_reviewed = 0
     repo: Path | None = None
     files_changed: int | None = None
@@ -2090,10 +2115,8 @@ def worker(job: Path) -> int:
                     safe_stdout, cfg.subscription_circuit.error_patterns, terminal_only=True
                 ):
                     raise SubscriptionUnavailable()
-                tokens = parse_codex_token_usage(
-                    getattr(result, "diagnostic_stdout", result.stdout)
-                )
-                cost_usd = estimate_cost_usd(tokens, cfg.telemetry_config.price_for(model))
+                metered_agent_output("review", result, cfg.reviewer_command, cfg)
+                tokens, cost_usd = usage_meter.tokens, usage_meter.cost_usd
                 telemetry.set_span_attrs(
                     agent_span,
                     tokens_input=tokens.input,
@@ -2166,6 +2189,8 @@ def worker(job: Path) -> int:
                 else ReviewStatus.SUCCESS
             )
             record(project, iid, sha, status, str(report))
+            # Verification calls made while posting count toward this review.
+            tokens, cost_usd = usage_meter.tokens, usage_meter.cost_usd
             record_review_run_finish(
                 run_id=run_id,
                 status=status,
@@ -2187,15 +2212,26 @@ def worker(job: Path) -> int:
                     if cfg.rereview == "incremental"
                     else cfg
                 )
-                reconciliation = reconcile_prior_findings(
-                    cfg=reconcile_cfg,
-                    token=token,
-                    project=project,
-                    number=iid,
-                    head_sha=sha,
-                    provider=provider,
-                    repo=repo,
-                )
+                # The run row is already final; its reconciliation calls are added on.
+                reconcile_meter, reconcile_meter_token = start_metering()
+                try:
+                    reconciliation = reconcile_prior_findings(
+                        cfg=reconcile_cfg,
+                        token=token,
+                        project=project,
+                        number=iid,
+                        head_sha=sha,
+                        provider=provider,
+                        repo=repo,
+                    )
+                finally:
+                    stop_metering(reconcile_meter_token)
+                if reconcile_meter.tokens != TokenUsage():
+                    add_review_run_usage(
+                        run_id, tokens=reconcile_meter.tokens, cost_usd=reconcile_meter.cost_usd
+                    )
+                    tokens = add_usage(tokens, reconcile_meter.tokens)
+                    cost_usd = round(cost_usd + reconcile_meter.cost_usd, 8)
             # A provider accepted a write but did not return a durable thread
             # id: do not claim a clean scan while that external result is
             # unresolved.  This also keeps reconciliation out of partial runs.
@@ -2381,6 +2417,7 @@ def worker(job: Path) -> int:
         )
         return 1
     finally:
+        stop_metering(usage_meter_token)
         if repo is not None:
             cleanup_worktree(repo)
         analytics.flush()
@@ -2520,11 +2557,22 @@ def sync_outcomes(limit: int = 200) -> int:
                 and classifications < MAX_REPLY_CLASSIFICATIONS_PER_SYNC
             ):
                 classifications += 1
-                verdict = classify_developer_reply(
-                    cfg,
-                    str(outcome.get("_finding_text") or ""),
-                    reply_text,
-                )
+                # Bill the classifier call to the review run that raised the finding.
+                classify_meter, classify_meter_token = start_metering()
+                try:
+                    verdict = classify_developer_reply(
+                        cfg,
+                        str(outcome.get("_finding_text") or ""),
+                        reply_text,
+                    )
+                finally:
+                    stop_metering(classify_meter_token)
+                if classify_meter.tokens != TokenUsage() or classify_meter.cost_usd:
+                    add_review_run_usage(
+                        review_run_id(project, iid, finding["sha"]),
+                        tokens=classify_meter.tokens,
+                        cost_usd=classify_meter.cost_usd,
+                    )
                 # "error" is a transient classifier failure — leave the
                 # finding unclassified so a later sync retries it.
                 if verdict["verdict"] != "error":

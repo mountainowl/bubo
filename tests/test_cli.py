@@ -6,7 +6,7 @@ Covers:
   agent-config actions for both fresh and existing roots.
 * ``cmd_init --dry-run`` exits 0 without touching the filesystem.
 * A real ``cmd_init`` against an empty tmpdir writes env.toml, copies
-  prompts/skills/plugins, initializes the SQLite DB, and is idempotent
+  prompts/skills, initializes the SQLite DB, and is idempotent
   on re-run.
 * ``cmd_doctor`` returns 0 on a successful install and non-zero on
   missing env.toml / missing DB / missing Codex profile.
@@ -18,7 +18,9 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import sqlite3
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -57,7 +59,7 @@ def test_plan_init_includes_workspace_env_runtime_and_db(tmp_path: Path) -> None
     assert any(a.target.name == "env.toml" and a.kind == "write_file" for a in actions)
     # The three runtime copies.
     copy_targets = {a.target.name for a in actions if a.kind == "copy_tree"}
-    assert copy_targets == {"prompts", "skills", "plugins"}
+    assert copy_targets == {"prompts", "skills"}
     # DB init runs last.
     assert actions[-1].kind == "init_db"
 
@@ -139,7 +141,7 @@ def test_cmd_init_real_run_creates_full_workspace(isolated_root: Path) -> None:
     assert (isolated_root / "var" / "state" / "reviewer.sqlite").is_file()
     assert (isolated_root / "prompts" / "00-meta.md").is_file()
     assert (isolated_root / "skills" / "code-reviewer" / "SKILL.md").is_file()
-    assert (isolated_root / "plugins" / "superpowers").is_dir()
+    assert not (isolated_root / "plugins").exists()
 
 
 def test_cmd_init_does_not_materialize_legacy_scheduler_templates(
@@ -252,21 +254,28 @@ def test_cmd_init_agent_config_writes_codex_with_profile(
     cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
 
     codex_config = (fake_home / ".codex" / "config.toml").read_text()
-    # The load-bearing block — the v0.5.0 incident's root cause was this
-    # being absent.
-    assert "[profiles.bubo]" in codex_config
+    profile = (fake_home / ".codex" / "bubo.config.toml").read_text()
+    # The load-bearing profile — the v0.5.0 incident's root cause was it
+    # being absent. Codex >= 0.134.0 wants it in its own file and rejects a
+    # [profiles.bubo] table in config.toml.
+    assert "profiles" not in tomllib.loads(codex_config)
+    assert tomllib.loads(profile)["sandbox_mode"] == "read-only"
     # Every placeholder rendered (ROOT, LLM_MODEL, the provider markers, …).
-    assert "{{" not in codex_config
+    assert "{{" not in codex_config + profile
     # Interactive agent config must not grant blanket project trust; runtime
     # review policy is generated separately from trusted ReviewConfig.
     assert "[projects." not in codex_config
     assert 'trust_level = "trusted"' not in codex_config
     # Default (no base_url): model/effort come from the seeded example, and the
     # custom-provider plumbing renders away to nothing.
-    assert 'model = "gpt-5.5"' in codex_config
+    assert 'model = "gpt-6.1-sol"' in profile
+    # Claude Code gets a Claude model, never the Codex one (it rejects
+    # "gpt-*" with "There's an issue with the selected model").
+    claude = json.loads((fake_home / ".claude" / "settings.json").read_text())
+    assert claude["model"] == "claude-opus-5-5"
     lines = codex_config.splitlines()
     assert "[model_providers.bubo]" not in lines  # table header, not the doc comment
-    assert 'model_provider = "bubo"' not in lines
+    assert 'model_provider = "bubo"' not in profile.splitlines()
 
 
 def test_cmd_init_templates_model_and_base_url_into_agent_config(
@@ -287,17 +296,66 @@ def test_cmd_init_templates_model_and_base_url_into_agent_config(
     cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
 
     codex = (fake_home / ".codex" / "config.toml").read_text()
+    profile = (fake_home / ".codex" / "bubo.config.toml").read_text()
     lines = codex.splitlines()
-    assert 'model = "my-model"' in codex
-    assert 'model_reasoning_effort = "high"' in codex
+    assert 'model = "my-model"' in profile
+    assert 'model_reasoning_effort = "high"' in profile
     assert "[model_providers.bubo]" in lines  # table header rendered
     assert 'base_url = "https://gw.internal/v1"' in codex
     assert 'env_key = "LLM_API_KEY"' in codex
-    assert 'model_provider = "bubo"' in lines
-    assert "{{" not in codex
-    # Claude settings get the model too.
+    assert 'model_provider = "bubo"' in profile.splitlines()
+    assert "{{" not in codex + profile
+    # Claude settings keep their own model: llm_model is the Codex model.
     claude = (fake_home / ".claude" / "settings.json").read_text()
-    assert '"model": "my-model"' in claude
+    assert '"model": "claude-opus-5-5"' in claude
+
+
+def test_cmd_init_repairs_codex_model_in_existing_claude_settings(
+    isolated_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    settings = fake_home / ".claude" / "settings.json"
+    settings.write_text(json.dumps({"model": "gpt-5.5", "permissions": {"allow": ["x"]}}))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
+
+    assert json.loads(settings.read_text()) == {
+        "model": "claude-opus-5-5",
+        "permissions": {"allow": ["x"]},
+    }
+
+
+def test_cmd_init_keeps_operator_claude_model(
+    isolated_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    settings = fake_home / ".claude" / "settings.json"
+    settings.write_text('{"model": "sonnet"}')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
+
+    assert settings.read_text() == '{"model": "sonnet"}'
+
+
+def test_cmd_init_templates_claude_model_into_claude_settings(
+    isolated_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    (isolated_root / "config").mkdir(parents=True, exist_ok=True)
+    (isolated_root / "config" / "env.toml").write_text(
+        '[agents]\nllm_model = "gpt-x"\nclaude_model = "claude-sonnet-5-5"\n'
+    )
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
+
+    claude = json.loads((fake_home / ".claude" / "settings.json").read_text())
+    assert claude["model"] == "claude-sonnet-5-5"
+    assert 'model = "gpt-x"' in (fake_home / ".codex" / "bubo.config.toml").read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -355,18 +413,171 @@ def test_cmd_doctor_flags_missing_codex_profile_block(
     assert rc == 1  # Codex profile block missing must fail doctor.
 
 
+# A ~/.codex/config.toml written by bubo init before the profile moved to its
+# own file: Codex >= 0.134.0 aborts `--profile bubo` on it.
+_LEGACY_CODEX_CONFIG = """\
+profile = "bubo"
+
+[history]
+persistence = "none"
+
+# Codex profile used by the default reviewer_command.
+[profiles.bubo]
+model = "operator-model"
+sandbox_mode = "read-only"
+
+[profiles.bubo.tools]
+web_search = false
+
+[mcp_servers.git]
+command = "uvx"
+"""
+
+
+def test_cmd_doctor_flags_legacy_codex_profile_table(
+    isolated_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_home = tmp_path / "home"
+    (fake_home / ".codex").mkdir(parents=True)
+    (fake_home / ".codex" / "config.toml").write_text(_LEGACY_CODEX_CONFIG)
+    (fake_home / ".codex" / "bubo.config.toml").write_text('model = "x"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    cli.cmd_init(
+        cli.build_parser().parse_args(["init", "--root", str(isolated_root), "--no-agent-config"])
+    )
+    capsys.readouterr()
+
+    rc = cli.cmd_doctor(cli.build_parser().parse_args(["doctor", "--root", str(isolated_root)]))
+
+    assert rc == 1
+    assert "FAIL  codex: no legacy [profiles.bubo] table" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("version_output", "expected"),
+    [("codex-cli 0.133.0\n", False), ("codex-cli 0.134.0\n", True), ("codex-cli 0.163.0\n", True)],
+)
+def test_check_codex_version_requires_profile_file_support(
+    monkeypatch: pytest.MonkeyPatch, version_output: str, expected: bool
+) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/codex")
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *a, **k: cli.subprocess.CompletedProcess(a, 0, stdout=version_output),
+    )
+
+    [check] = cli._check_codex_version()
+
+    assert check.passed is expected
+
+
+def test_check_codex_version_skipped_without_codex(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+
+    assert cli._check_codex_version() == []
+
+
+def test_cmd_init_migrates_legacy_codex_profile_table(
+    isolated_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_home = tmp_path / "home"
+    codex = fake_home / ".codex"
+    codex.mkdir(parents=True)
+    (codex / "config.toml").write_text(_LEGACY_CODEX_CONFIG)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
+
+    config = tomllib.loads((codex / "config.toml").read_text())
+    profile = tomllib.loads((codex / "bubo.config.toml").read_text())
+    assert "profiles" not in config
+    assert "profile" not in config
+    assert config["history"] == {"persistence": "none"}
+    assert config["mcp_servers"] == {"git": {"command": "uvx"}}
+    # The operator's own values move across rather than template defaults.
+    assert profile == {
+        "model": "operator-model",
+        "sandbox_mode": "read-only",
+        "tools": {"web_search": False},
+    }
+    assert "Codex profile used by" not in (codex / "config.toml").read_text()
+    assert (codex / "config.toml.bak").read_text() == _LEGACY_CODEX_CONFIG
+    capsys.readouterr()
+    rc = cli.cmd_doctor(cli.build_parser().parse_args(["doctor", "--root", str(isolated_root)]))
+    assert rc == 0, capsys.readouterr().out
+
+
+def test_cmd_init_migration_keeps_an_existing_profile_file(
+    isolated_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    codex = fake_home / ".codex"
+    codex.mkdir(parents=True)
+    (codex / "config.toml").write_text(_LEGACY_CODEX_CONFIG)
+    (codex / "bubo.config.toml").write_text('model = "kept"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
+
+    assert (codex / "bubo.config.toml").read_text() == 'model = "kept"\n'
+    assert "profiles" not in tomllib.loads((codex / "config.toml").read_text())
+
+
+def test_cmd_init_leaves_unparseable_legacy_config_alone(
+    isolated_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_home = tmp_path / "home"
+    codex = fake_home / ".codex"
+    codex.mkdir(parents=True)
+    broken = "[profiles.bubo]\nmodel = \n"
+    (codex / "config.toml").write_text(broken)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root)]))
+
+    assert (codex / "config.toml").read_text() == broken
+    assert not (codex / "config.toml.bak").exists()
+    assert "could not migrate [profiles.bubo]" in capsys.readouterr().err
+
+
+def test_cmd_init_force_rewrites_legacy_config_without_profile_table(
+    isolated_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    codex = fake_home / ".codex"
+    codex.mkdir(parents=True)
+    (codex / "config.toml").write_text(_LEGACY_CODEX_CONFIG)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    cli.cmd_init(cli.build_parser().parse_args(["init", "--root", str(isolated_root), "--force"]))
+
+    assert "profiles" not in tomllib.loads((codex / "config.toml").read_text())
+    # --force writes the packaged profile, so the model is the shipped default.
+    assert tomllib.loads((codex / "bubo.config.toml").read_text())["model"] == "gpt-6.1-sol"
+
+
 # ---------------------------------------------------------------------------
 # Asset resolution — editable fallback
 # ---------------------------------------------------------------------------
 
 
 def test_asset_resolves_packaged_template() -> None:
-    # In the editable install the fallback resolves to deploy/templates/codex-config.toml.
-    # In a wheel install it resolves to bubo/_assets/codex-config.toml.
-    # Either way the content must contain the [profiles.bubo] block
-    # — the bug that motivated #20 was this block being absent.
-    src = cli._asset("codex-config.toml")
-    assert "[profiles.bubo]" in src.read_text()
+    # In the editable install the fallback resolves to deploy/templates/.
+    # In a wheel install it resolves to bubo/_assets/. Either way the profile
+    # template must resolve — the bug that motivated #20 was it being absent.
+    src = cli._asset("codex-bubo.config.toml")
+    assert "sandbox_mode" in src.read_text()
+    assert cli._asset("codex-config.toml").is_file()
 
 
 def test_asset_fallback_finds_prompts_tree() -> None:
