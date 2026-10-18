@@ -57,7 +57,8 @@ different release.
 | Input | Default | What it does |
 |---|---|---|
 | `llm-api-key` | *(required)* | Review-model key. Pass a GitHub Actions secret. |
-| `llm-model` | `gpt-5.5` | Model written to the generated agent profile. |
+| `llm-model` | `gpt-6.1-sol` | Codex model written to the generated Codex profile. |
+| `claude-model` | `claude-opus-5-5` | Claude model written to the Claude settings; used when `reviewer-command` runs Claude Code. |
 | `llm-model-effort` | `medium` | Reasoning effort: `low`, `medium`, or `high`. |
 | `llm-base-url` | *(unset)* | Custom OpenAI-compatible endpoint. |
 | `llm-api-key-env` | *(deprecated)* | Legacy additional key environment variable. |

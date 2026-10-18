@@ -30,6 +30,7 @@ the project was installed via ``uv tool install``, ``pipx install``,
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sqlite3
@@ -45,6 +46,7 @@ from typing import Any
 from bubo import paths
 from bubo.config_values import section
 from bubo.db import init_db
+from bubo.env_config import DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL
 from bubo.errors import describe
 from bubo.events import log
 from bubo.update_admission import MaintenanceInProgress, activity
@@ -253,6 +255,17 @@ def _plan_agent_config(home: Path, root: Path, force: bool) -> list[Action]:
                 )
             )
 
+    # Older inits wrote the Codex model into the Claude settings, which Claude
+    # Code rejects on every run. Swap in the Claude model, keeping the rest.
+    if not force and _claude_settings_have_openai_model(claude_target):
+        actions.append(
+            Action(
+                kind="repair_claude_model",
+                target=claude_target,
+                note="replace the OpenAI model id an older init wrote with [agents].claude_model",
+            )
+        )
+
     actions.append(
         Action(
             kind="symlink",
@@ -262,6 +275,22 @@ def _plan_agent_config(home: Path, root: Path, force: bool) -> list[Action]:
         )
     )
     return actions
+
+
+def _claude_settings_have_openai_model(target: Path) -> bool:
+    if not target.is_file():
+        return False
+    try:
+        model = json.loads(target.read_text()).get("model")
+    except ValueError, AttributeError:
+        return False
+    return isinstance(model, str) and model.startswith("gpt-")
+
+
+def _repair_claude_model(target: Path, model: str) -> None:
+    settings = json.loads(target.read_text())
+    settings["model"] = model
+    target.write_text(json.dumps(settings, indent=2) + "\n")
 
 
 def plan_init(
@@ -299,7 +328,8 @@ def _render_template(parts: tuple[str, ...], subs: dict[str, str]) -> str:
     """Substitute ``{{KEY}}`` placeholders in a packaged template.
 
     ``subs`` always carries ``ROOT``; agent-config templates additionally
-    carry ``LLM_MODEL`` / ``LLM_MODEL_EFFORT`` and the conditional
+    carry ``LLM_MODEL`` / ``LLM_MODEL_EFFORT`` (Codex), ``CLAUDE_MODEL`` (Claude)
+    and the conditional
     model-provider pieces. Placeholders a given template doesn't contain are
     simply no-ops.
     """
@@ -314,7 +344,7 @@ def _read_agent_config(root: Path) -> dict[str, Any]:
 
     Reads the on-disk ``env.toml`` when present, else the packaged example
     (which is what a fresh init is about to seed). Parsed WITHOUT placeholder
-    expansion — only the literal ``llm_model`` / ``llm_model_effort`` /
+    expansion — only the literal ``llm_model`` / ``claude_model`` / ``llm_model_effort`` /
     ``llm_base_url`` are needed here, never the API key.
     """
     cfg_path = root / "config" / "env.toml"
@@ -339,7 +369,8 @@ def _agent_template_subs(root: Path, agent: dict[str, Any]) -> dict[str, str]:
     mode). When it is unset, both provider placeholders render empty and Codex
     uses its built-in provider.
     """
-    model = str(agent.get("llm_model") or "gpt-5.5")
+    model = str(agent.get("llm_model") or DEFAULT_CODEX_MODEL)
+    claude_model = str(agent.get("claude_model") or DEFAULT_CLAUDE_MODEL)
     effort = str(agent.get("llm_model_effort") or agent.get("reasoning_effort") or "medium")
     base_url = str(agent.get("llm_base_url") or "").strip()
     if base_url:
@@ -357,6 +388,7 @@ def _agent_template_subs(root: Path, agent: dict[str, Any]) -> dict[str, str]:
     return {
         "ROOT": str(root),
         "LLM_MODEL": model,
+        "CLAUDE_MODEL": claude_model,
         "LLM_MODEL_EFFORT": effort,
         "MODEL_PROVIDER_LINE": provider_line,
         "MODEL_PROVIDER_BLOCK": provider_block,
@@ -406,6 +438,9 @@ def _execute(action: Action, subs: dict[str, str]) -> None:
         if action.target.is_symlink() or action.target.exists():
             action.target.unlink()
         action.target.symlink_to(action.source)
+        return
+    if action.kind == "repair_claude_model":
+        _repair_claude_model(action.target, subs["CLAUDE_MODEL"])
         return
     if action.kind == "init_db":
         init_db()

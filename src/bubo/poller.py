@@ -626,6 +626,8 @@ def normalize_config(cfg: JsonObject) -> ReviewConfig:
 
 def reviewer_model(cfg: ReviewConfig) -> str:
     """Return the configured model label for telemetry, or ``"unknown"``."""
+    if cfg.reviewer_command and Path(cfg.reviewer_command[0]).name == "claude":
+        return cfg.claude_model or "unknown"
     return cfg.model or "unknown"
 
 

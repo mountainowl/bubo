@@ -28,6 +28,12 @@ from typing import Any
 from bubo.config_values import ConfigError, section
 from bubo.errors import describe
 
+# Default review models, one per agent CLI. ``[agents].llm_model`` drives the
+# Codex profile and ``[agents].claude_model`` the Claude settings; Claude Code
+# rejects an OpenAI model id (and vice versa), so the two never share a value.
+DEFAULT_CODEX_MODEL = "gpt-6.1-sol"
+DEFAULT_CLAUDE_MODEL = "claude-opus-5-5"
+
 # Matches POSIX-style placeholders inside TOML string values:
 #   ${VAR}            — required; missing raises ConfigError
 #   ${VAR:-default}   — falls back to `default` when VAR is unset/empty
@@ -187,7 +193,7 @@ def runtime_env(root: Path, cfg: dict[str, Any]) -> dict[str, str]:
         "BUBO_BASE_DIR": str(base_dir),
         # Standardized LLM knobs. LLM_MODEL_EFFORT falls back to the deprecated
         # `reasoning_effort` key so existing configs keep working.
-        "LLM_MODEL": str(agent.get("llm_model", "gpt-5.5")),
+        "LLM_MODEL": str(agent.get("llm_model", DEFAULT_CODEX_MODEL)),
         "LLM_MODEL_EFFORT": str(
             agent.get("llm_model_effort") or agent.get("reasoning_effort") or "medium"
         ),

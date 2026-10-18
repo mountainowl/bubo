@@ -1,5 +1,5 @@
 {
-  "model": "{{LLM_MODEL}}",
+  "model": "{{CLAUDE_MODEL}}",
   "permissions": {
     "allow": [
       "mcp__git__git_status",

@@ -119,7 +119,8 @@ export const AGENT = {
     keyEnv: 'OPENAI_API_KEY',
     keyUrl: 'https://platform.openai.com/api-keys',
     keyName: 'OpenAI',
-    model: 'gpt-5.5',
+    model: 'gpt-6.1-sol',
+    modelKey: 'llm_model',
   },
   claude: {
     label: 'Anthropic',
@@ -131,7 +132,8 @@ export const AGENT = {
     keyEnv: 'ANTHROPIC_API_KEY',
     keyUrl: 'https://console.anthropic.com/settings/keys',
     keyName: 'Anthropic',
-    model: 'claude-opus-4-8',
+    model: 'claude-opus-5-5',
+    modelKey: 'claude_model',
   },
 } as const
 
@@ -250,7 +252,7 @@ provider = "${scm}"
 token = "$env:${s.env}"
 
 [agents]
-llm_model   = "${a.model}"
+${a.modelKey.padEnd(11)} = "${a.model}"
 llm_api_key = "$env:${a.keyEnv}"${reviewerPwsh}
 
 [[projects]]
@@ -309,7 +311,7 @@ provider = "${scm}"
 token = "\${${s.env}}"
 
 [agents]
-llm_model   = "${a.model}"
+${a.modelKey.padEnd(11)} = "${a.model}"
 llm_api_key = "\${${a.keyEnv}}"${reviewer}
 
 [[projects]]
@@ -357,7 +359,7 @@ provider = "${scm}"
 token = "$env:${s.env}"
 
 [agents]
-llm_model   = "${a.model}"
+${a.modelKey.padEnd(11)} = "${a.model}"
 llm_api_key = "$env:${a.keyEnv}"${reviewerPwsh}
 
 [[projects]]
@@ -406,7 +408,7 @@ provider = "${scm}"
 token = "\${${s.env}}"
 
 [agents]
-llm_model   = "${a.model}"
+${a.modelKey.padEnd(11)} = "${a.model}"
 llm_api_key = "\${${a.keyEnv}}"${reviewer}
 
 [[projects]]

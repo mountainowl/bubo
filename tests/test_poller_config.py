@@ -35,7 +35,8 @@ def test_default_runtime_config_is_consolidated_in_env_toml() -> None:
     assert "agent" not in config
     assert "telemetry.pricing.default" not in text
     assert "post_summary" not in config
-    assert config["agents"]["llm_model"] == "gpt-5.5"
+    assert config["agents"]["llm_model"] == "gpt-6.1-sol"
+    assert config["agents"]["claude_model"] == "claude-opus-5-5"
     assert config["agents"]["llm_model_effort"] == "medium"
     assert config["poller"]["interval_seconds"] == 900
     assert config["poller"]["outcome_sync_interval_seconds"] == 3600
@@ -100,3 +101,18 @@ def test_toml_provider_used_when_env_override_absent(
     monkeypatch.delenv("BUBO_PROVIDER", raising=False)
 
     assert load_review_config(cfg_file).provider == "github"
+
+
+def test_reviewer_model_label_follows_the_agent_cli() -> None:
+    from bubo.poller import reviewer_model
+    from bubo.review_config import ReviewConfig
+
+    codex = ReviewConfig(model="gpt-6.1-sol", claude_model="claude-opus-5-5")
+    claude = ReviewConfig(
+        reviewer_command=["/usr/local/bin/claude", "-p"],
+        model="gpt-6.1-sol",
+        claude_model="claude-opus-5-5",
+    )
+
+    assert reviewer_model(codex) == "gpt-6.1-sol"
+    assert reviewer_model(claude) == "claude-opus-5-5"
