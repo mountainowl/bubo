@@ -225,7 +225,7 @@ def test_outcome_sync_emits_analytics_once_per_outcome_transition(monkeypatch) -
     monkeypatch.setattr(
         poller.analytics,
         "record_finding_outcome",
-        lambda cfg, *, scm_provider, outcome: captured.append(outcome),
+        lambda cfg, *, scm_provider, outcome, **_: captured.append(outcome),
     )
     original_db = paths.DB
     try:
@@ -1041,5 +1041,115 @@ def test_outcome_sync_exports_explicit_agreement_once(monkeypatch) -> None:
             if event["event"] == "finding_outcome"
         ]
         assert sorted(sent) == ["developer_agreed", "developer_replied"]
+    finally:
+        paths.DB = original_db
+
+
+def test_finding_outcome_event_carries_the_findings_review_dimensions(monkeypatch) -> None:
+    """Outcome rates must be sliceable by model, prompt, category and project."""
+    monkeypatch.setattr(poller.analytics, "analytics_enabled", lambda cfg: True)
+    monkeypatch.setattr(poller.analytics, "flush", lambda: None)
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            with sqlite3.connect(paths.DB) as conn:
+                conn.execute(
+                    "insert into review_findings(project,iid,sha,fingerprint,file,line,status,"
+                    "discussion_id,body,updated_at,type,severity,category,run_id,verified) "
+                    "values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        "group/repo",
+                        1,
+                        "sha",
+                        "fp",
+                        "src/A.py",
+                        1,
+                        "posted",
+                        "disc",
+                        "body",
+                        poller.now(),
+                        "issue",
+                        "blocking",
+                        "Race Condition",
+                        "run-1",
+                        1,
+                    ),
+                )
+                conn.execute(
+                    "insert into review_runs(run_id,project,iid,sha,status,model,prompt_version,"
+                    "review_mode,dry_run,started_at,tone) values(?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        "run-1",
+                        "group/repo",
+                        1,
+                        "sha",
+                        "success",
+                        "gpt-5.5",
+                        "3a1ffd24f2fa",
+                        "diff",
+                        0,
+                        poller.now(),
+                        "formal",
+                    ),
+                )
+            consent = AnalyticsConfig(enabled=True, api_key="phc_test")
+            cfg = ReviewConfig(
+                provider="github",
+                telemetry_config=TelemetryConfig(analytics=consent, emit_outcome_sync=False),
+            )
+            outcome = {
+                "resolved": True,
+                "deleted": False,
+                "developer_replied": False,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "resolved_at": None,
+                "merged_unresolved": False,
+            }
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeProvider(outcome)):
+                    with patch(
+                        "bubo.poller.ReviewTelemetry.from_config", return_value=_SilentTelemetry()
+                    ):
+                        poller.sync_outcomes(limit=1)
+            from bubo.project_analytics import project_id
+
+            expected_project = project_id(
+                analytics.install_id(), "github", cfg.github_api_url, "group/repo"
+            )
+        [props] = [
+            event["properties"]
+            for _, _, event in analytics._pending_events
+            if event["event"] == "finding_outcome"
+        ]
+        assert {
+            key: props.get(key)
+            for key in (
+                "outcome",
+                "finding_type",
+                "severity",
+                "category",
+                "verified",
+                "model",
+                "prompt_version",
+                "tone",
+                "project_id",
+            )
+        } == {
+            "outcome": "resolved",
+            "finding_type": "issue",
+            "severity": "blocking",
+            "category": "concurrency",
+            "verified": True,
+            "model": "gpt-5.5",
+            "prompt_version": "3a1ffd24f2fa",
+            "tone": "formal",
+            "project_id": expected_project,
+        }
+        assert expected_project
+        assert "group/repo" not in repr(props)
     finally:
         paths.DB = original_db
