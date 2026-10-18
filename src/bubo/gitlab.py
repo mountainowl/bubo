@@ -23,7 +23,6 @@ import urllib.parse
 from typing import Any, cast
 
 from bubo import _http
-from bubo.errors import describe
 from bubo.review_config import ReviewConfig
 from bubo.types import JsonObject
 
@@ -54,20 +53,7 @@ def api_pages(base: str, token: str, path: str) -> list[JsonObject]:
     sep = "&" if "?" in path else "?"
     while True:
         data, headers = api(base, token, "GET", f"{path}{sep}per_page=100&page={page}")
-        if not isinstance(data, list):
-            raise RuntimeError(
-                describe(
-                    "GitLab API page did not return a list",
-                    reason=(
-                        "the API returned an unexpected response shape (often an auth error "
-                        "page, a redirect, or an outage rendered as non-JSON)"
-                    ),
-                    fix=(
-                        "check the API URL, token validity/scope, and the host's status; "
-                        "inspect the raw response."
-                    ),
-                )
-            )
+        data = _http.expect_list(data, "GitLab API page did not return a list")
         out.extend(cast(JsonObject, item) for item in data if isinstance(item, dict))
         next_page = headers.get("X-Next-Page") or headers.get("x-next-page")
         if not next_page:
@@ -92,21 +78,7 @@ def merge_requests_updated_after(
 def get_mr(cfg: ReviewConfig, token: str, project: str, iid: int) -> JsonObject:
     encoded = urllib.parse.quote(project, safe="")
     data, _ = api(cfg.gitlab_url, token, "GET", f"/projects/{encoded}/merge_requests/{iid}")
-    if not isinstance(data, dict):
-        raise RuntimeError(
-            describe(
-                "GitLab MR response was not an object",
-                reason=(
-                    "the API returned an unexpected response shape (often an auth error "
-                    "page, a redirect, or an outage rendered as non-JSON)"
-                ),
-                fix=(
-                    "check the API URL, token validity/scope, and the host's status; "
-                    "inspect the raw response."
-                ),
-            )
-        )
-    return cast(JsonObject, data)
+    return _http.expect_dict(data, "GitLab MR response was not an object")
 
 
 def get_mr_diffs(cfg: ReviewConfig, token: str, project: str, iid: int) -> list[JsonObject]:
@@ -131,21 +103,7 @@ def get_mr_discussion(
         "GET",
         f"/projects/{encoded}/merge_requests/{iid}/discussions/{encoded_discussion}",
     )
-    if not isinstance(data, dict):
-        raise RuntimeError(
-            describe(
-                "GitLab discussion response was not an object",
-                reason=(
-                    "the API returned an unexpected response shape (often an auth error "
-                    "page, a redirect, or an outage rendered as non-JSON)"
-                ),
-                fix=(
-                    "check the API URL, token validity/scope, and the host's status; "
-                    "inspect the raw response."
-                ),
-            )
-        )
-    return cast(JsonObject, data)
+    return _http.expect_dict(data, "GitLab discussion response was not an object")
 
 
 def get_mr_discussions(cfg: ReviewConfig, token: str, project: str, iid: int) -> list[JsonObject]:
