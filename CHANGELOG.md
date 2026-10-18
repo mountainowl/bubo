@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.30.1](https://github.com/mountainowl/bubo/compare/v0.30.0...v0.30.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* close five open issues ([#39](https://github.com/mountainowl/bubo/issues/39) [#127](https://github.com/mountainowl/bubo/issues/127) [#135](https://github.com/mountainowl/bubo/issues/135) [#184](https://github.com/mountainowl/bubo/issues/184) [#128](https://github.com/mountainowl/bubo/issues/128)) ([#286](https://github.com/mountainowl/bubo/issues/286)) ([0301598](https://github.com/mountainowl/bubo/commit/030159864895c094fde5b4e6c8ffcd9aa0ad4688))
+* **prompt:** stop standing review conditions from marking reviews incomplete ([#282](https://github.com/mountainowl/bubo/issues/282)) ([7ada142](https://github.com/mountainowl/bubo/commit/7ada1420ac318e0c13365112045eb64b756c5926))
+* **reconcile:** give the fix verifier the history its prompt promises ([#283](https://github.com/mountainowl/bubo/issues/283)) ([5250b36](https://github.com/mountainowl/bubo/commit/5250b3649c90e01ccea8c2a236555274502f4f3b))
+* **review:** give the reviewer the change's diff in its prompt ([#281](https://github.com/mountainowl/bubo/issues/281)) ([8b19c45](https://github.com/mountainowl/bubo/commit/8b19c455ebb9af8d51bf32c9c0052b2d8642b9e6))
+* **skill:** say what the reviewer skill returns when there are no findings ([#284](https://github.com/mountainowl/bubo/issues/284)) ([ca64259](https://github.com/mountainowl/bubo/commit/ca64259d6cad3923d968da4d6454af37feef4999))
+
 ## [0.30.0](https://github.com/mountainowl/bubo/compare/v0.29.2...v0.30.0) (2026-10-18)
 
 
