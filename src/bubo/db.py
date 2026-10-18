@@ -1332,8 +1332,10 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     Each row carries ``prior_outcome`` — the currently-stored outcome flags
     (all ``False`` if never synced) — so the caller can detect the
     ``false -> true`` transition of each dimension and emit analytics exactly
-    once per outcome rather than on every re-check. ``type``, ``severity`` and
-    ``category`` are the finding's own labels, for outcome metrics.
+    once per outcome rather than on every re-check. ``type``, ``severity``,
+    ``category`` and ``verified`` are the finding's own labels, and ``model``,
+    ``prompt_version`` and ``tone`` come from the run that posted it, for
+    outcome metrics.
     """
     with connect_db() as db:
         rows = db.execute(
@@ -1344,11 +1346,13 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
                    coalesce(fo.developer_replied,0), coalesce(fo.disputed,0),
                    coalesce(fo.false_positive,0), coalesce(fo.duplicate,0),
                    rf.type, rf.severity, rf.category,
-                   coalesce(fo.developer_disposition,'unknown')
+                   coalesce(fo.developer_disposition,'unknown'),
+                   rf.verified, rr.model, rr.prompt_version, rr.tone
             from review_findings rf
             left join finding_outcomes fo
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
                 rf.fingerprint
+            left join review_runs rr on rr.run_id = rf.run_id
             where rf.status=? and rf.discussion_id is not null and rf.discussion_id != ''
               and coalesce(fo.deleted,0)=0
             order by
@@ -1379,6 +1383,10 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
             "type": row[12],
             "severity": row[13],
             "category": row[14],
+            "verified": None if row[16] is None else bool(row[16]),
+            "model": row[17],
+            "prompt_version": row[18],
+            "tone": row[19],
         }
         for row in rows
     ]

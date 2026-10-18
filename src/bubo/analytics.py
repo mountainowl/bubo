@@ -34,6 +34,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import tempfile
 import threading
 import uuid
@@ -126,6 +127,9 @@ _ALLOWED_ATTRS = frozenset(
         "operation",
         "metric_value",
         "metric_count",
+        # finding_outcome: which review configuration produced the finding
+        "prompt_version",
+        "verified",
     }
 )
 
@@ -534,7 +538,49 @@ def record_review_completed(
         )
 
 
-def record_finding_outcome(cfg: AnalyticsConfig, *, scm_provider: str, outcome: str) -> None:
+_FINDING_TYPES = frozenset({"issue", "suggestion", "question"})
+_SEVERITIES = frozenset({"blocking", "non-blocking"})
+_PROMPT_VERSION = re.compile(r"[0-9a-f]{12}")
+
+
+def finding_dimensions(finding: dict[str, Any]) -> dict[str, Any]:
+    """Bounded labels of the finding and the review that posted it.
+
+    Free text never escapes: type and severity are enums, the reviewer's
+    free-form category is folded onto the canonical taxonomy, the prompt
+    version must be the 12-hex digest Bubo itself writes, and tone must be a
+    configured voice. Model names go through the same ``_clean`` chokepoint as
+    on ``review_completed``.
+    """
+    from bubo.findings import normalize_category
+    from bubo.review_config import VALID_TONES
+
+    finding_type = str(finding.get("type") or "").strip().lower()
+    severity = str(finding.get("severity") or "").strip().lower().replace("_", "-")
+    prompt = finding.get("prompt_version")
+    tone = finding.get("tone")
+    verified = finding.get("verified")
+    return {
+        "finding_type": finding_type if finding_type in _FINDING_TYPES else "unknown",
+        "severity": severity if severity in _SEVERITIES else "unknown",
+        "category": normalize_category(finding.get("category")),
+        "verified": verified if isinstance(verified, bool) else None,
+        "model": finding.get("model"),
+        "prompt_version": (
+            prompt if isinstance(prompt, str) and _PROMPT_VERSION.fullmatch(prompt) else None
+        ),
+        "tone": tone if tone in VALID_TONES else None,
+    }
+
+
+def record_finding_outcome(
+    cfg: AnalyticsConfig,
+    *,
+    scm_provider: str,
+    outcome: str,
+    finding: dict[str, Any] | None = None,
+    project_id: str | None = None,
+) -> None:
     """One event per developer-engagement outcome — emitted at sync time.
 
     The caller (``bubo.poller.sync_outcomes``) emits this only on the
@@ -545,11 +591,20 @@ def record_finding_outcome(cfg: AnalyticsConfig, *, scm_provider: str, outcome: 
     every-sync emit would multiply each outcome's count. Emitting once per
     transition makes a PostHog ``count`` of ``outcome=resolved`` match the
     distinct count of resolved findings in SQLite.
+
+    ``finding`` adds :func:`finding_dimensions`; ``project_id`` is the same
+    random per-project id ``review_completed`` carries, so outcomes join to
+    the project profile without sending its name.
     """
     _emit(
         cfg,
         "finding_outcome",
-        {"scm_provider": _provider(scm_provider), "outcome": _outcome(outcome)},
+        {
+            **(finding_dimensions(finding) if finding else {}),
+            "project_id": project_id,
+            "scm_provider": _provider(scm_provider),
+            "outcome": _outcome(outcome),
+        },
     )
 
 

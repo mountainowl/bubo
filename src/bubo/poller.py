@@ -2509,6 +2509,17 @@ def _accepts_outcome_memo(provider: ScmProvider) -> bool:
 
 
 @admitted(writable=True)
+def outcome_project_id(cfg: ReviewConfig, project: str) -> str | None:
+    """The random analytics project id ``review_completed`` used for ``project``."""
+    from bubo.project_analytics import project_id
+
+    installation = analytics.install_id()
+    if installation is None:
+        return None
+    base = cfg.github_api_url if cfg.provider == "github" else cfg.gitlab_url
+    return project_id(installation, cfg.provider, base, project)
+
+
 def sync_outcomes(limit: int = 200) -> int:
     """Refresh provider-side outcomes for up to ``limit`` posted findings.
 
@@ -2643,7 +2654,11 @@ def sync_outcomes(limit: int = 200) -> int:
                     )
                 if analytics_on:
                     analytics.record_finding_outcome(
-                        cfg.analytics_config, scm_provider=cfg.provider, outcome=name
+                        cfg.analytics_config,
+                        scm_provider=cfg.provider,
+                        outcome=name,
+                        finding=finding,
+                        project_id=outcome_project_id(cfg, project),
                     )
             synced += 1
         except Exception as exc:
