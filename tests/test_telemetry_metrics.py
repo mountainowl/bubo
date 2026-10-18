@@ -155,3 +155,11 @@ def test_configure_otel_can_retry_after_init_failure(monkeypatch) -> None:
         metrics_module.configure_otel(TelemetryConfig(analytics=AnalyticsConfig(enabled=True)))
         == expected
     )
+
+
+def test_add_usage_keeps_unknown_counters_unknown() -> None:
+    from bubo.telemetry import add_usage
+
+    assert add_usage(TokenUsage(input=1, total=1), TokenUsage(input=2, output=3, total=5)) == (
+        TokenUsage(input=3, output=3, cached=None, total=6)
+    )

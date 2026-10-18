@@ -350,6 +350,12 @@ class ReviewConfig:
     service_outcome_sync_interval_seconds: int = 3600
     service_outcome_sync_limit: int = 200
 
+    def model_for(self, command: list[str]) -> str | None:
+        """The model an agent ``command`` runs: Claude Code's own, else ``llm_model``."""
+        if command and Path(command[0]).stem == "claude":
+            return self.claude_model
+        return self.model
+
 
 def load_review_config(
     config_path: Path, log_event: Callable[..., None] | None = None

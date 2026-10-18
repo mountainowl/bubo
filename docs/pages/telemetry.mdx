@@ -88,6 +88,11 @@ itself.
   fetched at most once a day and cached next to the database. If the download
   fails, the cached copy is used.
 
+A review's cost covers every agent call it makes: the review itself, finding
+verification, fixed-finding reconciliation, and the classifier that later reads
+developer replies to its findings. Each call is also logged as an `agent_usage`
+event with its `operation`.
+
 Optional measurement and pricing settings:
 
 ```toml
