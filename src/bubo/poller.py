@@ -1981,6 +1981,7 @@ def worker(job: Path) -> int:
     queued_seconds: float | None = None
     project_profile: dict[str, Any] = {}
     review_run_started = False
+    review_prompt_version: str | None = None
     posted = planned = skipped = 0
 
     def defer_review_run() -> None:
@@ -2020,13 +2021,14 @@ def worker(job: Path) -> int:
         )
         record(project, iid, sha, ReviewStatus.RUNNING, str(report))
         rendered_prompt = write_rendered_meta_prompt(cfg)
+        review_prompt_version = prompt_version(rendered_prompt)
         record_review_run_start(
             run_id=run_id,
             project=project,
             iid=iid,
             sha=sha,
             model=model,
-            prompt_version=prompt_version(rendered_prompt),
+            prompt_version=review_prompt_version,
             review_mode=ReviewMode.DIFF,
             dry_run=cfg.dry_run,
             tone=cfg.tone,
@@ -2271,6 +2273,7 @@ def worker(job: Path) -> int:
                 cost_usd=cost_usd,
                 tone=cfg.tone,
                 lines_reviewed=lines_reviewed,
+                prompt_version=review_prompt_version,
             )
             analytics.record_review_completed(
                 cfg.analytics_config,
@@ -2295,6 +2298,7 @@ def worker(job: Path) -> int:
                 languages=languages,
                 queue_seconds=queued_seconds,
                 profile=project_profile,
+                prompt_version=review_prompt_version,
             )
             log(
                 "review_done",
@@ -2381,6 +2385,7 @@ def worker(job: Path) -> int:
                 cost_usd=cost_usd,
                 tone=cfg.tone if cfg is not None else None,
                 lines_reviewed=lines_reviewed,
+                prompt_version=review_prompt_version,
             )
         if cfg is not None:
             analytics.record_review_completed(
@@ -2406,6 +2411,7 @@ def worker(job: Path) -> int:
                 languages=languages,
                 queue_seconds=queued_seconds,
                 profile=project_profile,
+                prompt_version=review_prompt_version,
             )
         log(
             "review_failed",

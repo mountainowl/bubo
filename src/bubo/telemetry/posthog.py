@@ -95,6 +95,8 @@ _PROVIDERS_ALLOWED = frozenset(
     }
 )
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}\Z")
+# bubo.db.prompt_version: a 12-hex digest of the rendered prompt, never its text.
+_PROMPT_VERSION = re.compile(r"[0-9a-f]{12}")
 
 
 def safe_context(attrs):
@@ -193,6 +195,9 @@ def safe_context(attrs):
         known = sorted(set(languages.split("+")))
         if known and len(known) <= 8 and all(value in _LANGUAGES for value in known):
             out["languages"] = "+".join(known)
+    prompt = attrs.get("prompt_version")
+    if isinstance(prompt, str) and _PROMPT_VERSION.fullmatch(prompt):
+        out["prompt_version"] = prompt
     operation = attrs.get("operation")
     if operation in ("input", "output", "cached", "total"):
         out["operation"] = operation
