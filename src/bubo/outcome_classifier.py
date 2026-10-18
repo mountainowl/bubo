@@ -22,11 +22,11 @@ into ``--sync-outcomes``.
 
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Mapping
 
 from bubo.events import log
+from bubo.json_salvage import last_json_object_with_key
 from bubo.paths import ROOT
 from bubo.review_config import ReviewConfig
 from bubo.subproc import run_bounded
@@ -88,9 +88,7 @@ def _error() -> JsonObject:
     return dict(_ERROR)
 
 
-def classifier_env(
-    source: Mapping[str, str], cfg: ReviewConfig | None = None
-) -> dict[str, str]:
+def classifier_env(source: Mapping[str, str], cfg: ReviewConfig | None = None) -> dict[str, str]:
     """Build the env for the classifier subprocess.
 
     Credentials remain stripped by default. As with the main reviewer, a
@@ -140,21 +138,11 @@ def parse_verdict(stdout: str) -> JsonObject:
     """Extract the last JSON object carrying a ``verdict`` key from stdout.
 
     Agent CLIs interleave reasoning/tool transcript with the answer, and the
-    real answer comes last — so we scan every ``{`` and keep the final
-    object that has a ``verdict`` key. Unknown verdict strings collapse to
+    real answer comes last — so the object with a ``verdict`` key that
+    starts last wins. Unknown verdict strings collapse to
     ``unclear``.
     """
-    decoder = json.JSONDecoder()
-    found: JsonObject | None = None
-    for index, char in enumerate(stdout):
-        if char != "{":
-            continue
-        try:
-            candidate, _ = decoder.raw_decode(stdout[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(candidate, dict) and "verdict" in candidate:
-            found = candidate
+    found = last_json_object_with_key(stdout, "verdict")
     if found is None:
         return _unclear()
     verdict = str(found.get("verdict", "unclear")).strip().lower()
