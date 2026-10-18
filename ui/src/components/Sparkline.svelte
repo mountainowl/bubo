@@ -21,7 +21,7 @@
 </script>
 
 {#if values.length}
-  <svg {width} {height} viewBox={`0 0 ${width} ${height}`} class="overflow-visible">
+  <svg {width} {height} viewBox={`0 0 ${width} ${height}`} class="max-w-full overflow-visible" role="img" aria-label={`Trend: ${values.join(", ")}`}>
     <polyline
       fill="none"
       {stroke}

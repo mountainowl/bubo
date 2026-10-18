@@ -47,6 +47,7 @@ from bubo.config_values import section
 from bubo.db import init_db
 from bubo.errors import describe
 from bubo.events import log
+from bubo.update_admission import MaintenanceInProgress, activity
 
 # ---------------------------------------------------------------------------
 # Asset resolution — packaged via importlib.resources
@@ -97,7 +98,7 @@ def _asset(*parts: str) -> Traversable | Path:
             root = root / part
         if root.is_file() or root.is_dir():
             return root
-    except (ModuleNotFoundError, FileNotFoundError):
+    except ModuleNotFoundError, FileNotFoundError:
         # Editable install: the packaged `_assets/` subpackage doesn't exist
         # on disk (hatchling force-includes it only into the built wheel), so
         # resolution falls through to the repo-root fallback below.
@@ -441,7 +442,9 @@ def _retarget_paths(root: Path) -> None:
     """
     paths.ROOT = root
     paths.CONFIG = root / "config" / "env.toml"
-    state = root / "var"
+    from .update_helper import _state_for_root
+
+    state = _state_for_root(root).parent
     paths.DB = state / "state" / "reviewer.sqlite"
     paths.WORK = state / "work"
     paths.REPORTS = state / "reports"
@@ -466,17 +469,21 @@ def cmd_init(args: argparse.Namespace) -> int:
             note = f"  # {action.note}" if action.note else ""
             print(f"{action.kind:>11}  {action.target}{note}")
         return 0
-    for action in actions:
-        _execute(action, subs)
-        if action.kind == "notice":
-            print(f"warning: {action.note}: {action.target}", file=sys.stderr)
-        log(
-            "init_action",
-            kind=action.kind,
-            target=str(action.target),
-            note=action.note,
-        )
+    with activity(writable=True):
+        for action in actions:
+            _execute(action, subs)
+            if action.kind == "notice":
+                print(f"warning: {action.note}: {action.target}", file=sys.stderr)
+            log(
+                "init_action",
+                kind=action.kind,
+                target=str(action.target),
+                note=action.note,
+            )
     print(f"bubo initialized under {root}", file=sys.stderr)
+    from bubo.update_helper import ensure_registered
+
+    ensure_registered(root)
     if not args.no_agent_config:
         print(
             "next steps: edit config/env.toml (tokens), then run "
@@ -582,32 +589,42 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     root = Path(args.root) if args.root else paths.ROOT
     _retarget_paths(root)
-    try:
-        rep = report.build_report(
-            since_hours=args.since_hours,
-            since=args.since,
-            until=args.until,
-            project=args.project,
-            limit=args.limit,
-        )
-        output = (
-            report.to_csv(rep, section=args.section)
-            if args.format == "csv"
-            else report.to_json(rep)
-        )
-    except (sqlite3.OperationalError, FileNotFoundError) as exc:
-        print(
-            f"bubo report: cannot read state DB at {paths.DB} ({exc}); "
-            "run `bubo init` first",
-            file=sys.stderr,
-        )
-        return 1
-    except ValueError as exc:
-        # Bad --since/--until (unparseable date) or --section (not CSV-renderable).
-        print(f"bubo report: {exc}", file=sys.stderr)
-        return 2
-    print(output)
-    return 0
+    with activity():
+        try:
+            rep = report.build_report(
+                since_hours=args.since_hours,
+                since=args.since,
+                until=args.until,
+                project=args.project,
+                limit=args.limit,
+            )
+            output = (
+                report.to_csv(rep, section=args.section)
+                if args.format == "csv"
+                else report.to_json(rep)
+            )
+        except (sqlite3.OperationalError, FileNotFoundError) as exc:
+            print(
+                f"bubo report: cannot read state DB at {paths.DB} ({exc}); run `bubo init` first",
+                file=sys.stderr,
+            )
+            return 1
+        except ValueError as exc:
+            # Bad --since/--until (unparseable date) or --section (not CSV-renderable).
+            print(f"bubo report: {exc}", file=sys.stderr)
+            return 2
+        print(output)
+        return 0
+
+
+def cmd_ui_serve(args: argparse.Namespace) -> int:
+    """Serve the local dashboard while retaining safe package ownership."""
+    from bubo.ui_server import serve
+
+    if getattr(args, "root", None) is not None:
+        _retarget_paths(args.root)
+    with activity():
+        return serve(_asset("ui").joinpath("index.html").read_bytes(), port=args.port)
 
 
 def cmd_ui_export(args: argparse.Namespace) -> int:
@@ -633,58 +650,78 @@ def cmd_ui_export(args: argparse.Namespace) -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        data = ui_export.build_data()
-    except OSError as exc:
-        # An EXISTING DB file that cannot be READ (permission denied, unreadable
-        # mount) raises OSError from the read-only snapshot copy. Surfacing this
-        # is deliberate: silently writing an empty data.json would hide real
-        # data in an auditable tool.
-        print(
-            f"bubo ui-export: cannot read state DB at {paths.DB} ({exc}); "
-            "check permissions / mount — nothing was written",
-            file=sys.stderr,
-        )
-        return 1
-    data_json = report.to_json(data)
-    (out_dir / "data.json").write_text(data_json)
-    # file:// fallback: browsers block fetch() of a sibling file under the
-    # file: scheme, so also inline the same bytes as a global the SPA reads
-    # when fetch fails. Written as a JS assignment, not JSON.
-    (out_dir / "data.js").write_text(f"window.__BUBO_DATA__ = {data_json};\n")
+    with activity():
+        try:
+            data = ui_export.build_data()
+        except OSError as exc:
+            # An EXISTING DB file that cannot be READ (permission denied, unreadable
+            # mount) raises OSError from the read-only snapshot copy. Surfacing this
+            # is deliberate: silently writing an empty data.json would hide real
+            # data in an auditable tool.
+            print(
+                f"bubo ui-export: cannot read state DB at {paths.DB} ({exc}); "
+                "check permissions / mount — nothing was written",
+                file=sys.stderr,
+            )
+            return 1
+        data_json = report.to_json(data)
+        (out_dir / "data.json").write_text(data_json)
+        # file:// fallback: browsers block fetch() of a sibling file under the
+        # file: scheme, so also inline the same bytes as a global the SPA reads
+        # when fetch fails. Written as a JS assignment, not JSON.
+        (out_dir / "data.js").write_text(f"window.__BUBO_DATA__ = {data_json};\n")
 
-    try:
-        spa = _asset("ui")
-    except FileNotFoundError:
+        try:
+            spa = _asset("ui")
+        except FileNotFoundError:
+            print(
+                "bubo ui-export: built UI assets not found — wrote data.json only. "
+                "Build the SPA with `npm --prefix ui install && npm --prefix ui run build` "
+                "and re-run, or install a release wheel (which ships the assets).",
+                file=sys.stderr,
+            )
+            print(f"bubo ui-export: wrote {out_dir / 'data.json'}", file=sys.stderr)
+            return 0
+
+        # Copy every built asset (index.html + assets/) next to data.json so the
+        # directory is self-contained and openable. Reuses the same Traversable
+        # copy the init runtime-copies use.
+        for entry in spa.iterdir():
+            dest = out_dir / entry.name
+            if entry.is_dir():
+                if dest.exists():
+                    shutil.rmtree(dest)
+                _copy_traversable(entry, dest)
+            else:
+                dest.write_bytes(entry.read_bytes())
+
         print(
-            "bubo ui-export: built UI assets not found — wrote data.json only. "
-            "Build the SPA with `npm --prefix ui install && npm --prefix ui run build` "
-            "and re-run, or install a release wheel (which ships the assets).",
+            f"bubo ui-export: wrote static UI to {out_dir} — open {out_dir / 'index.html'}",
             file=sys.stderr,
         )
-        print(f"bubo ui-export: wrote {out_dir / 'data.json'}", file=sys.stderr)
         return 0
-
-    # Copy every built asset (index.html + assets/) next to data.json so the
-    # directory is self-contained and openable. Reuses the same Traversable
-    # copy the init runtime-copies use.
-    for entry in spa.iterdir():
-        dest = out_dir / entry.name
-        if entry.is_dir():
-            if dest.exists():
-                shutil.rmtree(dest)
-            _copy_traversable(entry, dest)
-        else:
-            dest.write_bytes(entry.read_bytes())
-
-    print(f"bubo ui-export: wrote static UI to {out_dir} — open {out_dir / 'index.html'}",
-          file=sys.stderr)
-    return 0
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """The control dispatcher must not hold a shared activity lease."""
+    from bubo.update_helper import cli_command
+
+    root = Path(args.root) if args.root is not None else paths.ROOT
+    if (args.container or args.docker_socket) and args.root is None:
+        print("Docker update configuration requires an explicit --root host path.")
+        return 1
+    return cli_command(
+        root,
+        args.update_action or "update",
+        args.attempt_id,
+        container=args.container,
+        docker_socket=args.docker_socket,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -693,6 +730,20 @@ def build_parser() -> argparse.ArgumentParser:
         description="Install and verify the bubo runtime on this host.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    update_p = subparsers.add_parser(
+        "update", help="Update safely, even when automatic updates are off."
+    )
+    update_p.add_argument("--root", type=Path, default=None, help="Bubo runtime root")
+    update_p.add_argument("--container", help="Docker container name or ID for host setup")
+    update_p.add_argument("--docker-socket", type=Path, help="Local Docker socket for host setup")
+    update_p.add_argument(
+        "update_action",
+        nargs="?",
+        choices=["status", "report", "retry-failures", "configure", "uninstall-helper"],
+    )
+    update_p.add_argument("attempt_id", nargs="?")
+    update_p.set_defaults(func=cmd_update)
 
     init_p = subparsers.add_parser(
         "init", help="Place runtime assets and initialize state for this host."
@@ -788,6 +839,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="output directory for the static bundle (default: ./bubo-ui)",
     )
     ui_export_p.set_defaults(func=cmd_ui_export)
+    ui_serve_p = subparsers.add_parser(
+        "ui-serve", help="Open a read-only live local metrics dashboard"
+    )
+    ui_serve_p.add_argument(
+        "--root", type=Path, default=None, help="Bubo root containing config/ and var/"
+    )
+    ui_serve_p.add_argument(
+        "--port", type=int, default=0, help="Loopback port (default: choose a free port)"
+    )
+    ui_serve_p.set_defaults(func=cmd_ui_serve)
 
     return parser
 
@@ -795,7 +856,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except MaintenanceInProgress as exc:
+        print(str(exc), file=sys.stderr)
+        return 75
 
 
 if __name__ == "__main__":

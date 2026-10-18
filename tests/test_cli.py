@@ -403,3 +403,19 @@ def test_cmd_init_db_has_review_findings_table(isolated_root: Path) -> None:
     # the canonical reviewed_mrs / review_findings tables to exist.
     assert "reviewed_mrs" in names
     assert "review_findings" in names
+
+
+@pytest.mark.parametrize("custom", ["runtime", "absolute"])
+def test_cli_retargets_custom_state_consistently(isolated_root, monkeypatch, tmp_path, custom):
+    from bubo.update_helper import _state_for_root
+
+    monkeypatch.delenv("BUBO_BASE_DIR", raising=False)
+    base = tmp_path / "external-volume" if custom == "absolute" else isolated_root / "runtime"
+    setting = str(base) if custom == "absolute" else "runtime"
+    (isolated_root / "config").mkdir(parents=True)
+    (isolated_root / "config/env.toml").write_text(f'[poller]\nstate_dir = "{setting}"\n')
+    cli._retarget_paths(isolated_root)
+    assert _state_for_root(isolated_root) / "reviewer.sqlite" == paths.DB
+    assert base / "state/reviewer.sqlite" == paths.DB
+    assert base / "work" == paths.WORK
+    assert not base.exists()

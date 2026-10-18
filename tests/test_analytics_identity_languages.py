@@ -169,15 +169,20 @@ def test_opt_out_does_not_create_identity():
     assert not analytics.paths.DB.parent.exists()
 
 
-def test_otel_resource_uses_same_identity(monkeypatch):
-    from bubo.telemetry import metrics
-    from bubo.telemetry.config import TelemetryConfig
+def test_otel_posthog_event_uses_same_identity(monkeypatch):
+    from types import SimpleNamespace
 
-    monkeypatch.setattr(metrics, "_CONFIGURED", False)
-    resource = Mock(wraps=metrics.Resource.create)
-    monkeypatch.setattr(metrics.Resource, "create", resource)
-    monkeypatch.setattr(metrics.trace, "set_tracer_provider", Mock())
-    metrics.configure_otel(TelemetryConfig(enabled=True))
-    attrs = resource.call_args.args[0]
-    assert attrs["service.instance.id"] == attrs["install_id"]
-    assert attrs["distinct_id"] == analytics.install_id()
+    from bubo.telemetry.posthog import PostHogSpanExporter
+
+    PostHogSpanExporter(AnalyticsConfig()).export(
+        [
+            SimpleNamespace(
+                name="llm_review.run",
+                start_time=0,
+                end_time=1_000_000_000,
+            )
+        ]
+    )
+    event = analytics._pending_events[-1][2]
+    assert event["properties"]["distinct_id"] == analytics.install_id()
+    assert event["properties"]["bubo_version"] == analytics.installed_version()

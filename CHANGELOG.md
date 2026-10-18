@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.29.2](https://github.com/mountainowl/bubo/compare/v0.29.1...v0.29.2) (2026-10-18)
+
+
+### Bug Fixes
+
+* **outcomes:** let the reply classifier record explicit agreement ([#262](https://github.com/mountainowl/bubo/issues/262)) ([0cd8158](https://github.com/mountainowl/bubo/commit/0cd8158c2f0b50561627bc123d79d10c95c37b4b)), closes [#253](https://github.com/mountainowl/bubo/issues/253)
+
+
+### Performance Improvements
+
+* **db:** add secondary indexes to the state DB ([#259](https://github.com/mountainowl/bubo/issues/259)) ([bd9f181](https://github.com/mountainowl/bubo/commit/bd9f181f34607e669684f339d35301fc791cb233)), closes [#251](https://github.com/mountainowl/bubo/issues/251)
+* **findings:** stop quadratic JSON salvage scans on large transcripts ([#260](https://github.com/mountainowl/bubo/issues/260)) ([80dff70](https://github.com/mountainowl/bubo/commit/80dff705b4cb0c6cb102150bd1db2eac992585e4)), closes [#252](https://github.com/mountainowl/bubo/issues/252)
+* **scm:** cut redundant SCM API calls in review and outcome sync ([#263](https://github.com/mountainowl/bubo/issues/263)) ([faa648a](https://github.com/mountainowl/bubo/commit/faa648a258f59c51e524f70618b4dec684271af7)), closes [#255](https://github.com/mountainowl/bubo/issues/255)
+* **scm:** per-project git mirror, one review per PR, and re-review rules ([#265](https://github.com/mountainowl/bubo/issues/265)) ([1902c7a](https://github.com/mountainowl/bubo/commit/1902c7a356692122ab17a61073238a9602448710)), closes [#254](https://github.com/mountainowl/bubo/issues/254)
+
+
+### Documentation
+
+* move internal reference notes to enterprise ([cb03b66](https://github.com/mountainowl/bubo/commit/cb03b66c3fa6d0e6e4b4f78923505b46635b1013))
+
+## [0.29.1](https://github.com/mountainowl/bubo/compare/v0.29.0...v0.29.1) (2026-10-18)
+
+
+### Documentation
+
+* remove metrics and ROI link from README ([0cd8661](https://github.com/mountainowl/bubo/commit/0cd86618b0e030bcff897f6c1be12f720fb7378e))
+* simplify README features and deployment guidance ([#258](https://github.com/mountainowl/bubo/issues/258)) ([2d50ab5](https://github.com/mountainowl/bubo/commit/2d50ab5479b6e758117401c80a51c7f310abb394))
+
+## [0.29.0](https://github.com/mountainowl/bubo/compare/v0.28.4...v0.29.0) (2026-10-18)
+
+
+### Features
+
+* add idle updates and review operations dashboard ([#257](https://github.com/mountainowl/bubo/issues/257)) ([97501ad](https://github.com/mountainowl/bubo/commit/97501adc83fb1d9e9f46a021e99b0f2c3ca5b556))
+
+
+### Documentation
+
+* add search metadata and verified sitemap generation ([#249](https://github.com/mountainowl/bubo/issues/249)) ([79ee646](https://github.com/mountainowl/bubo/commit/79ee64646cf376258bd3affb616217b3db70c30e))
+
 ## [0.28.4](https://github.com/mountainowl/bubo/compare/v0.28.3...v0.28.4) (2026-10-16)
 
 

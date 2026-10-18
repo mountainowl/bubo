@@ -10,13 +10,11 @@
   import Dashboard from "./views/Dashboard.svelte";
   import Reviews from "./views/Reviews.svelte";
   import Reports from "./views/Reports.svelte";
-  import Config from "./views/Config.svelte";
 
   const TABS = [
     { id: "dashboard", label: "Dashboard" },
-    { id: "reviews", label: "Reviews" },
+    { id: "reviews", label: "Activity" },
     { id: "reports", label: "Reports" },
-    { id: "config", label: "Config" },
   ];
 
   let data = $state(null);
@@ -34,17 +32,31 @@
 
   // One-time: load the snapshot, wire iframe height + theme sync.
   $effect(() => {
-    loadSnapshot()
-      .then((d) => (data = d))
-      .catch((e) => (error = String(e)));
+    let stopped = false;
+    let timer;
+    async function refresh() {
+      try {
+        const next = await loadSnapshot();
+        if (stopped) return;
+        data = next;
+        error = null;
+        if (next.meta?.live) timer = setTimeout(refresh, 5000);
+      } catch {
+        if (stopped) return;
+        error = "Data is unavailable. Check the local dashboard process or regenerate the snapshot.";
+        timer = setTimeout(refresh, 5000);
+      }
+    }
+    refresh();
     if (isEmbed) {
       startHeightSync();
       listenForThemeSync((t) => (theme = t));
     }
+    return () => { stopped = true; clearTimeout(timer); };
   });
 
-  function openReview(r) {
-    selectedReview = r;
+  function openReview(r, focusFingerprint = null) {
+    selectedReview = { ...r, focusFingerprint };
     tab = "reviews";
   }
 
@@ -55,15 +67,16 @@
 
 <div class="mx-auto max-w-6xl p-4 sm:p-6">
   {#if !isEmbed}
-    <header class="mb-5 flex items-center gap-4">
+    <header class="mb-8 flex flex-wrap items-center gap-x-8 gap-y-3 border-b border-border pb-4">
       <div class="flex items-center gap-2">
         <span class="text-xl font-bold text-brand">bubo</span>
         <span class="text-sm text-muted">operator</span>
       </div>
-      <nav class="flex gap-1">
+      <nav aria-label="Dashboard sections" class="order-3 flex w-full flex-wrap gap-5 sm:order-none sm:w-auto">
         {#each TABS as t (t.id)}
           <button
-            class="rounded-[var(--radius-token)] px-3 py-1.5 text-sm font-medium {tab === t.id ? 'bg-brand text-brand-fg' : 'text-muted hover:bg-surface-2'}"
+            class="border-b-2 py-2 text-sm font-medium transition-colors {tab === t.id ? 'border-brand text-text' : 'border-transparent text-muted hover:text-text'}"
+            aria-current={tab === t.id ? "page" : undefined}
             onclick={() => (tab = t.id)}
           >
             {t.label}
@@ -71,20 +84,22 @@
         {/each}
       </nav>
       <button
-        class="ml-auto rounded-[var(--radius-token)] border border-border px-2 py-1 text-sm"
+        class="ml-auto rounded-full p-2 text-muted hover:bg-surface-2 hover:text-text"
         onclick={toggleTheme}
         title="Toggle theme"
+        aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
       >
         {theme === "dark" ? "☀" : "☾"}
       </button>
     </header>
   {:else}
     <!-- Embedded: minimal tab strip only, no branding chrome. -->
-    <nav class="mb-4 flex gap-1">
+    <nav aria-label="Dashboard sections" class="mb-6 flex flex-wrap gap-5">
       {#each TABS as t (t.id)}
         <button
-          class="rounded-[var(--radius-token)] px-2.5 py-1 text-xs font-medium {tab === t.id ? 'bg-brand text-brand-fg' : 'text-muted hover:bg-surface-2'}"
-          onclick={() => (tab = t.id)}
+          class="border-b-2 py-2 text-sm font-medium {tab === t.id ? 'border-brand text-text' : 'border-transparent text-muted hover:text-text'}"
+          aria-current={tab === t.id ? "page" : undefined}
+            onclick={() => (tab = t.id)}
         >
           {t.label}
         </button>
@@ -103,19 +118,17 @@
     <p class="text-sm text-muted">Loading snapshot…</p>
   {:else}
     {#if tab === "dashboard"}
-      <Dashboard {data} onopen={openReview} />
+      <Dashboard {data} onopen={openReview} onreviews={() => { selectedReview = null; tab = "reviews"; }} />
     {:else if tab === "reviews"}
       <Reviews {data} bind:selected={selectedReview} />
     {:else if tab === "reports"}
-      <Reports {data} />
-    {:else if tab === "config"}
-      <Config {data} />
+      <Reports {data} onopen={openReview} />
     {/if}
 
     {#if !isEmbed}
       <footer class="mt-8 text-xs text-muted">
         Snapshot {data.meta?.generated_at} · schema v{data.meta?.schema_version} ·
-        read-only export (no live data, no config write)
+        {data.meta?.live ? "Live local view · refreshes every 5 seconds" : "Read-only snapshot"}
       </footer>
     {/if}
   {/if}

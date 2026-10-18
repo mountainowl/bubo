@@ -30,6 +30,7 @@ from bubo.config_values import (
     confidence_map,
     confidence_threshold,
     lower_string_list,
+    non_negative_int,
     one_of,
     positive_int,
     section,
@@ -109,6 +110,20 @@ VALID_MODES = ("collaborate", "gate")
 # impossible bar — calibration *raises* the bar, it never silences a category.
 DEFAULT_CALIBRATE_MAX_CONFIDENCE = 0.97
 
+# What happens when a change gets new commits after Bubo reviewed it (#254).
+# These two defaults are the product decision, kept here as one-line changes:
+#   * ``rereview``: ``full`` re-reviews the whole change on every new head
+#     (the historical behaviour); ``incremental`` reviews only the commits
+#     since the last completed review and reconciles earlier findings;
+#     ``off`` reviews only the first commit of each change.
+#   * ``settle_seconds``: start a review only once the head has been unchanged
+#     this long (debounces bursts of pushes); ``0`` starts immediately.
+# The issue proposes ``incremental`` / ``300``; pending sign-off the defaults
+# keep today's behaviour.
+DEFAULT_REREVIEW = "full"
+VALID_REREVIEW = ("full", "incremental", "off")
+DEFAULT_SETTLE_SECONDS = 0
+
 
 @dataclass(frozen=True, slots=True)
 class ReviewConfig:
@@ -163,8 +178,7 @@ class ReviewConfig:
         Parsed :class:`~bubo.analytics_config.AnalyticsConfig` block — the
         anonymous, **on-by-default** usage analytics ("help improve Bubo").
         Sends numbers only (no code, paths, repo names, or text); opt out via
-        ``[analytics] enabled = false``, ``BUBO_ANALYTICS=0``, or
-        ``DO_NOT_TRACK=1``. See :mod:`bubo.analytics`.
+        ``[analytics] enabled = false``. See :mod:`bubo.analytics`.
     governance_config:
         Parsed :class:`~bubo.governance_config.GovernanceConfig` block —
         the opt-in, off-by-default AI-provenance / governance surface. In its
@@ -292,6 +306,23 @@ class ReviewConfig:
         gets its own budget; a check that times out is treated as *failed to
         run* (the finding posts unverified), not as a refutation. Only
         consulted when ``verify_findings`` is ``True``.
+    rereview:
+        Re-review policy when a change gets new commits after a completed
+        review, one of :data:`VALID_REREVIEW` (default
+        :data:`DEFAULT_REREVIEW`). ``full`` reviews the whole change again;
+        ``incremental`` asks the agent for findings only in the commits since
+        the last completed review (the full change diff stays context),
+        drops findings outside that range, and runs prior-finding
+        reconciliation as if ``reconcile_fixed_findings`` were on; ``off``
+        reviews only the first commit of each change. Every mode runs at most
+        one review per change at a time, never posts on a head that moved,
+        and skips findings that duplicate an open Bubo thread.
+    settle_seconds:
+        Debounce, in seconds: a new head is reviewed only once it has been
+        unchanged for this long, measured from when the poller first saw it,
+        so a burst of pushes produces one review. ``0`` (default) starts
+        immediately. With a poll interval longer than this, the effective
+        wait is the next poll after the window.
     verify_command:
         Argv prefix for the verifier subprocess. Empty (the default) reuses
         ``reviewer_command`` — the weaker, correlated mode. Set this to a
@@ -316,6 +347,7 @@ class ReviewConfig:
     post_summary: bool = False
     telemetry_config: TelemetryConfig = field(default_factory=TelemetryConfig)
     analytics_config: AnalyticsConfig = field(default_factory=AnalyticsConfig)
+    auto_update: bool = True
     governance_config: GovernanceConfig = field(default_factory=GovernanceConfig)
     projects: list[str] = field(default_factory=list)
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
@@ -342,6 +374,8 @@ class ReviewConfig:
     reconcile_timeout_seconds: int = 300
     reconcile_lease_seconds: int = 300
     reconcile_command: list[str] = field(default_factory=list)
+    rereview: str = DEFAULT_REREVIEW
+    settle_seconds: int = DEFAULT_SETTLE_SECONDS
     subscription_circuit: CircuitConfig = field(default_factory=CircuitConfig)
     service_poll_interval_seconds: int = 900
     service_outcome_sync_interval_seconds: int = 3600
@@ -386,9 +420,7 @@ def load_review_config(
     return review_config_from_dict(raw, log_event=log_event)
 
 
-def _agent_model_effort(
-    agent: dict[str, Any], log_event: Callable[..., None] | None
-) -> str | None:
+def _agent_model_effort(agent: dict[str, Any], log_event: Callable[..., None] | None) -> str | None:
     """Read ``[agents].llm_model_effort``, falling back to the deprecated
     ``reasoning_effort`` key. Emits a ``config_key_deprecated`` event when the
     old key is the one in use so operators get a nudge to rename it.
@@ -440,7 +472,7 @@ def review_config_from_dict(
     try:
         telemetry_config = telemetry_config_from_dict(raw)
     except (TypeError, ValueError) as exc:
-        telemetry_config = TelemetryConfig(enabled=False)
+        telemetry_config = TelemetryConfig(analytics=AnalyticsConfig(enabled=False))
         if log_event is not None:
             log_event("telemetry_config_disabled", error=str(exc))
 
@@ -470,6 +502,7 @@ def review_config_from_dict(
         llm_base_url=str(agent["llm_base_url"]) if agent.get("llm_base_url") else None,
         telemetry_config=telemetry_config,
         analytics_config=analytics_config_from_dict(raw),
+        auto_update=bool_value(raw.get("auto_update"), "auto_update", default=True),
         governance_config=governance_config_from_dict(raw),
         projects=[
             item["path"]
@@ -561,8 +594,12 @@ def review_config_from_dict(
         reconcile_lease_seconds=positive_int(
             review.get("reconcile_lease_seconds", 300), "reconcile_lease_seconds"
         ),
-        reconcile_command=string_list(
-            review.get("reconcile_command"), "reconcile_command"
+        reconcile_command=string_list(review.get("reconcile_command"), "reconcile_command"),
+        rereview=one_of(
+            review.get("rereview"), "review.rereview", VALID_REREVIEW, default=DEFAULT_REREVIEW
+        ),
+        settle_seconds=non_negative_int(
+            review.get("settle_seconds", DEFAULT_SETTLE_SECONDS), "review.settle_seconds"
         ),
         subscription_circuit=CircuitConfig(
             enabled=bool_value(
@@ -610,7 +647,10 @@ __all__ = [
     "DEFAULT_MIN_CONFIDENCE",
     "DEFAULT_NO_FINDINGS_COMMENT",
     "DEFAULT_PROVIDER",
+    "DEFAULT_REREVIEW",
+    "DEFAULT_SETTLE_SECONDS",
     "SUPPORTED_PROVIDERS",
+    "VALID_REREVIEW",
     "ConfigError",
     "ReviewConfig",
     "load_review_config",

@@ -341,6 +341,7 @@ No findings for optional categories: []
         source = {
             "PATH": "/usr/bin",
             "HOME": "/home/reviewer",
+            "SYSTEMROOT": r"C:\Windows",
             "GITLAB_TOKEN": "gitlab-secret",
             "OPENAI_API_KEY": "openai-secret",
             "ANTHROPIC_API_KEY": "anthropic-secret",
@@ -349,6 +350,7 @@ No findings for optional categories: []
         env = poller.reviewer_env(source)
 
         self.assertEqual("/usr/bin", env["PATH"])
+        self.assertEqual(r"C:\Windows", env["SYSTEMROOT"])
         self.assertIn("BUBO_ROOT", env)
         self.assertNotIn("BUBO_PROMPT", env)
         self.assertNotIn("LLM_REVIEW_MAX_FINDINGS", env)
@@ -539,6 +541,7 @@ enabled = true
         # a.py adds 2 lines, b.py adds 1 -> 3 added lines reviewed; removed and
         # context lines are not counted.
         self.assertEqual(3, count_added_lines(changed))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,507 @@
+"""What happens when a PR gets new commits after Bubo reviewed it (#254).
+
+These drive the real ``poll()``, ``worker()`` and ``post_or_plan_findings()``
+with the real ``GitHubProvider``. Only the edges are faked: the GitHub REST
+functions in :mod:`bubo.github`, the forked worker process, and the agent
+subprocess (``poller.run``). The incremental-review tests also run real
+``git`` against a local repository through the provider's mirror checkout.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import subprocess
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from review_output import review_output
+
+from bubo import db, github, paths, poller
+from bubo.config_values import ConfigError
+from bubo.reconciliation import ReconciliationOutcome, ReconciliationStatus
+from bubo.review_config import ReviewConfig, review_config_from_dict
+from bubo.statuses import ReviewStatus
+from bubo.telemetry.posthog import safe_context
+
+PROJECT = "o/r"
+CLONE_URL = "https://github.com/o/r.git"
+S1, S2, S3 = "1" * 40, "2" * 40, "3" * 40
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _patch_for(lines: list[str]) -> str:
+    return f"@@ -0,0 +1,{len(lines)} @@\n" + "".join(f"+{line}\n" for line in lines)
+
+
+BASE_LINES = [f"line{i}" for i in range(1, 11)]
+# S2/S3 insert five lines at the top: S1's line 7 is now line 12.
+SHIFTED_LINES = [f"new{i}" for i in range(1, 6)] + BASE_LINES
+
+
+class FakeGitHub:
+    """In-memory GitHub REST edge: one open PR whose head can move."""
+
+    def __init__(self) -> None:
+        self.head = S1
+        self.number = 1
+        self.extra_prs: list[dict] = []
+        self.patches: dict[str, str] = {
+            S1: _patch_for(BASE_LINES),
+            S2: _patch_for(SHIFTED_LINES),
+            S3: _patch_for(SHIFTED_LINES),
+        }
+        self.comments: list[dict] = []
+        self.issue_comments: list[str] = []
+
+    def pr(self, number: int | None = None) -> dict:
+        return {
+            "number": number or self.number,
+            "state": "open",
+            "title": "t",
+            "html_url": "https://github.com/o/r/pull/1",
+            "head": {"sha": self.head, "ref": "feature"},
+            "base": {"ref": "main"},
+        }
+
+    # -- bubo.github functions -------------------------------------------
+    def open_prs(self, cfg, project, token):
+        return [self.pr(), *self.extra_prs]
+
+    def get_pr(self, cfg, token, project, number):
+        return self.pr(number)
+
+    def get_pr_files(self, cfg, token, project, number):
+        return [{"filename": "a.py", "patch": self.patches.get(self.head, "")}]
+
+    def get_pr_commits(self, cfg, token, project, number):
+        return []
+
+    def find_review_comment_by_body(self, cfg, token, project, number, body):
+        return next((str(c["id"]) for c in self.comments if c["body"] == body), "")
+
+    def create_pr_review_comment(self, cfg, token, project, number, body, position):
+        comment = {"id": len(self.comments) + 1, "body": body, "resolved": False, **position}
+        self.comments.append(comment)
+        return {"id": comment["id"]}
+
+    def get_pr_review_threads(self, cfg, token, project, number):
+        return [
+            {
+                "is_resolved": c["resolved"],
+                "comments": [{"database_id": c["id"], "login": "bubo", "body": c["body"]}],
+            }
+            for c in self.comments
+        ]
+
+    def find_issue_comment_by_body(self, cfg, token, project, number, body, bot_username=""):
+        return ""
+
+    def create_issue_comment(self, cfg, token, project, number, body):
+        self.issue_comments.append(body)
+        return {"id": len(self.issue_comments)}
+
+
+@pytest.fixture
+def fake(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
+    gh = FakeGitHub()
+    for name in (
+        "open_prs",
+        "get_pr",
+        "get_pr_files",
+        "get_pr_commits",
+        "find_review_comment_by_body",
+        "create_pr_review_comment",
+        "get_pr_review_threads",
+        "find_issue_comment_by_body",
+        "create_issue_comment",
+    ):
+        monkeypatch.setattr(github, name, getattr(gh, name))
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-test")
+    monkeypatch.setenv("BUBO_PROMPT_SOURCE", str(REPO_ROOT / "prompts" / "00-meta.md"))
+    db.init_db()
+    return gh
+
+
+@pytest.fixture
+def forked(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    started: list[str] = []
+
+    def fork(job: Path) -> int:
+        started.append(json.loads(job.read_text())["mr"]["head"]["sha"])
+        return 0
+
+    monkeypatch.setattr(poller, "fork_worker", fork)
+    return started
+
+
+def use_config(monkeypatch: pytest.MonkeyPatch, **overrides) -> ReviewConfig:
+    cfg = ReviewConfig(provider="github", projects=[PROJECT], dry_run=False, **overrides)
+    monkeypatch.setattr(poller, "read_config", lambda: cfg)
+    return cfg
+
+
+def status_of(sha: str, number: int = 1) -> str | None:
+    with sqlite3.connect(paths.DB) as conn:
+        row = conn.execute(
+            "select status from reviewed_mrs where project=? and iid=? and sha=?",
+            (PROJECT, number, sha),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def finding(line: int, comment: str = "", *, title: str = "xs[i+1] reads past the end") -> dict:
+    item = {
+        "type": "issue",
+        "severity": "blocking",
+        "category": "correctness",
+        "title": title,
+        "file": "a.py",
+        "line": line,
+        "impact": "IndexError on the last element.",
+        "evidence": "loop runs to len(xs)",
+        "fix": "Iterate to len(xs) - 1.",
+        "confidence": 0.95,
+    }
+    if comment:
+        item["comment"] = comment
+    return item
+
+
+# ---------------------------------------------------------------------------
+# B. One review per PR at a time
+# ---------------------------------------------------------------------------
+
+
+def test_poll_during_running_review_starts_no_second_worker(monkeypatch, fake, forked) -> None:
+    use_config(monkeypatch)
+    poller.poll()
+    assert forked == [S1]
+    poller.record(PROJECT, 1, S1, ReviewStatus.RUNNING)
+
+    fake.head = S2
+    poller.poll()
+
+    assert forked == [S1]
+    # The new head is left unseen, so a later poll picks it up.
+    assert status_of(S2) is None
+    poller.record(PROJECT, 1, S1, ReviewStatus.SUCCESS)
+    poller.poll()
+    assert forked == [S1, S2]
+
+
+def test_queued_review_of_same_pr_also_blocks(monkeypatch, fake, forked) -> None:
+    use_config(monkeypatch)
+    poller.poll()
+    assert status_of(S1) == ReviewStatus.QUEUED
+    fake.head = S2
+    poller.poll()
+    assert forked == [S1]
+
+
+def test_stale_running_row_does_not_block_pr_forever(monkeypatch, fake, forked) -> None:
+    cfg = use_config(monkeypatch)
+    poller.record(PROJECT, 1, S1, ReviewStatus.RUNNING)
+    stale = (datetime.now(UTC) - timedelta(seconds=cfg.timeout_seconds * 3)).isoformat()
+    with sqlite3.connect(paths.DB) as conn:
+        conn.execute("update reviewed_mrs set updated_at=? where sha=?", (stale, S1))
+    fake.head = S2
+    poller.poll()
+    assert forked == [S2]
+
+
+def _run_worker(monkeypatch, fake: FakeGitHub, stdout: str, *, push_to: str | None = None) -> int:
+    """Run the real worker for the current head; optionally push mid-review."""
+
+    def checkout(self, cfg, project, change, dest):
+        dest.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("bubo.scm.github.GitHubProvider.checkout", checkout)
+    prompts: list[str] = []
+
+    def agent(argv, *, cwd, timeout, env, **_kw):
+        prompts.append(argv[-1])
+        if push_to:
+            fake.head = push_to
+        return SimpleNamespace(stdout=stdout, returncode=0)
+
+    monkeypatch.setattr(poller, "run", agent)
+    job = poller.write_job(PROJECT, fake.pr())
+    code = poller.worker(job)
+    fake.prompts = prompts  # type: ignore[attr-defined]
+    return code
+
+
+def test_push_during_review_marks_superseded_and_posts_nothing(monkeypatch, fake) -> None:
+    use_config(monkeypatch)
+    raw = review_output([finding(7)])
+
+    assert _run_worker(monkeypatch, fake, raw, push_to=S2) == 0
+
+    assert status_of(S1) == ReviewStatus.SUPERSEDED
+    assert fake.comments == []
+    assert fake.issue_comments == []
+    with sqlite3.connect(paths.DB) as conn:
+        run_status = conn.execute("select status from review_runs where sha=?", (S1,)).fetchone()
+    assert run_status == (ReviewStatus.SUPERSEDED,)
+
+
+def test_push_during_clean_review_posts_no_acknowledgement(monkeypatch, fake) -> None:
+    use_config(monkeypatch)
+    assert _run_worker(monkeypatch, fake, review_output([]), push_to=S2) == 0
+    assert status_of(S1) == ReviewStatus.SUPERSEDED
+    assert fake.issue_comments == []
+
+
+def test_superseded_head_is_reviewed_by_next_poll(monkeypatch, fake, forked) -> None:
+    use_config(monkeypatch)
+    _run_worker(monkeypatch, fake, review_output([finding(7)]), push_to=S2)
+    poller.poll()
+    assert forked == [S2]
+
+
+def test_never_posts_old_line_numbers_on_a_new_head(monkeypatch, fake) -> None:
+    cfg = use_config(monkeypatch)
+    fake.head = S2  # head moved after the agent reviewed S1
+    with pytest.raises(poller.ReviewSuperseded):
+        poller.post_or_plan_findings(
+            cfg=cfg,
+            token="t",
+            project=PROJECT,
+            mr={"number": 1, "head": {"sha": S1}},
+            raw_review=review_output([finding(7)]),
+        )
+    assert fake.comments == []
+
+
+def test_unchanged_head_still_posts(monkeypatch, fake) -> None:
+    use_config(monkeypatch)
+    assert _run_worker(monkeypatch, fake, review_output([finding(7)])) == 0
+    assert status_of(S1) == ReviewStatus.SUCCESS
+    assert [(c["commit_id"], c["line"]) for c in fake.comments] == [(S1, 7)]
+
+
+def test_superseded_status_is_a_known_reporting_dimension() -> None:
+    assert safe_context({"status": "superseded"}).get("status") == "superseded"
+
+
+# ---------------------------------------------------------------------------
+# C. Duplicate suppression across commits
+# ---------------------------------------------------------------------------
+
+
+def test_reworded_finding_with_same_identity_is_not_posted_again(monkeypatch, fake) -> None:
+    cfg = use_config(monkeypatch, tone="collaborative")
+
+    def post(sha: str, item: dict) -> tuple[int, int, int]:
+        fake.head = sha
+        return poller.post_or_plan_findings(
+            cfg=cfg,
+            token="t",
+            project=PROJECT,
+            mr={"number": 1, "head": {"sha": sha}},
+            raw_review=review_output([item]),
+        )
+
+    assert post(S1, finding(7, "Heads up: xs[i+1] reads past the end.")) == (1, 0, 0)
+    # New head, the line moved, and the posted wording changed: the exact-body
+    # remote check cannot match, but the finding identity does.
+    assert post(S2, finding(12, "Out-of-bounds read of xs[i+1] on the last pass?")) == (0, 0, 1)
+    assert len(fake.comments) == 1
+
+    # Once the developer resolves the earlier thread, a re-found issue posts again.
+    fake.comments[0]["resolved"] = True
+    assert post(S3, finding(12, "Still reading past the end of xs.")) == (1, 0, 0)
+    assert len(fake.comments) == 2
+
+
+def test_distinct_finding_on_new_head_still_posts(monkeypatch, fake) -> None:
+    cfg = use_config(monkeypatch)
+    for sha, item in ((S1, finding(7)), (S2, finding(12, title="Different bug entirely"))):
+        fake.head = sha
+        poller.post_or_plan_findings(
+            cfg=cfg,
+            token="t",
+            project=PROJECT,
+            mr={"number": 1, "head": {"sha": sha}},
+            raw_review=review_output([item]),
+        )
+    assert len(fake.comments) == 2
+
+
+# ---------------------------------------------------------------------------
+# D. [review].rereview and [review].settle_seconds
+# ---------------------------------------------------------------------------
+
+
+def test_rereview_settle_defaults_are_todays_behaviour() -> None:
+    cfg = review_config_from_dict({})
+    assert cfg.rereview == "full"
+    assert cfg.settle_seconds == 0
+    parsed = review_config_from_dict({"review": {"rereview": "incremental", "settle_seconds": 300}})
+    assert (parsed.rereview, parsed.settle_seconds) == ("incremental", 300)
+    assert review_config_from_dict({"review": {"rereview": "off"}}).rereview == "off"
+    with pytest.raises(ConfigError):
+        review_config_from_dict({"review": {"rereview": "sometimes"}})
+    with pytest.raises(ConfigError):
+        review_config_from_dict({"review": {"settle_seconds": -1}})
+
+
+def test_two_pushes_inside_settle_window_produce_one_review(monkeypatch, fake, forked) -> None:
+    use_config(monkeypatch, settle_seconds=300)
+    poller.poll()
+    fake.head = S2
+    poller.poll()
+    assert forked == []
+
+    # Five minutes after S2 was first seen, with no further push.
+    old = (datetime.now(UTC) - timedelta(seconds=301)).isoformat()
+    with sqlite3.connect(paths.DB) as conn:
+        conn.execute("update change_heads set first_seen_at=?", (old,))
+    poller.poll()
+    poller.poll()
+    assert forked == [S2]
+
+
+def test_settle_zero_reviews_immediately(monkeypatch, fake, forked) -> None:
+    use_config(monkeypatch)
+    poller.poll()
+    assert forked == [S1]
+
+
+def test_rereview_off_reviews_only_first_commit(monkeypatch, fake, forked) -> None:
+    use_config(monkeypatch, rereview="off")
+    poller.poll()
+    assert forked == [S1]
+    poller.record(PROJECT, 1, S1, ReviewStatus.SUCCESS)
+
+    fake.head = S2
+    fake.extra_prs = [{**fake.pr(2), "head": {"sha": S3}}]
+    poller.poll()
+
+    # PR 1 already had a completed review; PR 2 is new and is reviewed.
+    assert forked == [S1, S3]
+
+
+def test_rereview_off_still_reviews_when_first_commit_never_completed(
+    monkeypatch, fake, forked
+) -> None:
+    use_config(monkeypatch, rereview="off")
+    poller.record(PROJECT, 1, S1, ReviewStatus.SUPERSEDED)
+    fake.head = S2
+    poller.poll()
+    assert forked == [S2]
+
+
+# ---------------------------------------------------------------------------
+# D. rereview = "incremental" (real git through the mirror checkout)
+# ---------------------------------------------------------------------------
+
+
+def git(*args: str, cwd: Path | None = None) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+@pytest.fixture
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    bare = tmp_path / "origin.git"
+    gitconfig = tmp_path / "gitconfig"
+    gitconfig.write_text(
+        "[user]\n\tname = T\n\temail = t@example.com\n"
+        f'[url "file://{bare}"]\n\tinsteadOf = {CLONE_URL}\n'
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    src = tmp_path / "src"
+    src.mkdir()
+    git("init", "-q", "-b", "main", str(src))
+    (src / "README").write_text("base\n")
+    git("add", ".", cwd=src)
+    git("commit", "-q", "-m", "base", cwd=src)
+    git("clone", "-q", "--bare", str(src), str(bare))
+    git("checkout", "-q", "-b", "feature", cwd=src)
+
+    def commit(lines: list[str], *, reset_to: str = "") -> str:
+        if reset_to:
+            git("reset", "-q", "--hard", reset_to, cwd=src)
+        (src / "a.py").write_text("".join(f"{line}\n" for line in lines))
+        git("add", ".", cwd=src)
+        git("commit", "-q", "-m", "c", cwd=src)
+        sha = git("rev-parse", "HEAD", cwd=src)
+        git("push", "-q", "--force", str(bare), "HEAD:refs/pull/1/head", cwd=src)
+        return sha
+
+    return SimpleNamespace(
+        src=src, bare=bare, commit=commit, base=git("rev-parse", "main", cwd=src)
+    )
+
+
+def _incremental_worker(monkeypatch, fake: FakeGitHub, stdout: str) -> tuple[list[str], list]:
+    prompts: list[str] = []
+    reconciled: list[ReviewConfig] = []
+
+    def agent(argv, *, cwd, timeout, env, **_kw):
+        prompts.append(argv[-1])
+        return SimpleNamespace(stdout=stdout, returncode=0)
+
+    def reconcile(**kwargs):
+        reconciled.append(kwargs["cfg"])
+        return ReconciliationOutcome(ReconciliationStatus.NO_CANDIDATES)
+
+    monkeypatch.setattr(poller, "run", agent)
+    monkeypatch.setattr(poller, "reconcile_prior_findings", reconcile)
+    assert poller.worker(poller.write_job(PROJECT, fake.pr())) == 0
+    return prompts, reconciled
+
+
+def test_incremental_reviews_only_new_commits_and_reconciles(monkeypatch, fake, repo) -> None:
+    first_lines = [f"line{i}" for i in range(1, 11)]
+    prior = repo.commit(first_lines)
+    head = repo.commit([*first_lines, "added11", "added12"])
+    poller.record(PROJECT, 1, prior, ReviewStatus.SUCCESS)
+    fake.head = head
+    fake.patches[head] = _patch_for([*first_lines, "added11", "added12"])
+    use_config(monkeypatch, rereview="incremental")
+    # Line 7 is in the PR diff but unchanged since `prior`; line 12 is new.
+    raw = review_output([finding(7), finding(12, title="New bug in added code")])
+
+    prompts, reconciled = _incremental_worker(monkeypatch, fake, raw)
+
+    assert [c["line"] for c in fake.comments] == [12]
+    assert prior in prompts[0]
+    assert f"{prior[:12]}..{head[:12]}" in prompts[0] or f"{prior}..{head}" in prompts[0]
+    assert [cfg.reconcile_fixed_findings for cfg in reconciled] == [True]
+
+
+def test_incremental_falls_back_to_full_review_after_force_push(monkeypatch, fake, repo) -> None:
+    first_lines = [f"line{i}" for i in range(1, 11)]
+    prior = repo.commit(first_lines)
+    # Rewritten history: `prior` is no longer an ancestor of the head.
+    head = repo.commit([*first_lines, "added11", "added12"], reset_to=repo.base)
+    poller.record(PROJECT, 1, prior, ReviewStatus.SUCCESS)
+    fake.head = head
+    fake.patches[head] = _patch_for([*first_lines, "added11", "added12"])
+    use_config(monkeypatch, rereview="incremental")
+    raw = review_output([finding(7), finding(12, title="New bug in added code")])
+
+    prompts, _ = _incremental_worker(monkeypatch, fake, raw)
+
+    assert sorted(c["line"] for c in fake.comments) == [7, 12]
+    assert prior not in prompts[0]
+
+
+def test_full_rereview_does_not_force_reconciliation(monkeypatch, fake, repo) -> None:
+    prior = repo.commit(["a"])
+    head = repo.commit(["a", "b"])
+    poller.record(PROJECT, 1, prior, ReviewStatus.SUCCESS)
+    fake.head = head
+    fake.patches[head] = _patch_for(["a", "b"])
+    cfg = use_config(monkeypatch)
+    assert cfg.rereview == "full"
+    prompts, reconciled = _incremental_worker(monkeypatch, fake, review_output([]))
+    assert prior not in prompts[0]
+    assert [c.reconcile_fixed_findings for c in reconciled] == [False]

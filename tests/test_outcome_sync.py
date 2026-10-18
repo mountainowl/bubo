@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bubo import analytics, db, gitlab, paths, poller
+from bubo.analytics_config import AnalyticsConfig
 from bubo.review_config import ReviewConfig
 from bubo.telemetry.config import TelemetryConfig
 
@@ -114,7 +115,7 @@ def test_classify_discussion_outcome_uses_note_resolved_state() -> None:
 
 def test_outcome_sync_flag_suppresses_outcome_metric_emission() -> None:
     class FakeTelemetry:
-        config = TelemetryConfig(enabled=True, emit_outcome_sync=False)
+        config = TelemetryConfig(analytics=AnalyticsConfig(enabled=True), emit_outcome_sync=False)
 
         def __init__(self) -> None:
             self.finding_metrics = 0
@@ -203,7 +204,7 @@ def _replied_unresolved_outcome() -> dict[str, object]:
 
 
 class _SilentTelemetry:
-    config = TelemetryConfig(enabled=True, emit_outcome_sync=False)
+    config = TelemetryConfig(analytics=AnalyticsConfig(enabled=True), emit_outcome_sync=False)
 
     def record_finding(self, **_: object) -> None:
         pass
@@ -362,8 +363,18 @@ def test_outcome_sync_caps_reply_classifications_per_run() -> None:
                         insert into review_findings(project,iid,sha,fingerprint,file,line,status,discussion_id,body,updated_at)
                         values(?,?,?,?,?,?,?,?,?,?)
                         """,
-                        ("group/repo", 1, "sha", f"fp{i}", "src/A.py", 1, "posted",
-                         f"disc{i}", "body", poller.now()),
+                        (
+                            "group/repo",
+                            1,
+                            "sha",
+                            f"fp{i}",
+                            "src/A.py",
+                            1,
+                            "posted",
+                            f"disc{i}",
+                            "body",
+                            poller.now(),
+                        ),
                     )
             poller.MAX_REPLY_CLASSIFICATIONS_PER_SYNC = 2
             fake = _SilentTelemetry()
@@ -387,7 +398,7 @@ def test_outcome_sync_caps_reply_classifications_per_run() -> None:
 
 def test_outcome_sync_failure_advances_last_checked_at() -> None:
     class FakeTelemetry:
-        config = TelemetryConfig(enabled=True, emit_outcome_sync=True)
+        config = TelemetryConfig(analytics=AnalyticsConfig(enabled=True), emit_outcome_sync=True)
 
         def record_finding(self, **_: object) -> None:
             raise AssertionError("unexpected finding metric")
@@ -583,21 +594,24 @@ def test_backfill_github_bot_comments_imports_resolved_threads() -> None:
             thread = {
                 "is_resolved": True,
                 "comments": [
-                        {
-                            "database_id": 555,
-                            "node_id": "PRRC_x",
-                            "login": "lt-bubo",
-                            "user": {"type": "Bot"},
+                    {
+                        "database_id": 555,
+                        "node_id": "PRRC_x",
+                        "login": "lt-bubo",
+                        "user": {"type": "Bot"},
                         "body": (
                             "**Issue (blocking, correctness):** bad path\n\n**Confidence:** 0.91"
                         ),
                         "path": "src/A.java",
                         "line": 12,
                     },
-                        {
-                                "database_id": 556, "node_id": "PRRC_y", "login": "dev1",
-                                "user": {"type": "User"}, "body": "thanks",
-                        },
+                    {
+                        "database_id": 556,
+                        "node_id": "PRRC_y",
+                        "login": "dev1",
+                        "user": {"type": "User"},
+                        "body": "thanks",
+                    },
                 ],
             }
 
@@ -728,24 +742,127 @@ def test_outcomes_for_keeps_legacy_unknown_and_derives_durable_bubo_auto() -> No
                 con.execute(
                     """insert into review_findings(project,iid,sha,fingerprint,file,line,status,
                        discussion_id,body,severity,updated_at) values(?,?,?,?,?,?,?,?,?,?,?)""",
-                    ("group/repo", 1, "oldsha", "fp", "a.py", 1, "posted", "disc", "body", "blocking", poller.now()),
+                    (
+                        "group/repo",
+                        1,
+                        "oldsha",
+                        "fp",
+                        "a.py",
+                        1,
+                        "posted",
+                        "disc",
+                        "body",
+                        "blocking",
+                        poller.now(),
+                    ),
                 )
             # SCM resolved state alone never claims automatic resolution.
-            outcome = {"resolved": True, "deleted": False, "developer_replied": False,
-                       "disputed": False, "false_positive": False, "duplicate": False,
-                       "merged_unresolved": False}
-            db.record_finding_outcome(project="group/repo", iid=1, sha="oldsha", fingerprint="fp", discussion_id="disc", outcome=outcome)
+            outcome = {
+                "resolved": True,
+                "deleted": False,
+                "developer_replied": False,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "merged_unresolved": False,
+            }
+            db.record_finding_outcome(
+                project="group/repo",
+                iid=1,
+                sha="oldsha",
+                fingerprint="fp",
+                discussion_id="disc",
+                outcome=outcome,
+            )
             assert db.outcomes_for("group/repo", 1, "oldsha")[0]["resolution_source"] == "unknown"
             db.record_finding_reconciliation(
-                project="group/repo", iid=1, prior_sha="oldsha", fingerprint="fp", head_sha="newsha",
-                discussion_id="disc", state="resolved", reply_marker="marker", verdict="fixed",
-                evidence="line no longer divides", causal_commit="newsha",
+                project="group/repo",
+                iid=1,
+                prior_sha="oldsha",
+                fingerprint="fp",
+                head_sha="newsha",
+                discussion_id="disc",
+                state="resolved",
+                reply_marker="marker",
+                verdict="fixed",
+                evidence="line no longer divides",
+                causal_commit="newsha",
             )
-            db.record_finding_outcome(project="group/repo", iid=1, sha="oldsha", fingerprint="fp", discussion_id="disc", outcome=outcome)
+            db.record_finding_outcome(
+                project="group/repo",
+                iid=1,
+                sha="oldsha",
+                fingerprint="fp",
+                discussion_id="disc",
+                outcome=outcome,
+            )
             row = db.outcomes_for("group/repo", 1, "oldsha")[0]
             assert row["severity"] == "blocking"
             assert row["resolution_source"] == "bubo_auto"
             assert "newsha" in row["resolution_evidence"]
             assert row["developer_disposition"] == "unknown"
+    finally:
+        paths.DB = original_db
+
+
+def _sync_with_agent_reply(tmp: str, agent_stdout: str) -> tuple[object, ...]:
+    """Run real sync_outcomes + real reply classifier against a fake agent CLI.
+
+    Only the SCM provider and the agent binary are faked: the agent is a shell
+    one-liner that prints ``agent_stdout``, so ``classify_developer_reply`` and
+    ``parse_verdict`` run unmodified.
+    """
+    paths.DB = Path(tmp) / "reviewer.sqlite"
+    poller.init_db()
+    _seed_posted_finding(paths.DB)
+    fake = _SilentTelemetry()
+    cfg = ReviewConfig(
+        gitlab_url="https://gitlab.com",
+        telemetry_config=fake.config,
+        reviewer_command=["sh", "-c", 'printf "%s\\n" "$BUBO_FAKE_AGENT_OUT"', "agent"],
+    )
+    outcome = _replied_unresolved_outcome()
+    outcome["_reply_text"] = "Good catch, you're right. Fixed in the next commit."
+    provider = _FakeProvider(outcome=outcome)
+    with patch.dict("os.environ", {"BUBO_FAKE_AGENT_OUT": agent_stdout}):
+        with patch("bubo.outcome_classifier._ENV_ALLOWLIST", {"PATH", "BUBO_FAKE_AGENT_OUT"}):
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=provider):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
+                        poller.sync_outcomes(limit=1)
+    with sqlite3.connect(paths.DB) as conn:
+        return conn.execute(
+            "select developer_disposition, disposition_evidence, disputed, false_positive,"
+            " reply_classified from finding_outcomes"
+        ).fetchone()
+
+
+def test_outcome_sync_records_classifier_agreement() -> None:
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            row = _sync_with_agent_reply(tmp, '{"verdict": "agrees", "false_positive": false}')
+        assert row == ("agrees", "reply_classifier", 0, 0, 1)
+    finally:
+        paths.DB = original_db
+
+
+def test_outcome_sync_classifier_acceptance_stays_unknown_end_to_end() -> None:
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            row = _sync_with_agent_reply(tmp, '{"verdict": "accepted", "false_positive": false}')
+        # "Will fix" is not evidence the finding is correct.
+        assert row == ("unknown", "unknown", 0, 0, 1)
+    finally:
+        paths.DB = original_db
+
+
+def test_outcome_sync_false_positive_beats_agreement() -> None:
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            row = _sync_with_agent_reply(tmp, '{"verdict": "agrees", "false_positive": true}')
+        assert row == ("false_positive", "reply_classifier", 1, 1, 1)
     finally:
         paths.DB = original_db

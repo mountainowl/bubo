@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
-from bubo import github
+from bubo import github, paths
 from bubo.review_config import ReviewConfig
 from bubo.scm import get_provider
 from bubo.scm.base import FindingThreadReply, FindingThreadResolution, FindingThreadState
@@ -124,11 +125,22 @@ def test_checkout_clones_credential_safe(tmp_path, monkeypatch) -> None:
     cfg = ReviewConfig(provider="github", github_api_url="https://ghe.example.com/api/v3")
     with patch("bubo.scm.base.run_bounded", side_effect=fake_run):
         GitHubProvider().checkout(
-            cfg, "o/r", {"number": 5, "head": {"sha": "abc123"}}, tmp_path / "wt"
+            cfg,
+            "o/r",
+            {"number": 5, "head": {"sha": "abc123"}, "base": {"ref": "main"}},
+            tmp_path / "wt",
         )
 
+    # First review of the project: one bare mirror under WORK/_mirrors ...
     clone = next(a for a in calls if "clone" in a)
+    assert "--bare" in clone
     assert "https://ghe.example.com/o/r.git" in clone
+    assert Path(clone[-1]).parent == paths.WORK / "_mirrors"
+    # ... then a fetch of only the target branch and the PR ref (no --prune) ...
+    fetch = next(a for a in calls if "fetch" in a)
+    assert "--prune" not in fetch
+    assert "+refs/pull/5/head:refs/remotes/origin/pr-5" in fetch
+    assert "+refs/heads/main:refs/remotes/origin/main" in fetch
     assert not any("ghp-SECRET" in part for part in clone)
     remote = [a for a in calls if "-c" in a]
     assert remote
@@ -136,7 +148,9 @@ def test_checkout_clones_credential_safe(tmp_path, monkeypatch) -> None:
         any(part.startswith("http.extraHeader=Authorization: Basic ") for part in a)
         for a in remote
     )
-    assert calls[-1] == ["git", "checkout", "--detach", "abc123"]
+    # ... and a detached worktree at the head SHA, which is local (no auth header).
+    assert calls[-1] == ["git", "worktree", "add", "--detach", str(tmp_path / "wt"), "abc123"]
+    assert not any("checkout" in a for a in calls)
 
 
 def test_classify_review_thread_outcome_reads_markers_and_replies() -> None:

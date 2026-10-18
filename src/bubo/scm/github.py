@@ -32,8 +32,11 @@ from bubo.scm.base import (
     FindingThreadReply,
     FindingThreadResolution,
     FindingThreadState,
+    OutcomeMemo,
     build_review_contract,
     git_checkout_change,
+    memoized,
+    mirror_path,
 )
 from bubo.types import JsonObject
 
@@ -137,6 +140,8 @@ class GitHubProvider:
             dest=dest,
             token=self.token(),
             username="x-access-token",
+            target_branch=str((change.get("base") or {}).get("ref") or ""),
+            mirror=mirror_path(project, clone_url),
         )
 
     def post_inline_comment(
@@ -179,8 +184,12 @@ class GitHubProvider:
         number: int,
         thread_id: str,
         bot_username: str,
+        *,
+        memo: OutcomeMemo | None = None,
     ) -> JsonObject:
-        pr = self.get_change(cfg, token, project, number)
+        pr = memoized(
+            memo, ("change", project, number), lambda: self.get_change(cfg, token, project, number)
+        )
         # GitHub PR `state` is open/closed; a merged PR is closed + merged.
         # Normalize to "merged" so merged_unresolved is computed correctly.
         pr_state = (
@@ -190,7 +199,11 @@ class GitHubProvider:
         # resolution-blind REST classifier on any GraphQL failure so a
         # GraphQL outage never blocks outcome sync entirely.
         try:
-            threads = github.get_pr_review_threads(cfg, token, project, number)
+            threads = memoized(
+                memo,
+                ("review_threads", project, number),
+                lambda: github.get_pr_review_threads(cfg, token, project, number),
+            )
             thread = github.find_thread_for_comment(threads, thread_id)
             if thread is not None:
                 return github.classify_graphql_thread_outcome(thread, bot_username, pr_state)
@@ -204,7 +217,11 @@ class GitHubProvider:
             log("github_graphql_outcome_failed", project=project, number=number, error=str(exc))
         comment = github.get_pr_review_comment(cfg, token, project, thread_id)
         # Replies are review comments whose in_reply_to_id chains to ours.
-        all_comments = github.get_pr_review_comments(cfg, token, project, number)
+        all_comments = memoized(
+            memo,
+            ("review_comments", project, number),
+            lambda: github.get_pr_review_comments(cfg, token, project, number),
+        )
         replies = [c for c in all_comments if str(c.get("in_reply_to_id") or "") == str(thread_id)]
         return github.classify_review_thread_outcome(
             comment, replies, bot_username=bot_username, pr_state=pr_state

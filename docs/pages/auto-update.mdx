@@ -1,0 +1,141 @@
+---
+description: "Manage Bubo automatic and manual updates, idle-session handling, database migration, recovery, and actionable update-failure diagnostics."
+---
+
+# Updates and recovery
+
+Bubo's updater checks for stable releases and replaces an installation when no
+review or other protected work is active. A retained helper runs outside the
+Python environment being updated, so scheduled checks can continue when the CLI
+is closed. An update backs up state, installs the release, migrates registered
+databases and checks startup before accepting the new version. If recovery cannot
+prove a matching code and database state, Bubo keeps maintenance protection active.
+
+Native acceptance covers macOS, Windows, Linux, and Docker on amd64 and ARM64,
+using isolated installations and fixture release versions. One earlier Windows
+MCP rollback returned `recovery_blocked` without a captured cause; later native
+and concurrent runs passed. The acceptance record retains this unresolved
+observation; passing tests cannot guarantee zero regressions.
+
+## Automatic and manual updates
+
+`auto_update` defaults to `true`. To disable automatic updates, set this **top-level**
+value in the runtime root's `config/env.toml`, before any TOML table headings:
+
+```toml
+auto_update = false
+```
+
+Manual updating remains available:
+
+```sh
+bubo update --root /path/to/bubo-root
+```
+
+Omit `--root` to use the normal Bubo runtime root. An automatic update is deferred
+if any registered root sharing the installation has automatic updates disabled.
+Analytics settings are separate: disabling automatic updates does not disable
+failure delivery, and disabling analytics does not disable updates.
+
+Inspect or repair helper setup with:
+
+```sh
+bubo update status --root /path/to/bubo-root
+bubo update configure --root /path/to/bubo-root
+```
+
+Run `bubo init` first for a new runtime root. Older releases that do not contain the
+updater need one upgrade using their existing package manager before adoption.
+The helper uses a macOS user LaunchAgent or Linux user systemd service. Missing
+user-service support, permissions, or an independent helper interpreter cause a
+safe deferral. The updater does not acquire elevated privileges automatically.
+
+Supported installation adapters target dedicated pip environments, uv tools,
+pipx tools, and clean editable checkouts of Bubo's upstream repository. Shared or
+system environments, modified source trees, and uncertain ownership defer with a
+report. Keep user changes and resolve the reported condition before retrying.
+
+On Windows, external uv/pipx launchers require verified ownership: copies must
+match their managed environment and links must point to its exact executable.
+Recovery restores launcher contents and type, including added/removed commands.
+Unknown or operator-modified launchers defer.
+
+On Windows, apply the retained MCP client configuration printed by
+`bubo update configure`, then reconnect the client. Existing launch commands
+continue working, but defer replacement while their legacy sessions remain open.
+The Windows scheduled helper runs while the user is logged in and resumes at
+logon.
+
+Idle supervised MCP sessions can close during replacement; clients must reconnect.
+Active protected requests postpone replacement.
+
+## Docker
+
+Docker replacement is controlled from the host, outside the container. Configure
+it with an explicit host runtime root, container, and local Docker socket:
+
+```sh
+bubo update configure --root /host/path/to/bubo-root \
+  --container bubo --docker-socket /var/run/docker.sock
+```
+
+The host controller and container must run with the same numeric user ID. For a
+new installation, use a persistent root owned by your normal host account and
+launch the upstream image with `--user "$(id -u):$(id -g)"`,
+`--mount type=bind,src=/host/path/to/bubo-root,dst=/data/bubo`, and
+`-e BUBO_ROOT=/data/bubo`. Initialize that root first with `bubo init`; use
+`--no-agent-config` when initializing inside Docker to keep agent configuration
+out of the disposable layer. Configure reviewer caches and credentials on
+explicit persistent mounts. Existing containers with different ownership defer;
+the updater does not change their ownership.
+
+Derived images containing an installed reviewer defer to their image owner.
+Use the upstream image with a mounted reviewer for unattended replacement.
+
+Use the actual socket path for your installation. The controller validates the
+host/container state mapping and launch configuration. Custom, orchestrated,
+ephemeral, or otherwise unsafe configurations can defer. State must be persistent;
+never delete or recreate it to resolve an update failure. The controller does not
+prune the shared Docker image cache.
+
+## Failures and issue reports
+
+Start with status, then print the latest report:
+
+```sh
+bubo update status --root /path/to/bubo-root
+bubo update report --root /path/to/bubo-root
+```
+
+For an older report, add its `ATTEMPT_ID` after `report`.
+
+Reports use fixed diagnostic categories and actionable recovery instructions.
+Copy the report into a [Bubo issue](https://github.com/mountainowl/bubo/issues).
+No issue is submitted automatically. Reports exclude raw exception text,
+credentials and repository contents.
+
+Update diagnostics follow your [telemetry preferences](/telemetry#preferences).
+Pending diagnostics are retained for retry. Connectivity failures can be retried without updating:
+
+```sh
+bubo update retry-failures ATTEMPT_ID --root /path/to/bubo-root
+```
+
+Analytics opt-outs are honored. Local reports remain available. Follow the report
+when status indicates recovery is required; do not remove maintenance markers,
+backup directories, or the state database to force startup. Running `bubo update`
+invokes the retained helper, including pending recovery before another attempt.
+
+The installation identity is preserved during update
+and recovery. Version fields describe the producing installed Bubo version; failure
+reports separately identify the previous and target versions when known.
+
+## Remove the helper
+
+```sh
+bubo update uninstall-helper --root /path/to/bubo-root
+```
+
+This removes the owned scheduler registration. Local reports and manual update
+commands remain available. Use `auto_update = false` for an ongoing preference to
+avoid automatic updating, rather than relying only on removal of the helper.

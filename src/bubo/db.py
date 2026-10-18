@@ -272,6 +272,33 @@ def init_db() -> None:
             )
             """
         )
+        # Secondary indexes. Without them the report readers full-scan, and
+        # audit_rows' correlated finding_outcomes subqueries scan the whole
+        # table once per review run, so report time grows quadratically.
+        for statement in (
+            "create index if not exists ix_fo_change on finding_outcomes(project, iid, sha)",
+            "create index if not exists ix_fo_checked on finding_outcomes(last_checked_at)",
+            "create index if not exists ix_rm_updated on reviewed_mrs(updated_at)",
+            "create index if not exists ix_rm_status on reviewed_mrs(status)",
+            "create index if not exists ix_rr_started on review_runs(started_at)",
+            "create index if not exists ix_rf_updated on review_findings(updated_at)",
+            "create index if not exists ix_rf_status on review_findings(status)",
+            "create index if not exists ix_gd_created on governance_decisions(created_at)",
+        ):
+            db.execute(statement)
+        # Debounce state for [review].settle_seconds: the head the poller last
+        # saw per change, and when it first saw it (#254).
+        db.execute(
+            """
+            create table if not exists change_heads (
+              project text not null,
+              iid integer not null,
+              sha text not null,
+              first_seen_at text not null,
+              primary key(project, iid)
+            )
+            """
+        )
 
 
 def ensure_column(db: sqlite3.Connection, table: str, name: str, definition: str) -> None:
@@ -468,9 +495,7 @@ def provenance_for(run_id: str) -> JsonObject | None:
     }
 
 
-def _governance_decision_row(
-    project: str, iid: int, sha: str, row: tuple[Any, ...]
-) -> JsonObject:
+def _governance_decision_row(project: str, iid: int, sha: str, row: tuple[Any, ...]) -> JsonObject:
     """Shape a ``governance_decisions`` row tuple into the public JSON dict."""
     return {
         "run_id": row[0],
@@ -551,9 +576,7 @@ def governance_decision_for(run_id: str) -> JsonObject | None:
     return _governance_decision_row(str(meta[0]), int(meta[1]), str(meta[2]), row)
 
 
-def governance_decisions_for(
-    project: str, iid: int, sha: str | None = None
-) -> list[JsonObject]:
+def governance_decisions_for(project: str, iid: int, sha: str | None = None) -> list[JsonObject]:
     """Return governance decisions for an MR/PR (keyed like findings_for/outcomes_for).
 
     When ``sha`` is ``None`` the most-recent reviewed SHA is resolved via
@@ -636,7 +659,78 @@ def already_seen(
         return (
             failed_ttl_seconds is not None and status_age_seconds(updated_at) <= failed_ttl_seconds
         )
-    return status in {ReviewStatus.RUNNING, ReviewStatus.SUCCESS, ReviewStatus.NO_FINDINGS}
+    return status in {
+        ReviewStatus.RUNNING,
+        ReviewStatus.SUCCESS,
+        ReviewStatus.NO_FINDINGS,
+        ReviewStatus.SUPERSEDED,
+    }
+
+
+def active_review_sha(project: str, iid: int, sha: str, ttl_seconds: int) -> str | None:
+    """Return another SHA of this change that is queued or running, if any.
+
+    Enforces "one review per change at a time": the poller leaves a newer
+    head unseen while an older one is in flight. Rows older than
+    ``ttl_seconds`` are ignored so a worker that died without recording a
+    terminal status cannot block the change forever (the worker itself is
+    killed at ``timeout_seconds``).
+    """
+    with connect_db() as db:
+        rows = db.execute(
+            """
+            select sha,updated_at from reviewed_mrs
+            where project=? and iid=? and sha != ? and status in (?, ?)
+            """,
+            (project, iid, sha, ReviewStatus.QUEUED, ReviewStatus.RUNNING),
+        ).fetchall()
+    for other, updated_at in rows:
+        if status_age_seconds(updated_at) <= ttl_seconds:
+            return str(other)
+    return None
+
+
+def head_stable_seconds(project: str, iid: int, sha: str) -> float:
+    """Record ``sha`` as the change's observed head; return how long it has been.
+
+    The clock starts the first time the poller sees a head and restarts
+    whenever the head changes, so a burst of pushes keeps resetting it.
+    """
+    with connect_db() as db:
+        db.execute(
+            """
+            insert into change_heads(project,iid,sha,first_seen_at) values(?,?,?,?)
+            on conflict(project,iid) do update set
+              sha=excluded.sha,
+              first_seen_at=excluded.first_seen_at
+            where change_heads.sha != excluded.sha
+            """,
+            (project, iid, sha, now()),
+        )
+        row = db.execute(
+            "select first_seen_at from change_heads where project=? and iid=?",
+            (project, iid),
+        ).fetchone()
+    return status_age_seconds(row[0]) if row else 0.0
+
+
+def last_completed_review_sha(project: str, iid: int, sha: str) -> str | None:
+    """Return the newest other SHA of this change whose review completed.
+
+    "Completed" means ``success`` or ``no_findings``: a failed, deferred or
+    superseded run never counts as having reviewed the change.
+    """
+    with connect_db() as db:
+        row = db.execute(
+            """
+            select sha from reviewed_mrs
+            where project=? and iid=? and sha != ? and status in (?, ?)
+            order by updated_at desc
+            limit 1
+            """,
+            (project, iid, sha, ReviewStatus.SUCCESS, ReviewStatus.NO_FINDINGS),
+        ).fetchone()
+    return str(row[0]) if row else None
 
 
 def status_age_seconds(updated_at: object) -> float:
@@ -790,7 +884,7 @@ def record_finding(
     confidence = finding.get("confidence")
     try:
         confidence = float(confidence) if confidence is not None else None
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         confidence = None
     verified_int = None if verified is None else int(verified)
     with connect_db() as db:
@@ -1061,17 +1155,60 @@ def prior_posted_findings_for_reconciliation(
         identity = str(row[2]) if row[2] else f"native-legacy:{row[0]}:{row[1]}"
         findings.append(
             {
-                "sha": str(row[0]), "fingerprint": str(row[1]), "finding_identity": identity,
-                "discussion_id": str(row[3]), "file": str(row[4]), "line": row[5],
-                "body": str(row[6]), "type": row[7], "severity": row[8], "category": row[9],
+                "sha": str(row[0]),
+                "fingerprint": str(row[1]),
+                "finding_identity": identity,
+                "discussion_id": str(row[3]),
+                "file": str(row[4]),
+                "line": row[5],
+                "body": str(row[6]),
+                "type": row[7],
+                "severity": row[8],
+                "category": row[9],
             }
         )
     return findings
 
 
+def open_finding_with_identity(project: str, iid: int, identity: str) -> JsonObject | None:
+    """Return the newest posted Bubo finding on this change with ``identity``.
+
+    ``identity`` is the sha- and line-independent
+    :func:`bubo.reconciliation.finding_identity`. Only rows with a provider
+    thread id that outcome sync has not seen resolved or deleted qualify; the
+    caller re-checks the live thread state before suppressing a post.
+    """
+    with connect_db(readonly=True) as db:
+        row = db.execute(
+            """
+            select rf.sha,rf.fingerprint,rf.discussion_id
+              from review_findings rf
+              left join finding_outcomes fo
+                on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha
+                  || ':' || rf.fingerprint
+             where rf.project=? and rf.iid=? and rf.finding_identity=? and rf.status=?
+               and rf.discussion_id is not null and rf.discussion_id != ''
+               and coalesce(fo.resolved,0)=0 and coalesce(fo.deleted,0)=0
+             order by rf.updated_at desc
+             limit 1
+            """,
+            (project, iid, identity, FindingStatus.POSTED),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"sha": str(row[0]), "fingerprint": str(row[1]), "discussion_id": str(row[2])}
+
+
 def claim_finding_reconciliation(
-    *, project: str, iid: int, prior_sha: str, fingerprint: str, head_sha: str,
-    discussion_id: str, reply_marker: str, lease_seconds: int,
+    *,
+    project: str,
+    iid: int,
+    prior_sha: str,
+    fingerprint: str,
+    head_sha: str,
+    discussion_id: str,
+    reply_marker: str,
+    lease_seconds: int,
 ) -> bool:
     """Atomically lease one head-specific action to prevent duplicate replies."""
     stamp = now()
@@ -1093,17 +1230,35 @@ def claim_finding_reconciliation(
                on conflict(project,iid,prior_sha,fingerprint,head_sha) do update set
                  claim_until=excluded.claim_until, updated_at=excluded.updated_at""",
             (
-                project, iid, prior_sha, fingerprint, head_sha, discussion_id,
-                "claimed", reply_marker, until, stamp,
+                project,
+                iid,
+                prior_sha,
+                fingerprint,
+                head_sha,
+                discussion_id,
+                "claimed",
+                reply_marker,
+                until,
+                stamp,
             ),
         )
     return True
 
 
 def record_finding_reconciliation(
-    *, project: str, iid: int, prior_sha: str, fingerprint: str, head_sha: str,
-    discussion_id: str, state: str, reply_marker: str, reply_id: str | None = None,
-    verdict: str | None = None, evidence: str | None = None, causal_commit: str | None = None,
+    *,
+    project: str,
+    iid: int,
+    prior_sha: str,
+    fingerprint: str,
+    head_sha: str,
+    discussion_id: str,
+    state: str,
+    reply_marker: str,
+    reply_id: str | None = None,
+    verdict: str | None = None,
+    evidence: str | None = None,
+    causal_commit: str | None = None,
 ) -> None:
     """Durably upsert a retryable reconciliation action."""
     with connect_db() as db:
@@ -1123,8 +1278,21 @@ def record_finding_reconciliation(
               causal_commit=coalesce(excluded.causal_commit,finding_reconciliations.causal_commit),
               updated_at=excluded.updated_at
             """,
-            (project, iid, prior_sha, fingerprint, head_sha, discussion_id, state, reply_marker,
-             reply_id, verdict, evidence, causal_commit, now()),
+            (
+                project,
+                iid,
+                prior_sha,
+                fingerprint,
+                head_sha,
+                discussion_id,
+                state,
+                reply_marker,
+                reply_id,
+                verdict,
+                evidence,
+                causal_commit,
+                now(),
+            ),
         )
 
 
@@ -1132,7 +1300,9 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     """Return up to ``limit`` posted findings ordered by sync staleness.
 
     Never-synced findings come first; then oldest ``last_checked_at``.
-    The poller uses this list to drive ``--sync-outcomes``.
+    The poller uses this list to drive ``--sync-outcomes``. A finding whose
+    comment was observed deleted is terminal (a deleted comment cannot come
+    back) and is never selected again, so it costs no further API calls.
 
     Each row carries ``prior_outcome`` — the currently-stored outcome flags
     (all ``False`` if never synced) — so the caller can detect the
@@ -1152,6 +1322,7 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
                 rf.fingerprint
             where rf.status=? and rf.discussion_id is not null and rf.discussion_id != ''
+              and coalesce(fo.deleted,0)=0
             order by
               case when fo.last_checked_at is null then 0 else 1 end,
               fo.last_checked_at asc,
@@ -1284,11 +1455,7 @@ def disputed_class_stats(project: str, *, min_samples: int) -> list[JsonObject]:
     # Sort the raw triples (rate desc, category asc) BEFORE building dicts so the
     # sort key is concretely typed (mypy can't see into a dict[str, Any] value).
     ranked = sorted(
-        (
-            (category, total, rejected)
-            for category, total, rejected in rows
-            if total >= min_samples
-        ),
+        ((category, total, rejected) for category, total, rejected in rows if total >= min_samples),
         key=lambda r: (-(r[2] / r[1]), r[0]),
     )
     stats: list[JsonObject] = [
@@ -1495,13 +1662,13 @@ def outcomes_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
             "resolved_at": row[8],
             "merged_unresolved": bool(row[9]),
             "reply_classified": bool(row[10]),
-                "resolution_source": _resolution_source(row[11]),
-                "resolution_evidence": _outcome_evidence(row[12]),
-                "developer_disposition": _developer_disposition(row[13], {}),
-                "disposition_evidence": _outcome_evidence(row[14]),
-                "last_checked_at": row[15],
-                "severity": _normalized_severity(row[16]),
-            }
+            "resolution_source": _resolution_source(row[11]),
+            "resolution_evidence": _outcome_evidence(row[12]),
+            "developer_disposition": _developer_disposition(row[13], {}),
+            "disposition_evidence": _outcome_evidence(row[14]),
+            "last_checked_at": row[15],
+            "severity": _normalized_severity(row[16]),
+        }
         for row in rows
     ]
 
@@ -1653,9 +1820,9 @@ def provenance_summary(
     where = "started_at >= ? and started_at <= ? and (? is null or project = ?)"
     args = (start, end, project, project)
     with connect_db(readonly=True) as db:
-        runs_total = db.execute(
-            f"select count(*) from review_runs where {where}", args
-        ).fetchone()[0]
+        runs_total = db.execute(f"select count(*) from review_runs where {where}", args).fetchone()[
+            0
+        ]
         band_rows = db.execute(
             f"select provenance_band, count(*) from review_runs "
             f"where {where} and provenance_band is not null group by provenance_band "
@@ -1741,16 +1908,25 @@ def outcomes_summary(
         ).fetchall()
     by_severity: dict[str, JsonObject] = {
         severity: {
-            "total": 0, "resolved": 0, "bubo_auto": 0, "agrees": 0,
-            "disagrees": 0, "false_positive": 0, "unknown_disposition": 0,
+            "total": 0,
+            "resolved": 0,
+            "bubo_auto": 0,
+            "agrees": 0,
+            "disagrees": 0,
+            "false_positive": 0,
+            "unknown_disposition": 0,
         }
         for severity in ("blocking", "non_blocking", "unknown")
     }
     for severity, total, resolved, auto, agrees, disagrees, fp, unknown in severity_rows:
         by_severity[str(severity)] = {
-            "total": int(total), "resolved": int(resolved), "bubo_auto": int(auto),
-            "agrees": int(agrees), "disagrees": int(disagrees),
-            "false_positive": int(fp), "unknown_disposition": int(unknown),
+            "total": int(total),
+            "resolved": int(resolved),
+            "bubo_auto": int(auto),
+            "agrees": int(agrees),
+            "disagrees": int(disagrees),
+            "false_positive": int(fp),
+            "unknown_disposition": int(unknown),
         }
     return {
         "total": int(row[0]),
@@ -1915,12 +2091,8 @@ def audit_rows(
         args = (*args, int(limit))
     with connect_db(readonly=True) as db:
         has_gov = _table_exists(db, "governance_decisions")
-        gov_select = (
-            "g.action, g.mode" if has_gov else "null as action, null as mode"
-        )
-        gov_join = (
-            "left join governance_decisions g on g.run_id = r.run_id" if has_gov else ""
-        )
+        gov_select = "g.action, g.mode" if has_gov else "null as action, null as mode"
+        gov_join = "left join governance_decisions g on g.run_id = r.run_id" if has_gov else ""
         rows = db.execute(
             f"""
             select r.run_id, r.project, r.iid, r.sha, r.started_at, r.finished_at,
@@ -1971,6 +2143,7 @@ def audit_rows(
                 "sensitive_paths_count": len(sensitive),
                 "tokens_total": int(r[14]) if r[14] is not None else 0,
                 "cost_usd": float(r[15]) if r[15] is not None else 0.0,
+                "cost_recorded": r[15] is not None,
                 "findings_total": int(r[16]),
                 "findings_posted": int(r[17]),
                 "outcomes_resolved": int(r[18]),
@@ -2028,9 +2201,7 @@ def latency_summary(
             f"select started_at, finished_at from review_runs where {where}", args
         ).fetchall()
     durations = sorted(
-        (
-            datetime.fromisoformat(finished_at) - datetime.fromisoformat(started_at)
-        ).total_seconds()
+        (datetime.fromisoformat(finished_at) - datetime.fromisoformat(started_at)).total_seconds()
         for started_at, finished_at in rows
     )
     if not durations:
@@ -2051,6 +2222,7 @@ def latency_summary(
 
 
 __all__ = [
+    "active_review_sha",
     "already_seen",
     "audit_rows",
     "connect_db",
@@ -2063,13 +2235,16 @@ __all__ = [
     "get_review_row",
     "governance_decision_for",
     "governance_decisions_for",
+    "head_stable_seconds",
     "init_db",
     "init_dirs",
+    "last_completed_review_sha",
     "latency_summary",
     "latest_reviewed_row",
     "list_recent_reviews",
     "metrics_summary",
     "noise_trend",
+    "open_finding_with_identity",
     "outcomes_for",
     "outcomes_summary",
     "policy_decisions_summary",

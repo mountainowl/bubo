@@ -7,11 +7,11 @@ from bubo import poller
 from bubo.telemetry.config import TelemetryConfig, telemetry_config_from_dict
 
 
-def test_telemetry_defaults_to_disabled() -> None:
+def test_telemetry_defaults_to_enabled() -> None:
     cfg = telemetry_config_from_dict({})
 
     assert cfg == TelemetryConfig()
-    assert cfg.enabled is False
+    assert cfg.enabled is True
     assert cfg.service_name == "bubo"
     assert not hasattr(cfg, "otlp_protocol")
 
@@ -82,9 +82,9 @@ def test_telemetry_config_rejects_quoted_boolean() -> None:
     # The footgun: bare bool("false") is True, so a quoted "false" used to
     # silently *enable* telemetry. bool_value now rejects the string outright.
     try:
-        telemetry_config_from_dict({"telemetry": {"enabled": "false"}})
+        telemetry_config_from_dict({"analytics": {"enabled": "false"}})
     except ValueError as exc:
-        assert "telemetry.enabled" in str(exc)
+        assert "analytics.enabled" in str(exc)
     else:
         raise AssertionError("expected quoted boolean to be rejected")
 
@@ -103,7 +103,7 @@ def test_read_config_disables_quoted_boolean_telemetry_without_failing_reviews()
 [gitlab]
 url = "https://gitlab.com"
 
-[telemetry]
+[analytics]
 enabled = "false"
 
 [[projects]]
@@ -113,9 +113,10 @@ enabled = true
                 encoding="utf-8",
             )
 
-            cfg = poller.read_config()
+            import pytest
 
-            assert cfg.telemetry_config.enabled is False
+            with pytest.raises(ValueError, match=r"analytics\.enabled"):
+                poller.read_config()
     finally:
         poller.CONFIG = original_config
 
@@ -142,7 +143,6 @@ enabled = true
             )
 
             cfg = poller.read_config()
-
             assert cfg.telemetry_config.enabled is False
     finally:
         poller.CONFIG = original_config
@@ -155,9 +155,9 @@ def test_read_config_disables_malformed_telemetry_shape_without_failing_reviews(
             poller.CONFIG = Path(tmp) / "env.toml"
             poller.CONFIG.write_text(
                 """
+telemetry = "bad"
 [gitlab]
 url = "https://gitlab.com"
-telemetry = "bad"
 
 [[projects]]
 path = "example/enabled-repo"
@@ -167,7 +167,33 @@ enabled = true
             )
 
             cfg = poller.read_config()
-
             assert cfg.telemetry_config.enabled is False
     finally:
         poller.CONFIG = original_config
+
+
+def test_analytics_setting_controls_both_transports():
+    from bubo.analytics_config import analytics_config_from_dict
+
+    for data, expected in [
+        ({}, True),
+        ({"analytics": {"enabled": False}}, False),
+        ({"analytics": {"enabled": True}}, True),
+    ]:
+        analytics = analytics_config_from_dict(data)
+        telemetry = telemetry_config_from_dict(data)
+        assert analytics.enabled is expected
+        assert telemetry.enabled is expected
+        assert telemetry.analytics == analytics
+
+
+def test_shipping_example_has_one_enabled_consent():
+    import tomllib
+    from pathlib import Path
+
+    from bubo.analytics_config import analytics_config_from_dict
+
+    data = tomllib.loads((Path(__file__).parents[1] / "config/env.example.toml").read_text())
+    assert "enabled" not in data["telemetry"]
+    assert analytics_config_from_dict(data).enabled is True
+    assert telemetry_config_from_dict(data).enabled is True
