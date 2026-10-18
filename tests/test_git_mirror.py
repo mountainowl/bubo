@@ -215,12 +215,12 @@ def test_concurrent_reviews_share_one_mirror(origin, spy) -> None:
     git("checkout", "-q", "-b", "other", "main", cwd=origin.src)
     second = push_commit(origin, "two\n", number=2)
     results: dict[int, str] = {}
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
 
     def run(number: int, sha: str) -> None:
         try:
             results[number] = git("rev-parse", "HEAD", cwd=checkout(sha, number))
-        except BaseException as exc:  # pragma: no cover - surfaced below
+        except Exception as exc:  # pragma: no cover - surfaced below
             errors.append(exc)
 
     threads = [threading.Thread(target=run, args=a) for a in ((1, first), (2, second))]
