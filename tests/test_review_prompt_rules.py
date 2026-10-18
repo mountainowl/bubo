@@ -72,3 +72,13 @@ def test_worker_passes_rendered_meta_prompt_to_agent(
     assert "# Bubo review contract" in prompt
     assert "Return at most 7 findings" in prompt
     assert "{{MAX_FINDINGS_PER_REVIEW}}" not in prompt
+
+
+def test_reviewer_skill_no_findings_instruction_matches_the_contract() -> None:
+    """The interactive skill once said to "return exactly" a sentence fragment
+    (`a schema-version-1 result ...`), which is neither JSON nor the contract."""
+    skill = Path(__file__).resolve().parents[1] / "skills" / "code-reviewer" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    assert "return exactly" not in text
+    assert "a schema-version-1 result with explicit status and coverage" not in text
+    assert "empty `findings` array" in text
