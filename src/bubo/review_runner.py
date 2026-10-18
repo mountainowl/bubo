@@ -65,7 +65,7 @@ def supported_agent_command(
                 "--profile": "bubo",
             }
             if codex
-            else {}
+            else {"--output-format": "json"}
         )
         if argument in fixed:
             if index + 1 >= len(args) or args[index + 1] != fixed[argument]:
@@ -73,7 +73,7 @@ def supported_agent_command(
             index += 2
             continue
         flags = (
-            {"--skip-git-repo-check", "--ignore-user-config", "--ignore-rules"}
+            {"--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json"}
             if codex
             else {"-p", "--print"}
         )
@@ -88,7 +88,9 @@ def supported_agent_command(
         index += 1
     if not exec_seen:
         raise ValueError("Read-only review requires codex exec or claude -p")
-    model = getattr(review_config, "model", None)
+    # Claude must get the Claude model; the Codex llm_model would make it exit 1.
+    model_for = getattr(review_config, "model_for", None)
+    model = model_for(command) if model_for else getattr(review_config, "model", None)
     if model and "--model" not in options:
         options.extend(["--model", model])
     if not codex:
@@ -105,6 +107,9 @@ def supported_agent_command(
             "Read,Grep,Glob",
             "--permission-prompts",
             "none",
+            # The JSON result carries the usage and cost Bubo meters.
+            "--output-format",
+            "json",
             *options,
             "-p",
             *prompt,
@@ -143,6 +148,8 @@ def supported_agent_command(
         "exec",
         "--output-last-message",
         str(final),
+        # JSONL transcript carries token usage; the review is the final message file.
+        "--json",
         "--ignore-user-config",
         "--ignore-rules",
         "--sandbox",
@@ -252,6 +259,22 @@ def run_review(
             if len(payload) > max_stdout_bytes:
                 raise ValueError("Reviewer did not produce a bounded final message")
             return ReviewProcessResult(result, payload.decode("utf-8"))
-        if result.returncode == 0 and len(result.stdout.encode("utf-8")) > max_stdout_bytes:
-            raise ValueError("Reviewer did not produce a bounded final message")
+        if result.returncode == 0:
+            final_message = claude_result(result.stdout)
+            if final_message is not None:
+                result = ReviewProcessResult(result, final_message)
+            if len(result.stdout.encode("utf-8")) > max_stdout_bytes:
+                raise ValueError("Reviewer did not produce a bounded final message")
         return result
+
+
+def claude_result(stdout: str | None) -> str | None:
+    """Final message from ``claude -p --output-format json``, or None for other output."""
+    try:
+        envelope = json.loads(stdout or "")
+    except ValueError:
+        return None
+    if not isinstance(envelope, dict) or envelope.get("type") != "result":
+        return None
+    result = envelope.get("result")
+    return result if isinstance(result, str) else None

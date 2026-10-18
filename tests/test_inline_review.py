@@ -222,7 +222,7 @@ class InlineReviewTests(unittest.TestCase):
             ReviewConfig(max_findings_per_merge_request=8),
         )
 
-        self.assertIn("Use the `code-reviewer` skill", prompt)
+        self.assertNotIn("Superpowers", prompt)
         self.assertIn("title", prompt)
         self.assertIn("impact", prompt)
         self.assertIn("evidence", prompt)

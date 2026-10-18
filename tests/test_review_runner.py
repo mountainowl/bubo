@@ -380,3 +380,87 @@ def test_claude_does_not_silently_ignore_custom_openai_provider(tmp_path):
             final=tmp_path / "final",
             review_config=ReviewConfig(llm_base_url="https://provider.example/v1"),
         )
+
+
+def test_claude_gets_claude_model_not_codex_model(tmp_path):
+    # claude exits 1 ("There's an issue with the selected model") on a gpt-* id.
+    command, _ = review_runner.supported_agent_command(
+        ["claude", "-p", "prompt"],
+        target=tmp_path,
+        final=tmp_path / "final",
+        review_config=ReviewConfig(model="gpt-6.1-sol", claude_model="claude-opus-5-5"),
+    )
+    assert command[command.index("--model") + 1] == "claude-opus-5-5"
+    assert "gpt-6.1-sol" not in command
+
+
+def test_codex_still_gets_codex_model(tmp_path):
+    command, _ = review_runner.supported_agent_command(
+        ["codex", "exec", "prompt"],
+        target=tmp_path,
+        final=tmp_path / "final",
+        review_config=ReviewConfig(model="gpt-6.1-sol", claude_model="claude-opus-5-5"),
+    )
+    assert command[command.index("--model") + 1] == "gpt-6.1-sol"
+
+
+@pytest.mark.parametrize(
+    ("command", "flags"),
+    [
+        (["codex", "exec", "prompt"], ["--json"]),
+        (["codex", "exec", "--json", "prompt"], ["--json"]),
+        (["claude", "-p", "prompt"], ["--output-format", "json"]),
+        (["claude", "-p", "--output-format", "json", "prompt"], ["--output-format", "json"]),
+    ],
+)
+def test_structured_output_is_requested_for_cost_tracking(command, flags, tmp_path):
+    generated, _ = review_runner.supported_agent_command(
+        command, target=tmp_path, final=tmp_path / "final"
+    )
+    assert generated.count(flags[0]) == 1
+    index = generated.index(flags[0])
+    assert generated[index : index + len(flags)] == flags
+    assert generated[-1] == "prompt"
+
+
+def test_claude_text_output_override_fails_closed(tmp_path):
+    with pytest.raises(ValueError, match="Unsupported"):
+        review_runner.supported_agent_command(
+            ["claude", "-p", "--output-format", "text", "prompt"],
+            target=tmp_path,
+            final=tmp_path / "final",
+        )
+
+
+def test_claude_json_result_is_final_message_and_envelope_is_transcript(
+    mocked_runner, monkeypatch, tmp_path
+):
+    envelope = json.dumps(
+        {"type": "result", "result": '{"status":"complete"}', "total_cost_usd": 0.42}
+    )
+    monkeypatch.setattr(
+        review_runner,
+        "run_bounded",
+        lambda command, **kwargs: CompletedProcess(command, 0, stdout=envelope, stderr=""),
+    )
+    result = review_runner.run_review(
+        ["claude", "-p", "prompt"], cwd=tmp_path, env={"HOME": str(tmp_path)}
+    )
+    assert result.stdout == '{"status":"complete"}'
+    assert result.diagnostic_stdout == envelope
+
+
+def test_claude_json_final_message_is_bounded(mocked_runner, monkeypatch, tmp_path):
+    envelope = json.dumps({"type": "result", "result": "x" * 10})
+    monkeypatch.setattr(
+        review_runner,
+        "run_bounded",
+        lambda command, **kwargs: CompletedProcess(command, 0, stdout=envelope, stderr=""),
+    )
+    with pytest.raises(ValueError, match="bounded final"):
+        review_runner.run_review(
+            ["claude", "-p", "prompt"],
+            cwd=tmp_path,
+            env={"HOME": str(tmp_path)},
+            max_stdout_bytes=5,
+        )

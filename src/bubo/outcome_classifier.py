@@ -30,6 +30,7 @@ from bubo.json_salvage import last_json_object_with_key
 from bubo.paths import ROOT
 from bubo.review_config import ReviewConfig
 from bubo.subproc import run_bounded
+from bubo.telemetry import parse_agent_output, record_agent_usage, structured_output_command
 from bubo.types import JsonObject
 
 # Classification is a tiny task; cap it well under the review timeout so a
@@ -183,13 +184,15 @@ def classify_developer_reply(cfg: ReviewConfig, finding_text: str, reply_text: s
     prompt = build_prompt(finding_text, reply_text)
     try:
         result = run_bounded(
-            [*command, prompt],
+            [*structured_output_command(command), prompt],
             env=classifier_env(os.environ, cfg),
             timeout=CLASSIFY_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # spawn / timeout / OS error — retry later
         log("reply_classify_failed", error=type(exc).__name__)
         return _error()
+    output = parse_agent_output(result.stdout or "")
+    record_agent_usage("classify", output, model=cfg.model_for(command), cfg=cfg.telemetry_config)
     if result.returncode:
         diagnostic = f"{result.stdout or ''}\n{result.stderr or ''}"
         log(
@@ -198,4 +201,4 @@ def classify_developer_reply(cfg: ReviewConfig, finding_text: str, reply_text: s
             reason=_failure_reason(diagnostic),
         )
         return _error()
-    return parse_verdict(result.stdout or "")
+    return parse_verdict(output.review)

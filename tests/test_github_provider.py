@@ -520,7 +520,8 @@ def test_provider_review_prompt_mentions_github_pr() -> None:
     assert "GitHub PR" in prompt
     assert "number: 5" in prompt
     assert "<change_metadata>" in prompt
-    assert "Use the `code-reviewer` skill" in prompt
+    assert "Follow the Bubo review contract below." in prompt
+    assert "# Bubo review contract" in prompt
 
 
 def _open_bubo_thread(*, marker: str = "") -> dict:

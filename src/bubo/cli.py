@@ -7,18 +7,20 @@ installed via ``uv tool install`` / ``pipx install``.
 Two subcommands so far:
 
 * ``bubo init`` — write the deployable assets the runtime needs
-  but Python packaging cannot place itself: ``~/.codex/config.toml``
-  (with the load-bearing ``[profiles.bubo]`` block),
+  but Python packaging cannot place itself: ``~/.codex/config.toml``,
+  the load-bearing ``~/.codex/bubo.config.toml`` Codex profile (a legacy
+  ``[profiles.bubo]`` table in ``config.toml`` is moved there),
   ``~/.claude/settings.json``, and the per-host workspace under
   ``$BUBO_ROOT`` (config seed, var/ tree, SQLite schema,
-  copies of the bundled prompts/skills/plugins). Idempotent on re-run;
+  copies of the bundled prompts/skills). Idempotent on re-run;
   ``--dry-run`` lists every action it would take without touching disk;
   ``--force`` overwrites operator-edited files; ``--no-agent-config``
   skips the ``~/.codex`` and ``~/.claude`` writes for hosts with
   hand-rolled agent configs.
 * ``bubo doctor`` — non-mutating health check. Returns non-zero
   on any verification failure (missing ``~/.codex/config.toml``,
-  ``[profiles.bubo]`` block absent, missing ``env.toml``,
+  missing ``~/.codex/bubo.config.toml`` or a leftover legacy
+  ``[profiles.bubo]`` table, missing ``env.toml``,
   uninitialized DB). Suitable for cron / monitoring smoke tests.
 
 The CLI uses :mod:`importlib.resources` to read packaged templates from
@@ -30,9 +32,12 @@ the project was installed via ``uv tool install``, ``pipx install``,
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tomllib
 from collections.abc import Iterable
@@ -45,6 +50,7 @@ from typing import Any
 from bubo import paths
 from bubo.config_values import section
 from bubo.db import init_db
+from bubo.env_config import DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL
 from bubo.errors import describe
 from bubo.events import log
 from bubo.update_admission import MaintenanceInProgress, activity
@@ -64,11 +70,11 @@ _ASSETS_PACKAGE = "bubo._assets"
 # deleted), but until then the developer/test path needs it.
 _EDITABLE_FALLBACKS: dict[tuple[str, ...], str] = {
     ("codex-config.toml",): "deploy/templates/codex-config.toml",
+    ("codex-bubo.config.toml",): "deploy/templates/codex-bubo.config.toml",
     ("claude-settings.json",): "deploy/templates/claude-settings.json",
     ("env.example.toml",): "config/env.example.toml",
     ("prompts",): "prompts",
     ("skills",): "skills",
-    ("plugins",): "plugins",
     # Built operator-UI SPA assets. Force-included into the wheel under
     # bubo/_assets/ui/ (see pyproject.toml); the editable/source install reads
     # the committed Vite build output at ui/dist/ instead.
@@ -76,6 +82,13 @@ _EDITABLE_FALLBACKS: dict[tuple[str, ...], str] = {
 }
 
 _LEGACY_GENERATED_TEMPLATES = ("bubo.cron", "bubo.service", "bubo.timer")
+
+# Codex profile the packaged templates configure. Codex >= 0.134.0 reads a
+# profile from ``~/.codex/<name>.config.toml`` and refuses ``--profile <name>``
+# while ``config.toml`` still holds the legacy ``[profiles.<name>]`` table.
+_CODEX_PROFILE = "bubo"
+_CODEX_PROFILE_FILE = f"{_CODEX_PROFILE}.config.toml"
+_CODEX_MIN_VERSION = (0, 134, 0)
 
 
 def _repo_root() -> Path:
@@ -134,7 +147,8 @@ class Action:
     symlink targets). Empty for actions with no source.
     """
 
-    kind: str  # "write_file", "mkdir", "copy_tree", "init_db", "symlink", "skip"
+    kind: str  # "write_file", "mkdir", "copy_tree", "init_db", "symlink", "skip",
+    # "migrate_codex_profile"
     target: Path
     source: tuple[str, ...] | str = ""
     note: str = ""
@@ -181,9 +195,9 @@ def _plan_env_seed(root: Path, force: bool) -> list[Action]:
 
 
 def _plan_packaged_runtime_copies(root: Path) -> list[Action]:
-    """Place prompts, skills, plugins on disk under ``$ROOT/``.
+    """Place prompts and skills on disk under ``$ROOT/``.
 
-    These need to be on a real filesystem because Codex's plugin loader
+    These need to be on a real filesystem because Codex's skill loader
     and the meta-prompt renderer expect a directory tree, not an
     importlib resource handle. Re-copied every run so packaged updates
     win over stale on-disk copies (the alternative — only-on-first-init
@@ -200,12 +214,6 @@ def _plan_packaged_runtime_copies(root: Path) -> list[Action]:
             kind="copy_tree",
             target=root / "skills",
             source=("skills",),
-            note="overwrite on every init",
-        ),
-        Action(
-            kind="copy_tree",
-            target=root / "plugins",
-            source=("plugins",),
             note="overwrite on every init",
         ),
     ]
@@ -229,16 +237,40 @@ def _plan_legacy_template_cleanup(root: Path) -> list[Action]:
 
 
 def _plan_agent_config(home: Path, root: Path, force: bool) -> list[Action]:
-    """``~/.codex/config.toml`` and ``~/.claude/settings.json`` from templates."""
+    """``~/.codex/config.toml``, the Codex ``bubo`` profile and
+    ``~/.claude/settings.json`` from templates."""
     codex_target = home / ".codex" / "config.toml"
+    profile_target = home / ".codex" / _CODEX_PROFILE_FILE
     claude_target = home / ".claude" / "settings.json"
     skills_link = home / ".codex" / "skills" / "code-reviewer"
     actions: list[Action] = []
-
-    for target, source_name in (
+    targets: list[tuple[Path, str]] = [
         (codex_target, "codex-config.toml"),
+        (profile_target, "codex-bubo.config.toml"),
         (claude_target, "claude-settings.json"),
-    ):
+    ]
+
+    # An existing config.toml written by an older init carries the profile as
+    # a [profiles.bubo] table, which current Codex rejects. --force rewrites
+    # config.toml from the template anyway; otherwise move the table into the
+    # profile file, keeping the operator's values.
+    if not force and _has_legacy_codex_profile(codex_target):
+        actions.append(
+            Action(
+                kind="migrate_codex_profile",
+                target=codex_target,
+                source=str(profile_target),
+                note=(
+                    f"move legacy [profiles.{_CODEX_PROFILE}] into {profile_target.name} "
+                    "(Codex >= 0.134.0 rejects it in config.toml); backup kept as config.toml.bak"
+                ),
+            )
+        )
+        if not profile_target.exists():
+            # The migration writes the profile file from the legacy table.
+            targets.remove((profile_target, "codex-bubo.config.toml"))
+
+    for target, source_name in targets:
         if target.exists() and not force:
             actions.append(
                 Action(
@@ -260,15 +292,129 @@ def _plan_agent_config(home: Path, root: Path, force: bool) -> list[Action]:
                 )
             )
 
+    # Older inits wrote the Codex model into the Claude settings, which Claude
+    # Code rejects on every run. Swap in the Claude model, keeping the rest.
+    if not force and _claude_settings_have_openai_model(claude_target):
+        actions.append(
+            Action(
+                kind="repair_claude_model",
+                target=claude_target,
+                note="replace the OpenAI model id an older init wrote with [agents].claude_model",
+            )
+        )
+
     actions.append(
         Action(
             kind="symlink",
             target=skills_link,
             source=str(root / "skills" / "code-reviewer"),
-            note="Codex resolves /using-superpowers + $code-reviewer skills via this link",
+            note="interactive $code-reviewer skill for Codex (reviews inline the rules)",
         )
     )
     return actions
+
+
+def _claude_settings_have_openai_model(target: Path) -> bool:
+    if not target.is_file():
+        return False
+    try:
+        model = json.loads(target.read_text()).get("model")
+    except ValueError, AttributeError:
+        return False
+    return isinstance(model, str) and model.startswith("gpt-")
+
+
+def _repair_claude_model(target: Path, model: str) -> None:
+    settings = json.loads(target.read_text())
+    settings["model"] = model
+    target.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+_TABLE_HEADER = re.compile(r"^\s*\[")
+_LEGACY_PROFILE_HEADER = re.compile(
+    r'^\s*\[\s*profiles\s*\.\s*"?' + re.escape(_CODEX_PROFILE) + r'"?\s*(\.[^\]]*)?\]\s*(#.*)?$'
+)
+_LEGACY_PROFILE_SELECTOR = re.compile(
+    r'^\s*profile\s*=\s*["\']' + re.escape(_CODEX_PROFILE) + r'["\']\s*(#.*)?$'
+)
+
+
+def _has_legacy_codex_profile(target: Path) -> bool:
+    if not target.is_file():
+        return False
+    return any(_LEGACY_PROFILE_HEADER.match(line) for line in target.read_text().splitlines())
+
+
+def _split_legacy_codex_profile(text: str) -> tuple[str, str] | None:
+    """Split a legacy ``[profiles.bubo]`` table out of a Codex ``config.toml``.
+
+    Returns ``(config_without_profile, profile_file_body)`` or ``None`` when
+    there is no legacy table. The table's own lines (and those of any
+    ``[profiles.bubo.<sub>]`` subtable, re-headed as ``[<sub>]``) move verbatim,
+    so operator edits survive. A top-level ``profile = "bubo"`` selector is
+    dropped too: Codex rejects it alongside the table, and the reviewer
+    command passes ``--profile`` explicitly.
+    """
+    kept: list[str] = []
+    main: list[str] = []
+    subtables: list[str] = []
+    current: list[str] | None = None
+    found = False
+    before_first_table = True
+    for line in text.splitlines():
+        match = _LEGACY_PROFILE_HEADER.match(line)
+        if match:
+            found = True
+            before_first_table = False
+            # Comment lines glued to the header document the legacy table.
+            while kept and kept[-1].lstrip().startswith("#"):
+                kept.pop()
+            if match.group(1):
+                current = subtables
+                current.append(f"[{match.group(1)[1:].strip()}]")
+            else:
+                current = main
+            continue
+        if _TABLE_HEADER.match(line):
+            before_first_table = False
+            current = None
+        elif before_first_table and _LEGACY_PROFILE_SELECTOR.match(line):
+            continue
+        (current if current is not None else kept).append(line)
+    if not found:
+        return None
+    while main and not main[-1].strip():
+        main.pop()
+    body = "\n".join(main) + "\n"
+    if subtables:
+        body += "\n" + "\n".join(subtables).rstrip() + "\n"
+    return "\n".join(kept).rstrip() + "\n", body
+
+
+def _migrate_codex_profile(config: Path, profile: Path) -> None:
+    """Move a legacy ``[profiles.bubo]`` table into the profile file.
+
+    Leaves both files untouched (and warns) when the result would not parse,
+    so a hand-edited config is never half-migrated.
+    """
+    split = _split_legacy_codex_profile(config.read_text())
+    if split is None:
+        return
+    remaining, body = split
+    try:
+        tomllib.loads(remaining)
+        tomllib.loads(body)
+    except tomllib.TOMLDecodeError as exc:
+        print(
+            f"warning: could not migrate [profiles.{_CODEX_PROFILE}] out of {config} "
+            f"({exc}); move it to {profile} by hand or re-run `bubo init --force`",
+            file=sys.stderr,
+        )
+        return
+    shutil.copy2(config, config.with_name(config.name + ".bak"))
+    if not profile.exists():
+        profile.write_text(body)
+    config.write_text(remaining)
 
 
 def plan_init(
@@ -306,7 +452,8 @@ def _render_template(parts: tuple[str, ...], subs: dict[str, str]) -> str:
     """Substitute ``{{KEY}}`` placeholders in a packaged template.
 
     ``subs`` always carries ``ROOT``; agent-config templates additionally
-    carry ``LLM_MODEL`` / ``LLM_MODEL_EFFORT`` and the conditional
+    carry ``LLM_MODEL`` / ``LLM_MODEL_EFFORT`` (Codex), ``CLAUDE_MODEL`` (Claude)
+    and the conditional
     model-provider pieces. Placeholders a given template doesn't contain are
     simply no-ops.
     """
@@ -321,7 +468,7 @@ def _read_agent_config(root: Path) -> dict[str, Any]:
 
     Reads the on-disk ``env.toml`` when present, else the packaged example
     (which is what a fresh init is about to seed). Parsed WITHOUT placeholder
-    expansion — only the literal ``llm_model`` / ``llm_model_effort`` /
+    expansion — only the literal ``llm_model`` / ``claude_model`` / ``llm_model_effort`` /
     ``llm_base_url`` are needed here, never the API key.
     """
     cfg_path = root / "config" / "env.toml"
@@ -346,7 +493,8 @@ def _agent_template_subs(root: Path, agent: dict[str, Any]) -> dict[str, str]:
     mode). When it is unset, both provider placeholders render empty and Codex
     uses its built-in provider.
     """
-    model = str(agent.get("llm_model") or "gpt-5.5")
+    model = str(agent.get("llm_model") or DEFAULT_CODEX_MODEL)
+    claude_model = str(agent.get("claude_model") or DEFAULT_CLAUDE_MODEL)
     effort = str(agent.get("llm_model_effort") or agent.get("reasoning_effort") or "medium")
     base_url = str(agent.get("llm_base_url") or "").strip()
     if base_url:
@@ -364,6 +512,7 @@ def _agent_template_subs(root: Path, agent: dict[str, Any]) -> dict[str, str]:
     return {
         "ROOT": str(root),
         "LLM_MODEL": model,
+        "CLAUDE_MODEL": claude_model,
         "LLM_MODEL_EFFORT": effort,
         "MODEL_PROVIDER_LINE": provider_line,
         "MODEL_PROVIDER_BLOCK": provider_block,
@@ -413,6 +562,13 @@ def _execute(action: Action, subs: dict[str, str]) -> None:
         if action.target.is_symlink() or action.target.exists():
             action.target.unlink()
         action.target.symlink_to(action.source)
+        return
+    if action.kind == "repair_claude_model":
+        _repair_claude_model(action.target, subs["CLAUDE_MODEL"])
+        return
+    if action.kind == "migrate_codex_profile":
+        assert isinstance(action.source, str), "migrate_codex_profile expects a path"
+        _migrate_codex_profile(action.target, Path(action.source))
         return
     if action.kind == "init_db":
         init_db()
@@ -529,26 +685,76 @@ def _check_db(root: Path) -> Check:
     )
 
 
-def _check_codex_profile(home: Path | None = None) -> Check:
+def _check_codex_profile(home: Path | None = None) -> list[Check]:
     home = home or Path.home()
     target = home / ".codex" / "config.toml"
+    profile = home / ".codex" / _CODEX_PROFILE_FILE
     if not target.is_file():
-        return Check(
-            label="codex: ~/.codex/config.toml present",
-            passed=False,
-            detail=f"{target} missing — run `bubo init` (with agent config)",
-        )
-    body = target.read_text()
-    has_profile = "[profiles.bubo]" in body
-    return Check(
-        label="codex: [profiles.bubo] block present",
-        passed=has_profile,
-        detail=(
-            "missing — codex --profile bubo will abort; regenerate with `bubo init --force`"
-            if not has_profile
-            else f"{target}"
+        return [
+            Check(
+                label="codex: ~/.codex/config.toml present",
+                passed=False,
+                detail=f"{target} missing — run `bubo init` (with agent config)",
+            )
+        ]
+    legacy = _has_legacy_codex_profile(target)
+    return [
+        Check(
+            label=f"codex: no legacy [profiles.{_CODEX_PROFILE}] table in config.toml",
+            passed=not legacy,
+            detail=(
+                f"present — codex --profile {_CODEX_PROFILE} aborts on Codex >= 0.134.0; "
+                "re-run `bubo init` to move it"
+                if legacy
+                else f"{target}"
+            ),
         ),
-    )
+        Check(
+            label=f"codex: ~/.codex/{_CODEX_PROFILE_FILE} profile present",
+            passed=profile.is_file(),
+            detail=(
+                f"{profile}"
+                if profile.is_file()
+                else f"{profile} missing — codex --profile {_CODEX_PROFILE} will abort; "
+                "re-run `bubo init`"
+            ),
+        ),
+    ]
+
+
+def _check_codex_version() -> list[Check]:
+    """Fail on a Codex CLI too old to load ``~/.codex/bubo.config.toml``.
+
+    Skipped when ``codex`` is not on PATH (a Claude-only host) or its version
+    can't be read.
+    """
+    codex = shutil.which("codex")
+    if codex is None:
+        return []
+    try:
+        out = subprocess.run(
+            [codex, "--version"], capture_output=True, text=True, timeout=10, check=False
+        ).stdout
+    except OSError, subprocess.TimeoutExpired:
+        return []
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", out)
+    if match is None:
+        return []
+    version = tuple(int(part) for part in match.groups())
+    minimum = ".".join(map(str, _CODEX_MIN_VERSION))
+    ok = version >= _CODEX_MIN_VERSION
+    return [
+        Check(
+            label=f"codex: CLI >= {minimum}",
+            passed=ok,
+            detail=(
+                f"{match.group(0)}"
+                if ok
+                else f"{match.group(0)} can't load ~/.codex/{_CODEX_PROFILE_FILE} "
+                "(config profile `bubo` not found); `npm install -g @openai/codex`"
+            ),
+        )
+    ]
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -559,7 +765,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks.append(_check_env_toml(root))
     checks.append(_check_db(root))
     if not args.no_agent_config:
-        checks.append(_check_codex_profile())
+        checks.extend(_check_codex_profile())
+        checks.extend(_check_codex_version())
     failures = [c for c in checks if not c.passed]
     for check in checks:
         mark = "OK  " if check.passed else "FAIL"

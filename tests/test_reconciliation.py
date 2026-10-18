@@ -349,6 +349,7 @@ def _run_worker_case(
             external.append(True)
         return post_result
 
+    (tmp / "prompt").write_text("rules", encoding="utf-8")
     with (
         patch.object(poller.paths, "REPORTS", tmp / "reports"),
         patch("bubo.poller.read_config", return_value=cfg),

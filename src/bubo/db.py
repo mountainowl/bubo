@@ -438,6 +438,31 @@ def record_review_run_finish(
         )
 
 
+def add_review_run_usage(run_id: str, *, tokens: TokenUsage, cost_usd: float) -> None:
+    """Add agent calls made after a run finished (reconciliation, reply
+    classification) to its ``review_runs`` totals. No row, no-op."""
+    with connect_db() as db:
+        db.execute(
+            """
+            update review_runs set
+              tokens_input=coalesce(tokens_input,0)+?,
+              tokens_output=coalesce(tokens_output,0)+?,
+              tokens_cached=coalesce(tokens_cached,0)+?,
+              tokens_total=coalesce(tokens_total,0)+?,
+              cost_usd=coalesce(cost_usd,0)+?
+            where run_id=?
+            """,
+            (
+                tokens.input or 0,
+                tokens.output or 0,
+                tokens.cached or 0,
+                tokens.total or 0,
+                cost_usd,
+                run_id,
+            ),
+        )
+
+
 def record_provenance(run_id: str, signal: ProvenanceSignal) -> None:
     """Persist a change's provenance onto its ``review_runs`` row — write-once.
 

@@ -76,6 +76,23 @@ identity stays consistent across upgrades.
 Delivery follows your [telemetry preferences](/configuration#analytics). The local
 HTML dashboard remains available with delivery disabled.
 
+### Cost
+
+Bubo reads usage from the agent CLI's machine-readable output (`codex exec --json`,
+`claude -p --output-format json`) and adds that flag to a known reviewer command
+itself.
+
+- **Claude:** each run records the cost Claude Code reports for it.
+- **Codex:** Codex reports tokens but no cost. Bubo prices them for `llm_model` from
+  [LiteLLM's public price list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json),
+  fetched at most once a day and cached next to the database. If the download
+  fails, the cached copy is used.
+
+A review's cost covers every agent call it makes: the review itself, finding
+verification, fixed-finding reconciliation, and the classifier that later reads
+developer replies to its findings. Each call is also logged as an `agent_usage`
+event with its `operation`.
+
 Optional measurement and pricing settings:
 
 ```toml
@@ -83,6 +100,9 @@ Optional measurement and pricing settings:
 export_interval_seconds = 30
 emit_finding_events = true
 emit_outcome_sync = true
+# Set false to skip the price list download and use the prices below for every model.
+live_pricing = true
+# Used for models the price list does not know, or always when live_pricing = false.
 input_per_1m = 1.0
 output_per_1m = 2.0
 ```

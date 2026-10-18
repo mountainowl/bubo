@@ -87,14 +87,15 @@ restart; it must invoke the foreground service command above.
 
 ## Health check
 
-`bubo doctor` runs four non-mutating checks:
+`bubo doctor` runs these non-mutating checks:
 
 | Check | What fails it |
 |---|---|
 | Workspace dirs (`config/`, `var/state`, `var/work`, `var/log`) | Init never ran, or the install root moved without re-init. |
 | `config/env.toml` present | Operator hasn't seeded the config yet. |
 | SQLite DB initialized | Schema-init step skipped or DB file deleted. |
-| `~/.codex/config.toml` contains `[profiles.bubo]` | Codex profile missing or hand-edited away. |
+| `~/.codex/config.toml` has no legacy `[profiles.bubo]` table | Config written by an older `bubo init`; Codex 0.134.0+ rejects it. Re-run `bubo init`. |
+| `~/.codex/bubo.config.toml` present | Codex profile missing or deleted. |
 
 Pass `--no-agent-config` to skip generated agent profiles and manage them
 yourself. Doctor returns 0 on a full pass and non-zero on any failure.

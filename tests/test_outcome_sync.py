@@ -805,6 +805,48 @@ def test_outcomes_for_keeps_legacy_unknown_and_derives_durable_bubo_auto() -> No
         paths.DB = original_db
 
 
+def test_outcome_sync_bills_the_classifier_call_to_the_findings_review_run() -> None:
+    from bubo.statuses import ReviewMode
+    from bubo.telemetry import TokenUsage, record_agent_usage
+    from bubo.telemetry.agent_output import AgentOutput
+
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            _seed_posted_finding(paths.DB)
+            run_id = db.review_run_id("group/repo", 1, "sha")
+            db.record_review_run_start(
+                run_id=run_id, project="group/repo", iid=1, sha="sha", model="m",
+                prompt_version="v", review_mode=ReviewMode.DIFF, dry_run=False,
+            )
+            fake = _SilentTelemetry()
+            cfg = ReviewConfig(gitlab_url="https://gitlab.com", telemetry_config=fake.config)
+            provider = _FakeProvider(outcome=_replied_unresolved_outcome())
+
+            def classify(*_args: object) -> dict[str, object]:
+                usage = TokenUsage(input=100, output=10, cached=0, total=110)
+                record_agent_usage(
+                    "classify", AgentOutput("", usage, cost_usd=0.02), model="m",
+                    cfg=cfg.telemetry_config,
+                )
+                return {"verdict": "rejected", "false_positive": False}
+
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=provider):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
+                        with patch("bubo.poller.classify_developer_reply", classify):
+                            assert poller.sync_outcomes(limit=1) == 1
+            with sqlite3.connect(paths.DB) as conn:
+                row = conn.execute(
+                    "select tokens_input, tokens_output, tokens_total, cost_usd from review_runs"
+                ).fetchone()
+            assert row == (100, 10, 110, 0.02)
+    finally:
+        paths.DB = original_db
+
+
 def _sync_with_agent_reply(tmp: str, agent_stdout: str) -> tuple[object, ...]:
     """Run real sync_outcomes + real reply classifier against a fake agent CLI.
 
