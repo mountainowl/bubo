@@ -136,6 +136,48 @@ Bubo requires a separate high-confidence `FIXED` proof with current-checkout pat
 
 Developer-resolved or deleted threads are no-ops. Uncertain proof, stale heads, duplicate threads, provider races, or a still-valid finding are left open; Bubo does not post a no-findings acknowledgement in those cases.
 
+## New commits on a reviewed change
+
+`[review].rereview` decides what a new head gets after a completed review:
+`"full"` (default) reviews the whole change again, `"incremental"` reviews only
+the commits since the last completed review and runs the reconciliation above
+for earlier findings even if `reconcile_fixed_findings` is off, and `"off"`
+reviews only the first commit. If the earlier reviewed commit is no longer an
+ancestor of the head (force-push or rebase), an incremental review falls back
+to a full one.
+
+In every mode:
+
+- **One review per change at a time.** A head pushed while a review is queued
+  or running waits for the next poll.
+- **Newest commit wins.** If the head moves while the agent is reviewing, the
+  run is recorded `superseded` and posts nothing, so findings are never
+  anchored to line numbers from an older commit. The new head is reviewed by a
+  later poll.
+- **No repeats.** A finding with the same file and canonical text as an open
+  Bubo thread on the change is skipped, even if the line moved or the in-voice
+  comment is worded differently.
+
+`[review].settle_seconds` debounces bursts of pushes: a head is reviewed only
+once it has been unchanged that long, measured from the first poll that saw
+it, so the effective delay rounds up to a poll interval.
+
+## Git checkouts
+
+Each project keeps one bare mirror under `$BUBO_BASE_DIR/work/_mirrors/`.
+A review takes an exclusive lock on the mirror, fetches only the target branch
+and the change ref (with the same per-call auth header; no credential is
+written to any git config), and adds a detached `git worktree` for the review,
+which is removed afterwards. The first review of a project downloads the
+repository once; later reviews download only new objects. If any mirror step
+fails, Bubo deletes the mirror and falls back to a full clone for that review.
+
+A worktree's `.git` is a file pointing into the mirror, so the review agent
+must be able to read `$BUBO_BASE_DIR/work/_mirrors/`. The default Codex
+`read-only` sandbox and Claude Code allow reads outside the working directory;
+a custom sandbox that limits reads to the checkout must also allow the mirror
+directory.
+
 ## Outcome sync
 
 The review service grades posted findings against current SCM state at
@@ -154,9 +196,12 @@ they **rejected** it ("working as intended", "not a blocker"). The `resolved`
 flag alone can't tell them apart, which would overcount the reviewer's
 precision. So when a finding's discussion has a developer reply and no explicit
 dispute marker, outcome sync asks an LLM to read the bot's finding plus the
-reply and decide whether it was **accepted** or **rejected**. A rejection sets
-`disputed` (and `false_positive` when the reply says the finding is factually
-wrong).
+reply and decide whether the developer **agrees**, merely **accepted** it,
+**rejected** it, or is unclear. A rejection sets `disputed` (and
+`false_positive` when the reply says the finding is factually wrong). Explicit
+agreement ("good catch", "you're right", "fixed") records
+`developer_disposition = agrees`; a plain "will look at it" stays `unknown`,
+because it doesn't confirm the finding was correct.
 
 - **Model-agnostic.** Classification runs the same agent you set in
   `[agents].reviewer_command` (default `codex exec --profile bubo`; a custom

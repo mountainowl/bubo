@@ -122,7 +122,15 @@ def safe_context(attrs):
                 break
         out["model_family"] = family
     dimensions = {
-        "status": {"queued", "running", "success", "no_findings", "failed", "deferred"},
+        "status": {
+            "queued",
+            "running",
+            "success",
+            "no_findings",
+            "failed",
+            "deferred",
+            "superseded",
+        },
         "review_mode": {"diff", "repo", "repo_review"},
         "outcome": {"verified", "refuted", "opened", "recovered"},
         "finding_type": {"issue", "suggestion", "question", "unknown"},

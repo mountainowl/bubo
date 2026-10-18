@@ -70,6 +70,33 @@ def positive_int(value: object, name: str) -> int:
     return parsed
 
 
+def non_negative_int(value: object, name: str) -> int:
+    """Parse ``value`` as an integer ``>= 0`` (``0`` usually means "off").
+
+    Raises :class:`ConfigError` with the field ``name`` if ``value`` cannot be
+    parsed as an integer or is negative.
+    """
+    try:
+        parsed = int(str(value))
+    except ValueError:
+        raise ConfigError(
+            describe(
+                f"{name} must be a non-negative integer",
+                reason=f"the value {value!r} could not be parsed as an integer",
+                fix=f"set {name} in config/env.toml to a whole number >= 0.",
+            )
+        ) from None
+    if parsed < 0:
+        raise ConfigError(
+            describe(
+                f"{name} must be a non-negative integer",
+                reason=f"the value {parsed} is negative",
+                fix=f"set {name} in config/env.toml to a whole number >= 0.",
+            )
+        )
+    return parsed
+
+
 def non_negative_float(value: object, name: str) -> float:
     """Parse ``value`` as a float ``>= 0.0``.
 

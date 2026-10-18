@@ -36,6 +36,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from bubo.json_salvage import last_json_object_with_key
 from bubo.types import JsonObject
 
 # A finding's evidence/body fed to the verifier is truncated — a verdict
@@ -216,17 +217,7 @@ def build_reconciliation_prompt(
 
 def parse_reconciliation_result(stdout: str) -> ReconciliationResult | None:
     """Parse a reconciliation verdict; malformed output is deliberately uncertain."""
-    decoder = json.JSONDecoder()
-    found: JsonObject | None = None
-    for index, char in enumerate(stdout):
-        if char != "{":
-            continue
-        try:
-            candidate, _ = decoder.raw_decode(stdout[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(candidate, dict) and "verdict" in candidate:
-            found = candidate
+    found = last_json_object_with_key(stdout, "verdict")
     if found is None:
         return None
     try:
@@ -249,8 +240,8 @@ def parse_verdict(stdout: str, *, lens: str = "") -> Verdict | None:
 
     Agent CLIs interleave reasoning/tool transcript with the answer and the
     real answer comes last, so — mirroring
-    :func:`bubo.outcome_classifier.parse_verdict` — every ``{`` is scanned
-    and the final object carrying a ``real`` key wins. Returns ``None`` when
+    :func:`bubo.outcome_classifier.parse_verdict` — the object carrying a
+    ``real`` key that starts last wins. Returns ``None`` when
     no such object is found, so the caller can treat unparseable output as a
     *failed* check rather than a refutation.
 
@@ -258,17 +249,7 @@ def parse_verdict(stdout: str, *, lens: str = "") -> Verdict | None:
     missing or non-numeric/out-of-range ``confidence`` resolves to ``0.0``
     (so a "real, no confidence" answer cannot clear the floor).
     """
-    decoder = json.JSONDecoder()
-    found: JsonObject | None = None
-    for index, char in enumerate(stdout):
-        if char != "{":
-            continue
-        try:
-            candidate, _ = decoder.raw_decode(stdout[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(candidate, dict) and "real" in candidate:
-            found = candidate
+    found = last_json_object_with_key(stdout, "real")
     if found is None:
         return None
     return Verdict(

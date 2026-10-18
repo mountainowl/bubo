@@ -272,6 +272,33 @@ def init_db() -> None:
             )
             """
         )
+        # Secondary indexes. Without them the report readers full-scan, and
+        # audit_rows' correlated finding_outcomes subqueries scan the whole
+        # table once per review run, so report time grows quadratically.
+        for statement in (
+            "create index if not exists ix_fo_change on finding_outcomes(project, iid, sha)",
+            "create index if not exists ix_fo_checked on finding_outcomes(last_checked_at)",
+            "create index if not exists ix_rm_updated on reviewed_mrs(updated_at)",
+            "create index if not exists ix_rm_status on reviewed_mrs(status)",
+            "create index if not exists ix_rr_started on review_runs(started_at)",
+            "create index if not exists ix_rf_updated on review_findings(updated_at)",
+            "create index if not exists ix_rf_status on review_findings(status)",
+            "create index if not exists ix_gd_created on governance_decisions(created_at)",
+        ):
+            db.execute(statement)
+        # Debounce state for [review].settle_seconds: the head the poller last
+        # saw per change, and when it first saw it (#254).
+        db.execute(
+            """
+            create table if not exists change_heads (
+              project text not null,
+              iid integer not null,
+              sha text not null,
+              first_seen_at text not null,
+              primary key(project, iid)
+            )
+            """
+        )
 
 
 def ensure_column(db: sqlite3.Connection, table: str, name: str, definition: str) -> None:
@@ -657,7 +684,78 @@ def already_seen(
         return (
             failed_ttl_seconds is not None and status_age_seconds(updated_at) <= failed_ttl_seconds
         )
-    return status in {ReviewStatus.RUNNING, ReviewStatus.SUCCESS, ReviewStatus.NO_FINDINGS}
+    return status in {
+        ReviewStatus.RUNNING,
+        ReviewStatus.SUCCESS,
+        ReviewStatus.NO_FINDINGS,
+        ReviewStatus.SUPERSEDED,
+    }
+
+
+def active_review_sha(project: str, iid: int, sha: str, ttl_seconds: int) -> str | None:
+    """Return another SHA of this change that is queued or running, if any.
+
+    Enforces "one review per change at a time": the poller leaves a newer
+    head unseen while an older one is in flight. Rows older than
+    ``ttl_seconds`` are ignored so a worker that died without recording a
+    terminal status cannot block the change forever (the worker itself is
+    killed at ``timeout_seconds``).
+    """
+    with connect_db() as db:
+        rows = db.execute(
+            """
+            select sha,updated_at from reviewed_mrs
+            where project=? and iid=? and sha != ? and status in (?, ?)
+            """,
+            (project, iid, sha, ReviewStatus.QUEUED, ReviewStatus.RUNNING),
+        ).fetchall()
+    for other, updated_at in rows:
+        if status_age_seconds(updated_at) <= ttl_seconds:
+            return str(other)
+    return None
+
+
+def head_stable_seconds(project: str, iid: int, sha: str) -> float:
+    """Record ``sha`` as the change's observed head; return how long it has been.
+
+    The clock starts the first time the poller sees a head and restarts
+    whenever the head changes, so a burst of pushes keeps resetting it.
+    """
+    with connect_db() as db:
+        db.execute(
+            """
+            insert into change_heads(project,iid,sha,first_seen_at) values(?,?,?,?)
+            on conflict(project,iid) do update set
+              sha=excluded.sha,
+              first_seen_at=excluded.first_seen_at
+            where change_heads.sha != excluded.sha
+            """,
+            (project, iid, sha, now()),
+        )
+        row = db.execute(
+            "select first_seen_at from change_heads where project=? and iid=?",
+            (project, iid),
+        ).fetchone()
+    return status_age_seconds(row[0]) if row else 0.0
+
+
+def last_completed_review_sha(project: str, iid: int, sha: str) -> str | None:
+    """Return the newest other SHA of this change whose review completed.
+
+    "Completed" means ``success`` or ``no_findings``: a failed, deferred or
+    superseded run never counts as having reviewed the change.
+    """
+    with connect_db() as db:
+        row = db.execute(
+            """
+            select sha from reviewed_mrs
+            where project=? and iid=? and sha != ? and status in (?, ?)
+            order by updated_at desc
+            limit 1
+            """,
+            (project, iid, sha, ReviewStatus.SUCCESS, ReviewStatus.NO_FINDINGS),
+        ).fetchone()
+    return str(row[0]) if row else None
 
 
 def status_age_seconds(updated_at: object) -> float:
@@ -1047,6 +1145,35 @@ def prior_posted_findings_for_reconciliation(
     return findings
 
 
+def open_finding_with_identity(project: str, iid: int, identity: str) -> JsonObject | None:
+    """Return the newest posted Bubo finding on this change with ``identity``.
+
+    ``identity`` is the sha- and line-independent
+    :func:`bubo.reconciliation.finding_identity`. Only rows with a provider
+    thread id that outcome sync has not seen resolved or deleted qualify; the
+    caller re-checks the live thread state before suppressing a post.
+    """
+    with connect_db(readonly=True) as db:
+        row = db.execute(
+            """
+            select rf.sha,rf.fingerprint,rf.discussion_id
+              from review_findings rf
+              left join finding_outcomes fo
+                on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha
+                  || ':' || rf.fingerprint
+             where rf.project=? and rf.iid=? and rf.finding_identity=? and rf.status=?
+               and rf.discussion_id is not null and rf.discussion_id != ''
+               and coalesce(fo.resolved,0)=0 and coalesce(fo.deleted,0)=0
+             order by rf.updated_at desc
+             limit 1
+            """,
+            (project, iid, identity, FindingStatus.POSTED),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"sha": str(row[0]), "fingerprint": str(row[1]), "discussion_id": str(row[2])}
+
+
 def claim_finding_reconciliation(
     *,
     project: str,
@@ -1148,7 +1275,9 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     """Return up to ``limit`` posted findings ordered by sync staleness.
 
     Never-synced findings come first; then oldest ``last_checked_at``.
-    The poller uses this list to drive ``--sync-outcomes``.
+    The poller uses this list to drive ``--sync-outcomes``. A finding whose
+    comment was observed deleted is terminal (a deleted comment cannot come
+    back) and is never selected again, so it costs no further API calls.
 
     Each row carries ``prior_outcome`` — the currently-stored outcome flags
     (all ``False`` if never synced) — so the caller can detect the
@@ -1168,6 +1297,7 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
                 rf.fingerprint
             where rf.status=? and rf.discussion_id is not null and rf.discussion_id != ''
+              and coalesce(fo.deleted,0)=0
             order by
               case when fo.last_checked_at is null then 0 else 1 end,
               fo.last_checked_at asc,
@@ -2067,6 +2197,7 @@ def latency_summary(
 
 
 __all__ = [
+    "active_review_sha",
     "already_seen",
     "audit_rows",
     "connect_db",
@@ -2079,13 +2210,16 @@ __all__ = [
     "get_review_row",
     "governance_decision_for",
     "governance_decisions_for",
+    "head_stable_seconds",
     "init_db",
     "init_dirs",
+    "last_completed_review_sha",
     "latency_summary",
     "latest_reviewed_row",
     "list_recent_reviews",
     "metrics_summary",
     "noise_trend",
+    "open_finding_with_identity",
     "outcomes_for",
     "outcomes_summary",
     "policy_decisions_summary",
