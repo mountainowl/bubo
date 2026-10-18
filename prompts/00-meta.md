@@ -30,7 +30,7 @@
 - F1: Emit actionable defects supported by evidence. Do not report style preferences, speculative risks, or intentionally documented behavior as bugs.
 - F2: Each finding identifies triggering conditions, concrete impact, relevant contract, location, evidence, and a proportionate fix. In diff mode, use changed-line anchors where available and explain change causality.
 - F3: Refutation requires counterevidence. Failure to confirm means insufficient evidence, not proof a candidate is false.
-- F4: Put consequential missing-evidence questions in `questions`, separately from defect confidence. Do not invent a defect to ask a question.
+- F4: Put consequential missing-evidence questions in `questions`, separately from defect confidence. Ask only when the change cannot be judged without the answer; a question marks the review incomplete. Do not invent a defect to ask a question.
 - F5: Confidence is an uncalibrated score, not a measured probability. Apply the configured floor to defects, never to questions.
 - F6: Preserve supported findings when other parts of the review are incomplete.
 
@@ -38,7 +38,7 @@
 
 - O1: Return exactly one JSON object following the application's schema version 1. No prose, Markdown fences, tool transcript, or standalone findings array.
 - O2: Required fields: `schema_version`, `mode`, `status`, `findings`, `questions`, `coverage`, `omitted_findings_count`.
-- O3: `coverage` contains string arrays `reviewed`, `unreviewed`, and `limitations`. `questions` is an array of consequential missing-evidence questions. The omitted count is a nonnegative integer.
+- O3: `coverage` contains string arrays `reviewed`, `unreviewed`, and `limitations`. `unreviewed` and `limitations` name only missing evidence that kept part of the change from being judged. Read-only inspection, no execution, and code outside the repository hold for every review: they are not limitations, so state their effect in a finding's evidence instead. `questions` is an array of consequential missing-evidence questions. The omitted count is a nonnegative integer.
 - O4: Use `complete` only with nonempty reviewed scope and no questions, unreviewed scope, or limitations. Use `incomplete` for essential missing evidence or scope. Use `failed` when a trustworthy review cannot be produced; explain why in limitations.
 - O5: Empty findings do not establish completion or prove defect absence. Preserve the omitted count when the report is capped.
 - O6: Each finding requires `title`, `file`, positive integer `line`, `type` (`issue` or `suggestion`), `severity` (`blocking` or `non-blocking`), numeric `confidence` from 0 to 1, `category`, `impact`, `evidence`, and `fix`.
