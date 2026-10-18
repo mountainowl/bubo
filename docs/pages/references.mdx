@@ -4,90 +4,63 @@ description: "Read the research, engineering references, and standards behind Bu
 
 # References & further reading
 
-These references shaped Bubo's design, packaging, supply-chain posture, and
-documentation. They're grouped by topic, and each entry explains how it
-influenced the project.
+References for code review, model evaluation, packaging, and supply-chain
+security, grouped by topic.
 Academic preprints, vendor docs, and engineering writing are called out as
 such, so you can weight them accordingly.
 
 ## Research & academic
 
-**Code review and software quality.** The evidence behind Bubo's premise — that
-systematic review measurably reduces defects — and the review-rate figures its
-[overview](/overview) estimates budget against.
+**Code review and software quality.** Studies of inspection, review coverage,
+participation, and review effectiveness.
 
 - **Fagan, "Design and Code Inspections to Reduce Errors in Program
   Development,"** IBM Systems Journal 15(3), 182–211, 1976 —
-  [doi.org/10.1147/sj.153.0182](https://doi.org/10.1147/sj.153.0182). The
-  foundational result that a systematic inspection process yields large net
-  gains in defect removal; the intellectual root of automated review.
+  [doi.org/10.1147/sj.153.0182](https://doi.org/10.1147/sj.153.0182).
+  Describes systematic inspections and their role in defect removal.
 - **Kemerer & Paulk, "The Impact of Design and Code Reviews on Software
   Quality,"** IEEE Trans. Software Eng. 35(4), 2009 —
-  [sites.pitt.edu](https://sites.pitt.edu/~ckemerer/PSP_Data.pdf). Empirical
-  evidence that review lowers defect density, and that review *rate* drives
-  effectiveness — the basis for the "defects caught → reviewer-hours saved"
-  framing and the ~200–400 LoC/hr rate on the overview.
+  [sites.pitt.edu](https://sites.pitt.edu/~ckemerer/PSP_Data.pdf).
+  Examines relationships between review rate, review effectiveness, and
+  software quality.
 - **McIntosh, Kamei, Adams & Hassan, "The Impact of Code Review Coverage and
   Participation on Software Quality,"** MSR 2014 (distinguished paper) —
   [doi.org/10.1145/2597073.2597076](https://doi.org/10.1145/2597073.2597076).
-  Lower review coverage and participation track with more post-release
-  defects — the argument for reviewing *every* change, which Bubo automates.
+  Examines associations between review coverage, participation, and
+  post-release defects.
 - **SmartBear / Cisco, "Best Practices for Peer Code Review"** —
   [smartbear.com](https://smartbear.com/learn/code-review/best-practices-for-peer-code-review/).
-  The industry study behind the ~200–400 LoC/hr careful-review rate and the
-  sharp fall in defect detection above ~400–500 LoC that the overview
-  estimates use. *(Industry white paper, not peer-reviewed.)*
+  Industry guidance on review rates, change size, and defect detection.
+  *(Industry white paper, not peer-reviewed.)*
 
-**Modern, tool-based code review.** Why Bubo posts inline, tracks finding
-outcomes, and offers review *tone* and a gate/collaborate mode rather than only
-flagging bugs.
+**Modern, tool-based code review.** Studies of review practices and outcomes.
 
 - **Bacchelli & Bird, "Expectations, Outcomes, and Challenges of Modern Code
   Review,"** ICSE 2013, 712–721 —
   [doi.org/10.1109/ICSE.2013.6606617](https://doi.org/10.1109/ICSE.2013.6606617).
-  Finds defect-finding is one of several review outcomes (alongside
-  understanding and team signalling) and that low-signal comments erode trust
-  — the rationale for Bubo's confidence floors, outcome tracking, and
-  dispute-driven suppression.
+  Studies review outcomes beyond defect finding, including knowledge transfer
+  and team understanding.
 - **Sadowski, Söderberg, Church, Sipko & Bacchelli, "Modern Code Review: A
   Case Study at Google,"** ICSE-SEIP 2018, 181–190 —
   [doi.org/10.1145/3183519.3183525](https://doi.org/10.1145/3183519.3183525).
-  Review at scale is lightweight, fast, and per-change — the model Bubo's
-  per-MR/PR poller targets.
+  Describes lightweight, per-change review practices at scale.
 
-**LLM methods Bubo implements.** The techniques behind Bubo's confidence and
-verification machinery.
+**Model calibration and evaluation.** Research on confidence, diverse reasoning,
+and model-based evaluation.
 
 - **Guo, Pleiss, Sun & Weinberger, "On Calibration of Modern Neural
   Networks,"** ICML 2017 (PMLR 70:1321–1330) —
-  [arXiv:1706.04599](https://arxiv.org/abs/1706.04599). Modern models are
-  poorly calibrated out of the box — the basis for Bubo's confidence floors
-  and `calibrate_confidence`, which derives per-category thresholds from
-  observed outcome history rather than trusting raw model confidence.
+  [arXiv:1706.04599](https://arxiv.org/abs/1706.04599).
+  Examines neural-network confidence calibration.
 - **Wang et al., "Self-Consistency Improves Chain-of-Thought Reasoning in
   Language Models,"** ICLR 2023 —
-  [arXiv:2203.11171](https://arxiv.org/abs/2203.11171). Sampling diverse
-  reasoning and keeping the majority answer beats a single pass — the idea
-  behind Bubo's `verify_min_votes`: a finding survives only when enough
-  independent verifier lenses agree.
+  [arXiv:2203.11171](https://arxiv.org/abs/2203.11171).
+  Evaluates aggregating answers from diverse sampled reasoning paths.
 - **Zheng et al., "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena,"**
   NeurIPS 2023 (Datasets & Benchmarks) —
-  [arXiv:2306.05685](https://arxiv.org/abs/2306.05685). Establishes
-  LLM-as-judge and documents its biases (self-enhancement, verbosity); Bubo's
-  separate, perspective-diverse verifier lenses (`correctness` / `in_diff` /
-  `reproduce`) apply and harden that pattern.
-
-**Launch dynamics.**
-
-- **"Launch-Day Diffusion: Tracking Hacker News Impact on GitHub Stars
-  for AI Tools"** — arXiv preprint [2511.04453](https://arxiv.org/abs/2511.04453).
-  An empirical study (n≈138 AI/LLM tool launches, 2024–2025) measuring
-  how a Hacker News appearance translates into GitHub stars, and how
-  *posting time* affects the outcome. We used it to reason about launch
-  timing. Caveat: the **direction** of the timing effect (optimal windows
-  produce materially more stars) is well supported, but the paper's specific
-  absolute star-count figures are a single unreplicated preprint — treat them
-  as indicative, not precise.
+  [arXiv:2306.05685](https://arxiv.org/abs/2306.05685).
+  Evaluates model-based judging and documents biases including verbosity and
+  self-enhancement.
 
 ## Cost & pricing data
 
@@ -102,28 +75,6 @@ auditability. These are data sources, not research.
 - **Peer AI-reviewer list pricing** — CodeRabbit, Greptile, Qodo, Graphite,
   accessed 2026. ~$24–30/developer-month, the comparison point for Bubo's
   per-review cost. *(Vendor list prices, subject to change.)*
-
-## How GitHub discovery actually works
-
-- **GitHub Engineering — "Topics" (the `repo-topix` suggestion engine)**:
-  [github.blog/engineering/user-experience/topics](https://github.blog/engineering/user-experience/topics/).
-  Describes how GitHub reads repo name + description + README and uses
-  **tf-idf** to score candidate topics, meaning rare/distinctive terms
-  carry more signal than generic ones. This is why Bubo's topics lean
-  toward specific terms (`mcp-server`, `gitlab-ci`, `opentelemetry`)
-  over generic ones.
-- **GitHub Docs — Searching for repositories**:
-  [docs.github.com/.../searching-for-repositories](https://docs.github.com/en/search-github/searching-on-github/searching-for-repositories).
-  The load-bearing fact for repo discoverability: *"only the repository
-  name, description, and topics are searched"* by default — README text
-  is **not** indexed unless a searcher adds `in:readme`.
-- **GitHub Docs — Classifying your repository with topics**:
-  [docs.github.com/.../classifying-your-repository-with-topics](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/classifying-your-repository-with-topics).
-  20-topic cap; each topic page is itself a browsable discovery surface.
-- **GitHub Docs — Social media preview**:
-  [docs.github.com/.../customizing-your-repositorys-social-media-preview](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview).
-  Recommended 1280×640 preview image; until set, link unfurls show a
-  generic card.
 
 ## Python packaging & distribution
 

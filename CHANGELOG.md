@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.29.1](https://github.com/mountainowl/bubo/compare/v0.29.0...v0.29.1) (2026-10-18)
+
+
+### Documentation
+
+* remove metrics and ROI link from README ([0cd8661](https://github.com/mountainowl/bubo/commit/0cd86618b0e030bcff897f6c1be12f720fb7378e))
+* simplify README features and deployment guidance ([#258](https://github.com/mountainowl/bubo/issues/258)) ([2d50ab5](https://github.com/mountainowl/bubo/commit/2d50ab5479b6e758117401c80a51c7f310abb394))
+
 ## [0.29.0](https://github.com/mountainowl/bubo/compare/v0.28.4...v0.29.0) (2026-10-18)
 
 
