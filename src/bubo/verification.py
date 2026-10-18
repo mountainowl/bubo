@@ -31,6 +31,7 @@ as hard-proven "real".
 
 from __future__ import annotations
 
+import itertools
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -301,6 +302,44 @@ def decide(
     )
 
 
+# One verdict per class decide() can tell apart: counted as confirming, counted
+# as refuting, or counted as neither (failed to run, undecided or below floor).
+_LENS_ANSWER_CLASSES = (
+    Verdict(lens="", real=True, confidence=1.0, reason="-"),
+    Verdict(lens="", real=False, confidence=1.0, reason="-"),
+    Verdict(lens="", real=None, confidence=0.0, reason="-", ok=False),
+)
+# Beyond this many unrun lenses the check below is not attempted (3**8 decides).
+_MAX_REMAINING_FOR_SETTLED = 8
+
+
+def outcome_settled(
+    verdicts: Sequence[Verdict], *, remaining: int, min_votes: int, confidence_floor: float
+) -> bool:
+    """True when running the ``remaining`` lenses cannot change the outcome.
+
+    The poller acts on :func:`decide` over the verdicts it has: verified
+    (``survives``), refuted (``refuted``) or unresolved (neither). Because the
+    votes needed grow with the number of verdicts, this checks every possible
+    answer for each remaining lens and reports settled only when all of them
+    give the same outcome as the verdicts already in hand. With the default
+    three lenses and ``min_votes=2`` the third lens is skipped whenever the
+    first two both confirm or both refute.
+    """
+    if remaining > _MAX_REMAINING_FOR_SETTLED:
+        return False
+
+    def outcome(votes: Sequence[Verdict]) -> tuple[bool, bool]:
+        result = decide(votes, min_votes=min_votes, confidence_floor=confidence_floor)
+        return result.survives, result.refuted
+
+    current = outcome(verdicts)
+    return all(
+        outcome([*verdicts, *rest]) == current
+        for rest in itertools.product(_LENS_ANSWER_CLASSES, repeat=remaining)
+    )
+
+
 def votes_summary(verdicts: Sequence[Verdict]) -> str:
     """Compact JSON tally of the verdicts, for the ``verify_votes`` column."""
     return json.dumps(
@@ -329,6 +368,7 @@ __all__ = [
     "build_reconciliation_prompt",
     "build_verification_prompt",
     "decide",
+    "outcome_settled",
     "parse_reconciliation_result",
     "parse_verdict",
     "votes_summary",

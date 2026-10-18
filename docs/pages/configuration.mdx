@@ -91,7 +91,7 @@ Controls polling, filtering, and review-output policy.
 | `dispute_suppress_threshold` | number | `0.5` | Dispute rate required before a category can be suppressed. |
 | `dispute_suppress_min_samples` | integer | `5` | Minimum outcome rows required before suppression can apply. |
 | `verify_findings` | boolean | `false` | Re-check surviving findings before planning/posting. |
-| `verify_lenses` | string array | `["correctness", "in_diff", "reproduce"]` | Verification lenses. Each lens is one verifier call per finding. |
+| `verify_lenses` | string array | `["correctness", "in_diff", "reproduce"]` | Verification lenses, run in order. Each lens is one verifier call per finding; lenses stop as soon as the remaining ones cannot change the result. |
 | `verify_min_votes` | integer | `2` | Number of verifier votes required for a finding to survive. |
 | `verify_confidence_floor` | number | `0.6` | Minimum verifier confidence for a real vote to count. |
 | `verify_max_findings` | integer | `5` | Maximum findings verified per change. Findings beyond the cap post unverified. |
