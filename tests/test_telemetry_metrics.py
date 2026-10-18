@@ -19,7 +19,8 @@ def test_metric_attrs_exclude_high_cardinality_fields() -> None:
         discussion_id="disc",
     )
 
-    assert attrs.pop("bubo_version") == analytics.installed_version()
+    version = attrs.pop("bubo_version")
+    assert version == analytics.installed_version()
     assert attrs == {"repo": "example/enabled-repo", "status": "success"}
     assert "mr_iid" not in METRIC_ATTRIBUTE_KEYS
     assert "file" not in METRIC_ATTRIBUTE_KEYS
@@ -34,7 +35,8 @@ def test_metric_attrs_coerce_untrusted_label_values() -> None:
         status="posted",
     )
 
-    assert attrs.pop("bubo_version") == analytics.installed_version()
+    version = attrs.pop("bubo_version")
+    assert version == analytics.installed_version()
     assert attrs == {
         "finding_type": "unknown",
         "severity": "unknown",
