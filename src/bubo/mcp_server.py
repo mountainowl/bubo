@@ -43,7 +43,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from bubo import db, paths
+from bubo import analytics, db, paths
 from bubo.config_values import ConfigError
 from bubo.errors import describe
 from bubo.events import log
@@ -758,6 +758,7 @@ def main() -> None:
     from bubo.update_readiness import StartupRejected
     from bubo.update_supervisor import delegate
 
+    analytics.set_surface("mcp")
     transport = os.environ.get("BUBO_MCP_TRANSPORT", "stdio").strip().lower()
     if transport in {"stdio", "http"}:
         delegate("mcp-stdio" if transport == "stdio" else "mcp-http")
