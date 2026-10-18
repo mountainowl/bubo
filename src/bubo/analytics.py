@@ -127,6 +127,7 @@ _ALLOWED_ATTRS = frozenset(
         "operation",
         "metric_value",
         "metric_count",
+        "surface",
         # finding_outcome: which review configuration produced the finding
         "prompt_version",
         "verified",
@@ -150,6 +151,10 @@ _KNOWN_EVENTS = frozenset(
         "otel_metric",
     }
 )
+# Which Bubo entry point produced an event. ``github_action`` is a run-once
+# inside GitHub Actions, whose state directory (and so install_id) is fresh on
+# every run; dashboards need it to keep those runs out of install counts.
+_KNOWN_SURFACES = frozenset({"service", "run_once", "github_action", "mcp", "unknown"})
 # Developer-engagement outcome dimensions. Mirrors the per-finding flags the
 # poller's outcome sync writes to SQLite; a value outside the set normalizes to
 # "other" so a future column can never leak as an arbitrary string.
@@ -188,6 +193,7 @@ _install_id: str | None = None
 _install_path: Path | None = None
 _install_node: int | None = None
 _identity_lock = threading.Lock()
+_surface = "unknown"
 
 # Only these labels may leave the machine; paths are used locally and discarded.
 _LANGUAGES = {
@@ -236,6 +242,16 @@ def language_counts(files: Iterable[str]) -> dict[str, int]:
         label = _LANGUAGES.get(Path(filename).suffix.lower(), "other")
         counts[label] = counts.get(label, 0) + 1
     return counts
+
+
+def set_surface(name: str | None) -> None:
+    """Record which entry point this process serves; unknown names become ``unknown``."""
+    global _surface
+    _surface = name if name in _KNOWN_SURFACES else "unknown"
+
+
+def current_surface() -> str:
+    return _surface
 
 
 def analytics_enabled(cfg: AnalyticsConfig) -> bool:
@@ -353,6 +369,7 @@ def _base_attrs() -> dict[str, Any]:
         ),
         "arch": platform.machine() or "unknown",
         "schema_version": SCHEMA_VERSION,
+        "surface": _surface,
         # The capture API otherwise derives and stores location from the
         # request IP and creates a person profile for the anonymous install.
         "$geoip_disable": True,
@@ -690,4 +707,5 @@ __all__ = [
     "record_review_completed",
     "record_session_start",
     "record_subscription_circuit",
+    "set_surface",
 ]
