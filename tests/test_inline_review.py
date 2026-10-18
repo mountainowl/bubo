@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from bubo import paths, poller
 from bubo.review_config import ReviewConfig
+from bubo.subproc import run_bounded
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -191,8 +192,8 @@ class InlineReviewTests(unittest.TestCase):
                 return ("", None)
 
         fake = FakeProcess()
-        with patch("bubo.poller.subprocess.Popen", return_value=fake) as mocked:
-            poller.run(["cmd"])
+        with patch("bubo.subproc.subprocess.Popen", return_value=fake) as mocked:
+            run_bounded(["cmd"])
 
         self.assertIs(mocked.call_args.kwargs["stdin"], subprocess.DEVNULL)
         self.assertTrue(mocked.call_args.kwargs["start_new_session"])
@@ -258,8 +259,8 @@ class InlineReviewTests(unittest.TestCase):
         self.assertIn("--ask-for-approval", cmd)
         self.assertIn("never", cmd)
         self.assertIn("exec", cmd)
-        self.assertIn("--profile", cmd)
-        self.assertIn("bubo", cmd)
+        self.assertNotIn("--profile", cmd)
+        self.assertEqual("read-only", cmd[cmd.index("--sandbox") + 1])
         self.assertIn("--skip-git-repo-check", cmd)
 
     def test_extract_json_findings_from_codex_transcript_with_duplicate_arrays(self):
@@ -418,11 +419,11 @@ No findings for optional categories: []
                 return self.returncode
 
         fake = FakeProcess()
-        with patch("bubo.poller.subprocess.Popen", return_value=fake):
-            with patch("bubo.poller.os.killpg") as killpg:
-                with patch("bubo.poller.os.getpgid", return_value=456):
+        with patch("bubo.subproc.subprocess.Popen", return_value=fake):
+            with patch("bubo.subproc.os.killpg") as killpg:
+                with patch("bubo.subproc.os.getpgid", return_value=456):
                     with self.assertRaises(subprocess.TimeoutExpired):
-                        poller.run(["cmd"], timeout=1)
+                        run_bounded(["cmd"], timeout=1)
 
         killpg.assert_called_once()
 
@@ -440,9 +441,9 @@ No findings for optional categories: []
             ReviewConfig(max_findings_per_merge_request=5),
         )
 
-        self.assertIn("type must be one of: issue, suggestion, question", prompt)
-        self.assertIn("severity must be one of: blocking, non-blocking", prompt)
-        self.assertIn("confidence must be a number from 0 to 1", prompt)
+        self.assertIn("type (issue|suggestion)", prompt)
+        self.assertIn("(blocking|non-blocking)", prompt)
+        self.assertIn("confidence (0..1)", prompt)
 
     def test_read_config_defaults_max_findings_to_five(self):
         original_config = poller.CONFIG

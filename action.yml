@@ -79,6 +79,21 @@ runs:
           exit 1
         fi
 
+    - name: Require a working read-only sandbox
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$(uname -s)" in
+          Linux)
+            command -v bwrap >/dev/null || { echo "::error::Install bubblewrap on this runner before running Bubo."; exit 1; }
+            bwrap --die-with-parent --unshare-pid --new-session --ro-bind / / --dev /dev --proc /proc -- /bin/true
+            ;;
+          Darwin)
+            sandbox-exec -p '(version 1)(allow default)(deny file-write*)' /usr/bin/true
+            ;;
+          *) echo "::error::Bubo reviews require Linux bubblewrap or macOS sandbox-exec."; exit 1 ;;
+        esac
+
     - name: Install uv
       uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 

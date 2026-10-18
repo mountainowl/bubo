@@ -262,7 +262,10 @@ def test_cmd_init_agent_config_writes_codex_with_profile(
     assert tomllib.loads(profile)["sandbox_mode"] == "read-only"
     # Every placeholder rendered (ROOT, LLM_MODEL, the provider markers, …).
     assert "{{" not in codex_config + profile
-    assert str(isolated_root) in codex_config
+    # Interactive agent config must not grant blanket project trust; runtime
+    # review policy is generated separately from trusted ReviewConfig.
+    assert "[projects." not in codex_config
+    assert 'trust_level = "trusted"' not in codex_config
     # Default (no base_url): model/effort come from the seeded example, and the
     # custom-provider plumbing renders away to nothing.
     assert 'model = "gpt-6.1-sol"' in profile

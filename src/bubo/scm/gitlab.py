@@ -9,6 +9,7 @@ REST API.
 from __future__ import annotations
 
 import os
+from html import escape
 from pathlib import Path
 
 from bubo import gitlab
@@ -310,22 +311,20 @@ class GitLabProvider:
         return FindingThreadResolution(FindingThreadState.RESOLVED, resolved_by == bot_username)
 
     def review_prompt(
-        self,
-        project: str,
-        change: JsonObject,
-        cfg: ReviewConfig,
-        *,
-        extra_directive: str = "",
-        meta_prompt: str = "",
+        self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
     ) -> str:
-        contract = build_review_contract(cfg, meta_prompt)
+        contract = build_review_contract(cfg)
         suffix = f"\n\n{extra_directive}" if extra_directive else ""
-        return f"""Review GitLab MR {change.get("web_url")}
-Project: {project}
-MR IID: {change.get("iid")}
-Title: {change.get("title")}
-source branch: {change.get("source_branch")}
-target branch: {change.get("target_branch")}
-head SHA: {self.head_sha(change)}
-
-{contract}{suffix}"""
+        metadata = {
+            "project": project,
+            "number": change.get("number") or change.get("iid"),
+            "title": change.get("title"),
+            "source_branch": (change.get("head") or {}).get("ref") or change.get("source_branch"),
+            "target_branch": (change.get("base") or {}).get("ref") or change.get("target_branch"),
+            "head_sha": self.head_sha(change),
+            "base_sha": (change.get("base") or {}).get("sha")
+                or (change.get("diff_refs") or {}).get("base_sha"),
+            "url": change.get("html_url") or change.get("web_url"),
+        }
+        evidence = "\n".join(f"{key}: {escape(str(value))}" for key, value in metadata.items())
+        return f'{contract}{suffix}\n<change_metadata>\n{evidence}\n</change_metadata>'

@@ -57,17 +57,17 @@ DEFAULT_PROVIDER = "gitlab"
 # Default review agent. The configured CLI is run directly with the review
 # prompt (which carries the review contract + skill instruction via
 # ``REVIEW_CONTRACT``); there is no bundled wrapper. The default is Codex in
-# non-interactive ``exec`` mode against the ``bubo`` profile, but any CLI that
-# takes a prompt argument (e.g. ``claude -p ...``) can be set via
-# ``[agents].reviewer_command``. ``CODEX_REVIEW_PROFILE`` overrides the profile.
+# non-interactive ``exec`` mode. The hardened runner supports Codex and
+# ``claude -p`` only, and derives provider/model settings from this trusted
+# configuration instead of loading user profiles or tool configuration.
 DEFAULT_CODEX_PROFILE = os.environ.get("CODEX_REVIEW_PROFILE", "bubo")
 DEFAULT_REVIEWER_COMMAND = [
     "codex",
     "--ask-for-approval",
     "never",
     "exec",
-    "--profile",
-    DEFAULT_CODEX_PROFILE,
+    "--sandbox",
+    "read-only",
     "--skip-git-repo-check",
 ]
 
@@ -346,6 +346,8 @@ class ReviewConfig:
     model: str | None = None
     claude_model: str | None = None
     model_effort: str | None = None
+    # Custom endpoints must implement the Responses API; Chat Completions-only
+    # endpoints are not supported by the hardened Codex runner.
     llm_base_url: str | None = None
     post_summary: bool = False
     telemetry_config: TelemetryConfig = field(default_factory=TelemetryConfig)

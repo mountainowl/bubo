@@ -5,32 +5,21 @@ max_bytes = 1048576
 [features]
 shell_snapshot = true
 unified_exec = true
-skill_mcp_dependency_install = true
+skill_mcp_dependency_install = false
 memories = false
+apps = false
+plugins = false
+hooks = false
 
 [shell_environment_policy]
-inherit = "all"
+inherit = "core"
 
-# The `bubo` profile used by the default reviewer_command lives in its own
-# file, ~/.codex/bubo.config.toml (written by `bubo init` from
-# codex-bubo.config.toml). Codex >= 0.134.0 refuses `--profile bubo` while
-# this file still carries a legacy [profiles.bubo] table, so keep it out of here.
-
-[mcp_servers.git]
-command = "/usr/local/bin/uvx"
-args = ["mcp-server-git==2026.1.14"]
-startup_timeout_sec = 20.0
-tool_timeout_sec = 60.0
-default_tools_approval_mode = "approve"
-enabled_tools = ["git_status", "git_diff_unstaged", "git_diff_staged", "git_diff", "git_log", "git_show", "git_branch"]
-
-[mcp_servers.bubo]
-command = "{{ROOT}}/bin/bubo"
-args = ["mcp"]
-startup_timeout_sec = 20
-# Must be >= [review].timeout_seconds because `review_change` blocks on
-# the underlying reviewer_command subprocess. The read-only metrics
-# tools complete in milliseconds so the long ceiling costs nothing.
-tool_timeout_sec = 1800
+# Optional interactive Codex profile. The hardened review runner ignores user
+# config and generates read-only policy from ReviewConfig; only auth is copied.
+# The `bubo` profile lives in its own file, ~/.codex/bubo.config.toml (written
+# by `bubo init` from codex-bubo.config.toml). Codex >= 0.134.0 refuses
+# `--profile bubo` while this file still carries a legacy [profiles.bubo]
+# table, so keep it out of here. Custom LLM_BASE_URL endpoints must implement
+# Responses, not only Chat Completions.
 
 {{MODEL_PROVIDER_BLOCK}}

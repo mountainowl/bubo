@@ -26,8 +26,9 @@ LABEL org.opencontainers.image.source="https://github.com/mountainowl/bubo" \
 
 # git: bubo checks out each change before reviewing it.
 # ca-certificates: TLS to the SCM + LLM APIs.
+# bubblewrap: read-only review subprocesses; host namespace policy must permit it.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
+ && apt-get install -y --no-install-recommends git ca-certificates bubblewrap \
  && rm -rf /var/lib/apt/lists/*
 
 # Install bubo from the wheel built above — no compiler / build deps in runtime.

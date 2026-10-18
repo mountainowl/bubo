@@ -67,7 +67,9 @@ def test_terse_omits_voice_directive() -> None:
     assert comment_voice_directive("terse") == ""
     contract = build_review_contract(ReviewConfig(tone="terse", max_findings_per_merge_request=8))
     assert VOICE_SENTINEL not in contract
-    assert "Return [] when there are no actionable findings." in contract
+    assert '"schema_version":1' in contract
+    assert '"status":"complete"' in contract
+    assert "incomplete" in contract
 
 
 def test_each_mood_injects_its_voice_and_keeps_the_cap() -> None:

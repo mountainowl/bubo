@@ -824,6 +824,56 @@ def finding_seen(project: str, iid: int, sha: str, fingerprint: str) -> bool:
     return row is not None
 
 
+def prior_verification(
+    project: str, iid: int, sha: str, fingerprint: str, *, expected_policy: str | None = None
+) -> bool | None:
+    """Reuse only a decisive verdict backed by the current verification contract."""
+    if not isinstance(expected_policy, str) or not expected_policy:
+        return None
+    with connect_db() as db:
+        row = db.execute(
+            """select verified,verify_votes,status from review_findings
+               where project=? and iid=? and sha=? and fingerprint=?""",
+            (project, iid, sha, fingerprint),
+        ).fetchone()
+    if row is None or row[0] not in (0, 1):
+        return None
+    decisive_statuses = {FindingStatus.REFUTED} if row[0] == 0 else {
+        FindingStatus.POSTED, FindingStatus.PLANNED, FindingStatus.PENDING_EXTERNAL_ID,
+    }
+    if row[2] not in decisive_statuses:
+        return None
+    try:
+        votes = json.loads(row[1])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(votes, list) or not votes:
+        return None
+    for vote in votes:
+        if not isinstance(vote, dict):
+            return None
+        if type(vote.get("contract_version")) is not int or vote["contract_version"] != 1:
+            return None
+        if vote.get("policy") != expected_policy:
+            return None
+        confidence = vote.get("confidence")
+        if (
+            type(vote.get("ok")) is not bool
+            or (vote.get("real") is not None and type(vote["real"]) is not bool)
+            or "real" not in vote
+            or type(confidence) not in (int, float)
+            or not 0 <= confidence <= 1
+            or not math.isfinite(confidence)
+            or not isinstance(vote.get("reason"), str)
+            or not isinstance(vote.get("lens"), str)
+        ):
+            return None
+    decision = bool(row[0])
+    if not any(vote["ok"] and vote["real"] is decision for vote in votes):
+        return None
+    return decision
+
+
 def record_finding(
     *,
     project: str,
@@ -2225,6 +2275,7 @@ __all__ = [
     "policy_decisions_summary",
     "posted_findings_for_outcome_sync",
     "prior_posted_findings_for_reconciliation",
+    "prior_verification",
     "prompt_version",
     "provenance_for",
     "record",

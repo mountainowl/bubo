@@ -14,11 +14,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from bubo import db, paths, poller
+from bubo import db, poller
 from bubo.analytics_config import AnalyticsConfig
 from bubo.review_config import ReviewConfig
 from bubo.scm.github import GitHubProvider
 from bubo.telemetry import TelemetryConfig
+from tests.review_output import review_output
 
 META_PROMPT = Path(__file__).resolve().parents[1] / "prompts" / "00-meta.md"
 
@@ -45,7 +46,7 @@ def test_worker_passes_rendered_meta_prompt_to_agent(
     provider.review_prompt.side_effect = GitHubProvider().review_prompt
     telemetry = MagicMock()
     telemetry.span.return_value.__enter__.return_value = MagicMock()
-    agent = MagicMock(return_value=SimpleNamespace(stdout="[]", returncode=0))
+    agent = MagicMock(return_value=SimpleNamespace(stdout=review_output([]), returncode=0))
     cfg = ReviewConfig(
         provider="github",
         max_findings_per_merge_request=7,
@@ -65,11 +66,9 @@ def test_worker_passes_rendered_meta_prompt_to_agent(
         assert poller.worker(job) == 0
 
     prompt = agent.call_args.args[0][-1]
+    # The hardened runner loads no skills or plugins, so the rules must be inline.
     assert "Superpowers" not in prompt
-    assert "<code_review_prompt" in prompt
-    assert "Maximum 7 findings total for the packet." in prompt
+    assert "skill" not in prompt.split("# Bubo review contract")[0]
+    assert "# Bubo review contract" in prompt
+    assert "Return at most 7 findings" in prompt
     assert "{{MAX_FINDINGS_PER_REVIEW}}" not in prompt
-    # Rules first, then the output contract the parser relies on.
-    assert prompt.index("<code_review_prompt") < prompt.index("Return a JSON array only.")
-    rendered = paths.RENDERED_PROMPTS / "00-meta.max-7.md"
-    assert rendered.read_text(encoding="utf-8").strip() in prompt

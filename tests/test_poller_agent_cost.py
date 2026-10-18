@@ -12,6 +12,7 @@ import pytest
 from bubo import db, paths, poller
 from bubo.review_config import ReviewConfig
 from bubo.telemetry import TokenUsage
+from tests.review_output import review_output
 from tests.test_agent_output import CLAUDE_JSON, CODEX_JSONL
 
 
@@ -22,7 +23,10 @@ def temp_db(tmp_path, monkeypatch):
     db.init_db()
 
 
-def _review(tmp: Path, cfg: ReviewConfig, stdout: str) -> tuple[MagicMock, MagicMock, MagicMock]:
+def _review(
+    tmp: Path, cfg: ReviewConfig, transcript: str
+) -> tuple[MagicMock, MagicMock, MagicMock]:
+    """Run the worker with the agent returning what the review runner returns."""
     job = tmp / "job.json"
     job.write_text(json.dumps({"project": "o/r", "mr": {"iid": 1, "sha": "b" * 40}}))
     (tmp / "prompt").write_text("rules")
@@ -32,7 +36,7 @@ def _review(tmp: Path, cfg: ReviewConfig, stdout: str) -> tuple[MagicMock, Magic
     provider.changed_lines.return_value = {}
     telemetry = MagicMock()
     telemetry.span.return_value.__enter__.return_value = MagicMock()
-    agent = MagicMock(return_value=SimpleNamespace(stdout=stdout, returncode=0))
+    agent = MagicMock(return_value=_runner_result(FINAL, transcript))
     post = MagicMock(return_value=(0, 0, 0))
     finish = MagicMock()
     with (
@@ -56,11 +60,12 @@ def _review(tmp: Path, cfg: ReviewConfig, stdout: str) -> tuple[MagicMock, Magic
 
 
 def test_claude_review_records_the_cost_claude_reports(tmp_path, temp_db) -> None:
-    cfg = ReviewConfig(dry_run=True, reviewer_command=["claude", "-p"])
-    agent, post, finish = _review(tmp_path, cfg, CLAUDE_JSON)
+    cfg = ReviewConfig(
+        dry_run=True, reviewer_command=["claude", "-p"], claude_model="claude-opus-5-5"
+    )
+    _agent, post, finish = _review(tmp_path, cfg, CLAUDE_JSON)
 
-    assert agent.call_args.args[0][:4] == ["claude", "-p", "--output-format", "json"]
-    assert post.call_args.kwargs["raw_review"] == "[]"
+    assert post.call_args.kwargs["raw_review"] == FINAL
     assert finish.call_args.kwargs["cost_usd"] == 0.0492628
     assert finish.call_args.kwargs["tokens"] == TokenUsage(
         input=16712, output=4, cached=10834, total=16716
@@ -79,12 +84,19 @@ def test_codex_review_is_priced_from_the_live_price_list(tmp_path, temp_db, monk
     }
     monkeypatch.setattr(pricing, "_fetch", lambda: json.dumps(prices).encode())
     cfg = ReviewConfig(dry_run=True, model="gpt-6.1-sol")
-    agent, post, finish = _review(tmp_path, cfg, CODEX_JSONL)
+    _agent, post, finish = _review(tmp_path, cfg, CODEX_JSONL)
 
-    assert "--json" in agent.call_args.args[0]
-    assert post.call_args.kwargs["raw_review"] == "[]"
+    assert post.call_args.kwargs["raw_review"] == FINAL
     # 21,874 uncached x $2 + 49,280 cached x $0.10 + 220 output x $10, per 1M tokens
     assert finish.call_args.kwargs["cost_usd"] == pytest.approx(0.050876)
+
+
+FINAL = review_output([])
+
+
+def _runner_result(final: str, transcript: str) -> SimpleNamespace:
+    # run_review: stdout is the final message, the CLI's JSON output is kept aside.
+    return SimpleNamespace(stdout=final, diagnostic_stdout=transcript, returncode=0)
 
 
 def _codex_jsonl(text: str) -> str:
@@ -121,7 +133,7 @@ def test_each_verification_lens_is_metered_and_still_parsed(tmp_path, temp_db, l
     from bubo.telemetry import start_metering, stop_metering
 
     verdict = json.dumps({"real": True, "confidence": 0.9, "reason": "r"})
-    agent = MagicMock(return_value=SimpleNamespace(stdout=_codex_jsonl(verdict), returncode=0))
+    agent = MagicMock(return_value=_runner_result(verdict, _codex_jsonl(verdict)))
     cfg = ReviewConfig(model="m", verify_lenses=["correctness", "in_diff", "reproduce"])
     meter, token = start_metering()
     try:
@@ -131,7 +143,6 @@ def test_each_verification_lens_is_metered_and_still_parsed(tmp_path, temp_db, l
         stop_metering(token)
 
     assert [v.ok and v.real for v in verdicts] == [True, True, True]
-    assert all("--json" in call.args[0] for call in agent.call_args_list)
     assert meter.tokens == TokenUsage(input=3000, output=150, cached=1200, total=3150)
     assert meter.cost_usd == pytest.approx(3 * ONE_CALL)
 
@@ -140,7 +151,7 @@ def test_reconciliation_verifier_call_is_metered(tmp_path, temp_db, live_prices)
     from bubo.telemetry import start_metering, stop_metering
 
     answer = json.dumps({"verdict": "still_valid", "confidence": 0.9, "reason": "r"})
-    agent = MagicMock(return_value=SimpleNamespace(stdout=_codex_jsonl(answer), returncode=0))
+    agent = MagicMock(return_value=_runner_result(answer, _codex_jsonl(answer)))
     meter, token = start_metering()
     try:
         with patch("bubo.poller.run", agent):

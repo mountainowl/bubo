@@ -157,21 +157,24 @@ Controls the review agent command and agent-facing environment.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `reviewer_command` | string array | `["codex", "--ask-for-approval", "never", "exec", "--profile", "bubo", "--skip-git-repo-check"]` | Command prefix used to run the review agent. The review prompt is appended as the final argument. |
-| `llm_model` | string | `"gpt-6.1-sol"` | Codex review model. Exported as `LLM_MODEL`; `bubo init` templates it into the Codex profile (so it actually drives the model) and the `model` metric label reads it. Re-run `bubo init` after changing. |
-| `claude_model` | string | `"claude-opus-5-5"` | Claude review model, used when `reviewer_command` runs Claude Code. `bubo init` templates it into `~/.claude/settings.json`; it is the `model` metric label on that path. Must be a Claude model id. |
+| `reviewer_command` | string array | `["codex", "--ask-for-approval", "never", "exec", "--profile", "bubo", "--skip-git-repo-check"]` | Only `codex exec` or `claude -p` is supported. Bubo enforces read-only policy; arbitrary wrappers and other CLIs are rejected. The prompt is appended as the final argument. |
+| `llm_model` | string | `"gpt-6.1-sol"` | Codex review model. Exported as `LLM_MODEL`; the review runner passes it to Codex as `--model`, `bubo init` templates it into the Codex profile, and the `model` metric label reads it. |
+| `claude_model` | string | `"claude-opus-5-5"` | Claude review model, passed as `--model` when `reviewer_command` runs `claude -p` (the Codex `llm_model` is never sent to Claude). `bubo init` also templates it into `~/.claude/settings.json`; it is the `model` metric label on that path. Must be a Claude model id. |
 | `llm_model_effort` | string | `"medium"` | Reasoning effort — `"low"`, `"medium"`, or `"high"`. Exported as `LLM_MODEL_EFFORT`; `bubo init` templates it into the agent profile. Falls back to the deprecated `reasoning_effort` key. |
 | `llm_api_key` | string | unset | LLM API key, exported as `LLM_API_KEY`. By default the review agent authenticates via its own login (written by `bubo init`), so the key is **not** injected into the agent environment. The one exception is `llm_base_url`, which reads the key from the environment at request time. |
-| `llm_base_url` | string | unset | Optional OpenAI-compatible endpoint (in-house gateway, proxy, local server). When set, `bubo init` points the Codex profile at it via a `[model_providers]` block, and the agent reads `LLM_API_KEY` from its environment. Exported as `LLM_BASE_URL`. Security: this is the one mode that exposes the key to the agent — leave unset unless you need it. |
+| `llm_base_url` | string | unset | Optional OpenAI Responses-compatible endpoint for the Codex reviewer (in-house gateway, proxy, local server). Chat Completions-only endpoints and Claude with this setting are unsupported. When set, `bubo init` points the Codex profile at it via a `[model_providers]` block, and the agent reads `LLM_API_KEY` from its environment. Exported as `LLM_BASE_URL`. Security: this is the one mode that exposes the key to the agent — leave unset unless you need it. |
 | `llm_api_key_env` | string | unset | **Deprecated.** Named an extra env var to expose the key under; the agent now authenticates via its own login. Still honored when set, but prefer removing it. |
 | `dry_run` | boolean | `true` | Exported as `REVIEW_DRY_RUN` for the agent. Posting is controlled by `[review].dry_run`. |
-| `codex_profile` | string | `"bubo"` | Exported as `CODEX_REVIEW_PROFILE`. Used by Codex-based reviewer commands. |
-| `codex_sandbox` | string | `"read-only"` | Exported as `CODEX_SANDBOX`. Used by Codex-based reviewer commands. |
+| `codex_profile` | string | `"bubo"` | Legacy compatibility value. Hardened review commands ignore user profiles and generate their own policy. |
+| `codex_sandbox` | string | `"read-only"` | Read-only isolation is enforced; this setting cannot authorize weaker sandboxing. |
 | `post_no_findings_comment` | boolean | `true` | Post one change-level acknowledgement when a review finds no actionable issues. Honors `[review].dry_run`. |
 | `no_findings_comment_body` | string | `"Automated review ran — no issues found."` | Body for the no-findings acknowledgement. Empty disables the acknowledgement. |
 
-Prompt path note: the runtime reads `prompts/00-meta.md` under `BUBO_ROOT`.
-Set `BUBO_PROMPT_SOURCE` to use another prompt file.
+Before rollout, record the installed version (`codex --version` or `claude --version`) and check its help. Codex must expose `--ignore-user-config`, `--ignore-rules`, `--output-last-message`, and `--sandbox read-only` in `codex exec --help`. Claude must support `--safe-mode`, `--restricted`, `--strict-mcp-config`, `--mcp-config`, `--tools`, and `--permission-prompts`. Compatibility is feature-based; no universal minimum version is asserted. Unsupported flags fail the review. Do not remove isolation flags to make an older CLI run.
+
+Linux requires working Bubblewrap namespaces; macOS requires `sandbox-exec`. Validate the deployment host before rollout. A successful outer Bubblewrap test does not establish that Codex's nested native sandbox works.
+
+Prompt path note: live reviews load the trusted packaged `prompts/00-meta.md`, with a source-checkout fallback. Set the operator-controlled `BUBO_PROMPT_SOURCE` to use another trusted prompt file.
 
 ## `[telemetry]`
 
@@ -332,7 +335,7 @@ llm_model                  = "gpt-6.1-sol"
 claude_model               = "claude-opus-5-5"
 llm_model_effort           = "medium"
 llm_api_key                = "${LLM_API_KEY}"
-# llm_base_url             = "https://llm.internal.example/v1"  # OpenAI-compatible endpoint
+# llm_base_url             = "https://llm.internal.example/v1"  # Responses-compatible endpoint
 dry_run                    = true
 codex_profile              = "bubo"
 codex_sandbox              = "read-only"
