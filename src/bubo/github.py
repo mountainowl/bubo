@@ -325,7 +325,7 @@ query($owner:String!,$name:String!,$number:Int!,$cursor:String){
           comments(first:100){
             pageInfo{ hasNextPage endCursor }
             nodes{
-              databaseId id author{__typename login} body path line createdAt
+              databaseId id author{__typename login} authorAssociation body path line createdAt
               replyTo{ id } isMinimized
             }
           }
@@ -343,7 +343,7 @@ query($threadId:ID!,$cursor:String){
       comments(first:100,after:$cursor){
         pageInfo{ hasNextPage endCursor }
         nodes{
-          databaseId id author{__typename login} body path line createdAt
+          databaseId id author{__typename login} authorAssociation body path line createdAt
           replyTo{ id } isMinimized
         }
       }
@@ -359,6 +359,7 @@ def _normalize_review_comment(item: JsonObject) -> JsonObject:
         "node_id": item.get("id"),
         "login": (item.get("author") or {}).get("login") or "",
         "actor_type": (item.get("author") or {}).get("__typename") or "",
+        "author_association": item.get("authorAssociation") or "",
         "body": item.get("body") or "",
         "path": item.get("path") or "",
         "line": item.get("line"),
@@ -542,6 +543,22 @@ def _reply_actor_and_time(reply: JsonObject) -> tuple[str, str]:
     return actor, timestamp
 
 
+_MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+
+def reply_author(reply: JsonObject) -> JsonObject:
+    """Who wrote a reply and whether they maintain the repository (#184).
+
+    ``maintainer`` is ``None`` when GitHub did not report the association.
+    """
+    actor, _ = _reply_actor_and_time(reply)
+    association = str(reply.get("author_association") or "").upper()
+    return {
+        "login": actor,
+        "maintainer": (association in _MAINTAINER_ASSOCIATIONS) if association else None,
+    }
+
+
 def is_human_reply(reply: JsonObject) -> bool:
     """Return true only for provider-confirmed human actors.
 
@@ -703,10 +720,15 @@ def classify_graphql_thread_outcome(
     replies are detected from non-bot comments in the thread.
     """
     comments = thread.get("comments") or []
+    # The thread root is Bubo's finding even when it was posted under an
+    # earlier bot identity (#127); it is never a developer reply.
+    root = root_review_comment(thread)
     replies = [
         c
         for c in comments
-        if (c.get("login") or "") != bot_username and is_human_reply(cast(JsonObject, c))
+        if c is not root
+        and (c.get("login") or "") != bot_username
+        and is_human_reply(cast(JsonObject, c))
     ]
     developer_replied = bool(replies)
     reply_text = "\n".join(str(c.get("body") or "").lower() for c in replies)
@@ -714,7 +736,7 @@ def classify_graphql_thread_outcome(
     duplicate = "[llm-review:duplicate]" in reply_text
     disputed = "[llm-review:disputed]" in reply_text or false_positive
     resolved = bool(thread.get("is_resolved"))
-    bot_comment = first_bot_comment(thread, bot_username)
+    bot_comment = first_bot_comment(thread, bot_username) or root
     disposition = developer_disposition_from_replies(
         replies, reply_classifier_result=reply_classifier_result
     )
@@ -733,6 +755,7 @@ def classify_graphql_thread_outcome(
         # by record_finding_outcome). Bot's finding + the developer replies.
         "_finding_text": str((bot_comment or {}).get("body") or ""),
         "_reply_text": "\n\n".join(str(c.get("body") or "") for c in replies),
+        "_reply_authors": [reply_author(cast(JsonObject, c)) for c in replies],
     }
 
 
@@ -776,8 +799,7 @@ def classify_review_thread_outcome(
     developer_replies = [
         r
         for r in active_replies
-        if ((r.get("user") or {}).get("login") or "") != bot_username
-        and is_human_reply(r)
+        if ((r.get("user") or {}).get("login") or "") != bot_username and is_human_reply(r)
     ]
     developer_replied = bool(developer_replies)
     reply_text = "\n".join(str(r.get("body") or "").lower() for r in developer_replies)
@@ -804,4 +826,5 @@ def classify_review_thread_outcome(
         # by record_finding_outcome). Bot's finding + the developer replies.
         "_finding_text": str(comment.get("body") or ""),
         "_reply_text": "\n\n".join(str(r.get("body") or "") for r in developer_replies),
+        "_reply_authors": [reply_author(r) for r in developer_replies],
     }

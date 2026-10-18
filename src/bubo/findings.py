@@ -624,6 +624,7 @@ def filter_findings_by_policy(
     category_floors: Mapping[str, float] | None = None,
     surface_predicate: Callable[[JsonObject], bool] | None = None,
     suppressed_categories: Iterable[str] = (),
+    suppressed_scopes: Mapping[str, Iterable[JsonObject]] | None = None,
 ) -> tuple[list[JsonObject], list[tuple[JsonObject, str]]]:
     """Apply confidence, kind-whitelist, surface-mode, and dispute filters.
 
@@ -689,6 +690,13 @@ def filter_findings_by_policy(
         ``category`` field only (not severity/type), normalized with
         ``.strip().lower()`` on both sides to mirror the DB-side
         ``lower(trim(...))``. Empty means "no suppression".
+    suppressed_scopes:
+        Optional mapping of suppressed category -> the rejections behind it
+        (:func:`bubo.db.disputed_class_scopes`). When given, a suppressed
+        category is dropped only for files inside the area of one of those
+        rejections (see :func:`dispute_match`), so feedback about one part of a
+        repository does not silence the category everywhere. ``None`` keeps
+        the category-wide behaviour.
 
     Returns
     -------
@@ -730,7 +738,11 @@ def filter_findings_by_policy(
         if surface_predicate is not None and not surface_predicate(finding):
             dropped.append((finding, "surface_mode_excluded"))
             continue
-        if suppressed and _finding_category_in(finding, suppressed):
+        if (
+            suppressed
+            and _finding_category_in(finding, suppressed)
+            and (suppressed_scopes is None or dispute_match(finding, suppressed_scopes))
+        ):
             dropped.append((finding, "disputed_class_suppressed"))
             continue
         kept.append(finding)
@@ -769,6 +781,25 @@ def _finding_matches_kinds(finding: JsonObject, allowed: set[str]) -> bool:
         if value.strip().lower() in allowed:
             return True
     return False
+
+
+def dispute_match(
+    finding: JsonObject, scopes: Mapping[str, Iterable[JsonObject]]
+) -> JsonObject | None:
+    """Return the recorded rejection whose area covers ``finding``, if any.
+
+    An area is a directory (the finding's file must be inside it) or, for a
+    file at the repository root, that file itself.
+    """
+    category = finding.get("category")
+    if not isinstance(category, str):
+        return None
+    path = str(finding.get("file") or finding.get("path") or "").strip().lstrip("/")
+    for entry in scopes.get(category.strip().lower(), ()):
+        scope = str(entry.get("scope") or "")
+        if scope and (path == scope or path.startswith(scope + "/")):
+            return entry
+    return None
 
 
 def _finding_category_in(finding: JsonObject, suppressed: set[str]) -> bool:

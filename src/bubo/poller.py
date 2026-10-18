@@ -58,6 +58,7 @@ from bubo.db import (
     claim_finding_reconciliation,
     connect_db,
     count_inflight_workers,
+    disputed_class_scopes,
     disputed_class_stats,
     disputed_finding_classes,
     finding_seen,
@@ -66,11 +67,13 @@ from bubo.db import (
     last_completed_review_sha,
     latest_reviewed_row,
     normalize_disposition,
+    open_finding_at_locus,
     open_finding_with_identity,
     posted_findings_for_outcome_sync,
     prior_posted_findings_for_reconciliation,
     prior_verification,
     prompt_version,
+    record_finding_feedback,
     record_finding_outcome,
     record_finding_outcome_sync_attempt,
     record_finding_reconciliation,
@@ -90,6 +93,7 @@ from bubo.findings import (
     ReviewResult,
     calibrated_category_floors,
     count_added_lines,
+    dispute_match,
     dispute_stats_by_canonical,
     filter_findings_by_policy,
     finding_body,
@@ -109,7 +113,6 @@ from bubo.governance_policy import (
 )
 from bubo.hash_utils import stable_hash
 from bubo.outcome_classifier import classify_developer_reply
-from bubo.paths import CONFIG, ROOT
 from bubo.prompt import render_meta_prompt as _render_meta_prompt
 from bubo.prompt import write_rendered_meta_prompt as write_rendered_prompt_file
 from bubo.provenance import ProvenanceSignal, compile_patterns, compute_provenance
@@ -248,8 +251,8 @@ _NOTE_CONFIDENCE = re.compile(r"\*\*Confidence:\*\*\s*([0-9.]+)", re.IGNORECASE)
 
 
 def reviewer_env(source: Mapping[str, str], cfg: ReviewConfig | None = None) -> dict[str, str]:
-    """Compatibility entrypoint preserving the poller's patchable ROOT binding."""
-    return _reviewer_env(source, cfg, root=ROOT)
+    """Reviewer env rooted at the current ``paths.ROOT`` (read at call time)."""
+    return _reviewer_env(source, cfg, root=paths.ROOT)
 
 
 def metered_agent_output(
@@ -706,7 +709,7 @@ def reconcile_prior_findings(
 
 def read_config() -> ReviewConfig:
     """Load and apply ``config/env.toml``."""
-    return load_review_config(CONFIG, log_event=log)
+    return load_review_config(paths.CONFIG, log_event=log)
 
 
 def normalize_config(cfg: JsonObject) -> ReviewConfig:
@@ -1451,16 +1454,22 @@ def duplicate_open_finding(
     number: int,
     identity: str,
     provider: ScmProvider,
+    finding: JsonObject | None = None,
+    head_sha: str = "",
 ) -> JsonObject | None:
     """Return the open Bubo thread this finding duplicates, if any.
 
     Matches the sha-independent :func:`finding_identity` against findings
-    already posted on the change, then confirms the provider thread is still
+    already posted on the change, or, when ``finding`` is given, an earlier
+    commit's finding at the same file, line, type, severity and category
+    whatever its wording (#135); then confirms the provider thread is still
     open. A resolved, deleted, or unprovable (foreign) thread does not
     suppress the new post; a provider error does, because the stored thread
     is otherwise unknown-but-present and a duplicate is the likelier harm.
     """
     prior = open_finding_with_identity(project, number, identity)
+    if prior is None and finding is not None:
+        prior = open_finding_at_locus(project, number, head_sha, finding)
     if prior is None:
         return None
     try:
@@ -1550,6 +1559,7 @@ def post_or_plan_findings(
     # rejected, using the accept/dispute signal in finding_outcomes. The set
     # is empty (and the DB never queried) unless the operator enabled it.
     suppressed_categories: tuple[str, ...] = ()
+    suppressed_scopes: dict[str, list[JsonObject]] = {}
     if cfg.suppress_disputed_classes:
         suppressed_categories = tuple(
             disputed_finding_classes(
@@ -1558,6 +1568,8 @@ def post_or_plan_findings(
                 threshold=cfg.dispute_suppress_threshold,
             )
         )
+        # Suppress only where the team rejected the category, citing why (#184).
+        suppressed_scopes = disputed_class_scopes(project, set(suppressed_categories))
     # Per-category confidence floors (the calibrated-confidence lever, off by
     # default). Manual operator overrides always apply; when calibration is on,
     # derive additional floors from this repo's dispute history aggregated onto
@@ -1582,8 +1594,14 @@ def post_or_plan_findings(
         category_floors=category_floors or None,
         surface_predicate=surface_predicate_for_mode(cfg.mode),
         suppressed_categories=suppressed_categories,
+        suppressed_scopes=suppressed_scopes,
     )
     for finding, reason in dropped:
+        rejection = (
+            dispute_match(finding, suppressed_scopes)
+            if reason == "disputed_class_suppressed"
+            else None
+        )
         log(
             "finding_filtered",
             project=project,
@@ -1596,6 +1614,15 @@ def post_or_plan_findings(
             category=finding.get("category"),
             category_canonical=finding.get("category_canonical"),
             type=finding.get("type"),
+            **(
+                {
+                    "dispute_scope": rejection["scope"],
+                    "dispute_finding": f"{rejection['file']}:{rejection['line']}",
+                    "dispute_reason": (rejection["reason"] or "")[:500] or None,
+                }
+                if rejection
+                else {}
+            ),
         )
     if not findings:
         return (0, 0, 0)
@@ -1661,11 +1688,14 @@ def post_or_plan_findings(
             number=number,
             identity=identity,
             provider=provider,
+            finding=finding,
+            head_sha=sha,
         )
         if duplicate_of is not None:
-            # Same finding (file + canonical body, any line, any commit) is
-            # already an open Bubo thread on this change: posting it again
-            # would only differ in wording/line. Recorded for audit.
+            # Same finding (file + canonical body at any line, or the same
+            # locus from an earlier commit in any wording) is already an open
+            # Bubo thread on this change: posting it again would only differ in
+            # wording/line. Recorded for audit.
             record_finding(
                 project=project,
                 iid=number,
@@ -2590,6 +2620,57 @@ def outcome_project_id(cfg: ReviewConfig, project: str) -> str | None:
     return project_id(installation, cfg.provider, base, project)
 
 
+def _apply_reply_verdict(outcome: JsonObject, verdict: JsonObject, reply_hash: str) -> None:
+    """Fold a reply-classifier verdict into ``outcome`` and record what it covers."""
+    label = str(verdict.get("verdict") or "")
+    false_positive = bool(verdict.get("false_positive"))
+    if label == "rejected" or false_positive:
+        outcome["disputed"] = True
+        outcome["developer_disposition"] = "false_positive" if false_positive else "disagrees"
+        outcome["disposition_evidence"] = "reply_classifier"
+    if false_positive:
+        outcome["false_positive"] = True
+    # Agreement requires an explicit classifier conclusion ("accepted" is only
+    # "will fix"); resolution, code edits, and silence remain unknown. A false
+    # positive wins.
+    elif label == "agrees":
+        outcome["developer_agreed"] = True
+        outcome["developer_disposition"] = "agrees"
+        outcome["disposition_evidence"] = "reply_classifier"
+    # A non-empty reply_hash marks a classifier verdict, which replaces an
+    # earlier classifier-derived disposition (never an explicit marker).
+    outcome["reply_classified"] = True
+    outcome["reply_hash"] = reply_hash
+    outcome["reply_verdict"] = label
+    outcome["reply_false_positive"] = false_positive
+
+
+def _record_reply_feedback(
+    finding: JsonObject, outcome: JsonObject, reply_text: str, reply_hash: str
+) -> None:
+    """Keep what the developer said and the verdict drawn from it (#184)."""
+    disposition = str(outcome.get("developer_disposition") or "unknown")
+    if outcome.get("reply_hash") == reply_hash:
+        verdict, source = str(outcome.get("reply_verdict") or ""), "reply_classifier"
+    elif disposition != "unknown" or outcome.get("disputed"):
+        verdict = disposition if disposition != "unknown" else "disagrees"
+        source = "explicit_marker"
+    else:
+        verdict, source = "", "pending"
+    record_finding_feedback(
+        project=finding["project"],
+        iid=int(finding["iid"]),
+        sha=finding["sha"],
+        fingerprint=finding["fingerprint"],
+        reply_text=reply_text.strip(),
+        reply_hash=reply_hash,
+        responders=list(outcome.get("_reply_authors") or []),
+        verdict=verdict,
+        false_positive=bool(outcome.get("false_positive")),
+        source=source,
+    )
+
+
 def sync_outcomes(limit: int = 200) -> int:
     """Refresh provider-side outcomes for up to ``limit`` posted findings.
 
@@ -2625,19 +2706,26 @@ def sync_outcomes(limit: int = 200) -> int:
             # When the developer replied but no explicit dispute marker was
             # found, ask the configured agent whether the reply accepts or
             # rejects the finding — so a thread resolved after a rebuttal is
-            # not miscounted as a success. Classify once per finding (the LLM
-            # verdict is cached via reply_classified) to bound cost.
-            already_classified = bool(finding.get("reply_classified"))
-            outcome["reply_classified"] = already_classified
+            # not miscounted as a success. The verdict is cached against a hash
+            # of the reply text: a new or edited reply is classified again
+            # (#127), an unchanged one never pays for a second call.
             reply_text = str(outcome.get("_reply_text") or "")
-            if (
+            reply_hash = stable_hash(reply_text.strip()) if reply_text.strip() else ""
+            stored = {
+                "hash": str(finding.get("reply_hash") or ""),
+                "verdict": str(finding.get("reply_verdict") or ""),
+                "false_positive": bool(finding.get("reply_false_positive")),
+            }
+            outcome["reply_classified"] = bool(finding.get("reply_classified"))
+            needs_verdict = (
                 outcome.get("developer_replied")
                 and not outcome.get("disputed")
                 and str(outcome.get("developer_disposition") or "unknown") == "unknown"
-                and not already_classified
-                and reply_text.strip()
-                and classifications < MAX_REPLY_CLASSIFICATIONS_PER_SYNC
-            ):
+                and bool(reply_hash)
+            )
+            if needs_verdict and stored["hash"] == reply_hash and stored["verdict"]:
+                _apply_reply_verdict(outcome, stored, reply_hash)
+            elif needs_verdict and classifications < MAX_REPLY_CLASSIFICATIONS_PER_SYNC:
                 classifications += 1
                 # Bill the classifier call to the review run that raised the finding.
                 classify_meter, classify_meter_token = start_metering()
@@ -2655,25 +2743,13 @@ def sync_outcomes(limit: int = 200) -> int:
                         tokens=classify_meter.tokens,
                         cost_usd=classify_meter.cost_usd,
                     )
-                # "error" is a transient classifier failure — leave the
-                # finding unclassified so a later sync retries it.
+                # "error" is a transient classifier failure — keep the last
+                # verdict and leave this reply text unclassified so a later
+                # sync retries it.
                 if verdict["verdict"] != "error":
-                    if verdict["verdict"] == "rejected" or verdict["false_positive"]:
-                        outcome["disputed"] = True
-                        outcome["developer_disposition"] = (
-                            "false_positive" if verdict["false_positive"] else "disagrees"
-                        )
-                        outcome["disposition_evidence"] = "reply_classifier"
-                    if verdict["false_positive"]:
-                        outcome["false_positive"] = True
-                    # Agreement requires an explicit classifier conclusion
-                    # ("accepted" is only "will fix"); resolution, code edits,
-                    # and silence remain unknown. A false positive wins.
-                    elif verdict["verdict"] == "agrees":
-                        outcome["developer_agreed"] = True
-                        outcome["developer_disposition"] = "agrees"
-                        outcome["disposition_evidence"] = "reply_classifier"
-                    outcome["reply_classified"] = True
+                    _apply_reply_verdict(outcome, verdict, reply_hash)
+                elif stored["verdict"]:
+                    _apply_reply_verdict(outcome, stored, str(stored["hash"]))
                 log(
                     "reply_classified",
                     project=project,
@@ -2681,6 +2757,12 @@ def sync_outcomes(limit: int = 200) -> int:
                     verdict=verdict["verdict"],
                     false_positive=verdict["false_positive"],
                 )
+            elif needs_verdict and stored["verdict"]:
+                # Over this run's classifier budget: keep the previous verdict
+                # until a later sync classifies the new reply text.
+                _apply_reply_verdict(outcome, stored, str(stored["hash"]))
+            if outcome.get("developer_replied") and reply_hash:
+                _record_reply_feedback(finding, outcome, reply_text, reply_hash)
             record_finding_outcome(
                 project=project,
                 iid=iid,

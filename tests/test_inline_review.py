@@ -446,11 +446,11 @@ No findings for optional categories: []
         self.assertIn("confidence (0..1)", prompt)
 
     def test_read_config_defaults_max_findings_to_five(self):
-        original_config = poller.CONFIG
+        original_config = paths.CONFIG
         with tempfile.TemporaryDirectory() as tmp:
             try:
-                poller.CONFIG = Path(tmp) / "env.toml"
-                poller.CONFIG.write_text(
+                paths.CONFIG = Path(tmp) / "env.toml"
+                paths.CONFIG.write_text(
                     """
 [gitlab]
 url = "https://gitlab.com"
@@ -466,7 +466,7 @@ enabled = true
 
                 self.assertEqual(5, cfg.max_findings_per_merge_request)
             finally:
-                poller.CONFIG = original_config
+                paths.CONFIG = original_config
 
     def test_meta_prompt_limit_is_rendered_from_config(self):
         prompt = (

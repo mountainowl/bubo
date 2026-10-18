@@ -48,7 +48,6 @@ from bubo.config_values import ConfigError
 from bubo.errors import describe
 from bubo.events import log
 from bubo.findings import parse_review_result
-from bubo.paths import CONFIG as ENV_CONFIG
 from bubo.review_config import (
     DEFAULT_PROVIDER,
     SUPPORTED_PROVIDERS,
@@ -151,7 +150,7 @@ def _resolve_provider(provider: str) -> str:
     """
     if provider == "auto":
         try:
-            return load_review_config(ENV_CONFIG).provider
+            return load_review_config(paths.CONFIG).provider
         except ConfigError, OSError:
             return DEFAULT_PROVIDER
     if provider not in SUPPORTED_PROVIDERS:
@@ -420,7 +419,7 @@ def get_dispute_classes(project: str) -> dict[str, Any]:
     threshold: float | None = None
     min_samples: int | None = None
     try:
-        cfg = load_review_config(ENV_CONFIG)
+        cfg = load_review_config(paths.CONFIG)
         threshold = cfg.dispute_suppress_threshold
         min_samples = cfg.dispute_suppress_min_samples
     except ConfigError, OSError:
@@ -499,7 +498,7 @@ def review_change(
         )
     # Build the same contract-carrying prompt the poller uses, then run the
     # operator's configured reviewer_command directly (no bundled wrapper).
-    cfg = replace(load_review_config(ENV_CONFIG), provider=provider)
+    cfg = replace(load_review_config(paths.CONFIG), provider=provider)
     allowed, reason = review_gate(cfg.subscription_circuit, state_path(paths.DB.parent))
     if not allowed:
         log("mcp_review_deferred_subscription", reason=reason)

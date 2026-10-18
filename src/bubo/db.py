@@ -214,6 +214,9 @@ def init_db() -> None:
               resolution_evidence text not null default 'unknown',
               developer_disposition text not null default 'unknown',
               disposition_evidence text not null default 'unknown',
+              reply_hash text not null default '',
+              reply_verdict text not null default '',
+              reply_false_positive integer not null default 0,
               last_checked_at text not null
             )
             """
@@ -225,8 +228,39 @@ def init_db() -> None:
             "resolution_evidence": "text not null default 'unknown'",
             "developer_disposition": "text not null default 'unknown'",
             "disposition_evidence": "text not null default 'unknown'",
+            # The reply text the cached classifier verdict was computed for, so
+            # a new or edited developer reply is classified again (#127).
+            "reply_hash": "text not null default ''",
+            "reply_verdict": "text not null default ''",
+            "reply_false_positive": "integer not null default 0",
         }.items():
             ensure_column(db, "finding_outcomes", name, definition)
+        # One row per distinct developer reply on a posted finding (#184): the
+        # reply text, who wrote it, and the verdict drawn from it, so the reason
+        # behind an outcome survives and a later reply adds a new row.
+        db.execute(
+            """
+            create table if not exists finding_feedback (
+              finding_id text not null,
+              reply_hash text not null,
+              project text not null,
+              iid integer not null,
+              sha text not null,
+              fingerprint text not null,
+              reply_text text not null,
+              responders text not null default '[]',
+              verdict text not null default '',
+              false_positive integer not null default 0,
+              source text not null default 'unknown',
+              first_seen_at text not null,
+              updated_at text not null,
+              primary key (finding_id, reply_hash)
+            )
+            """
+        )
+        db.execute(
+            "create index if not exists idx_finding_feedback_project on finding_feedback(project)"
+        )
         db.execute(
             """
             create table if not exists finding_reconciliations (
@@ -845,7 +879,7 @@ def prior_verification(
         return None
     try:
         votes = json.loads(row[1])
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not isinstance(votes, list) or not votes:
         return None
@@ -1064,9 +1098,10 @@ def record_finding_outcome(
               finding_id,project,iid,sha,fingerprint,discussion_id,
               resolved,deleted,developer_replied,disputed,false_positive,duplicate,
               resolved_at,merged_unresolved,reply_classified,resolution_source,
-              resolution_evidence,developer_disposition,disposition_evidence,last_checked_at
+              resolution_evidence,developer_disposition,disposition_evidence,
+              reply_hash,reply_verdict,reply_false_positive,last_checked_at
               )
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(finding_id) do update set
               discussion_id=excluded.discussion_id,
               resolved=excluded.resolved,
@@ -1082,12 +1117,23 @@ def record_finding_outcome(
               resolution_evidence=excluded.resolution_evidence,
               developer_disposition=case
                 when excluded.developer_disposition='unknown'
+                  and not (excluded.reply_hash != ''
+                           and finding_outcomes.disposition_evidence='reply_classifier')
                   then finding_outcomes.developer_disposition
                 else excluded.developer_disposition end,
               disposition_evidence=case
                 when excluded.developer_disposition='unknown'
+                  and not (excluded.reply_hash != ''
+                           and finding_outcomes.disposition_evidence='reply_classifier')
                   then finding_outcomes.disposition_evidence
                 else excluded.disposition_evidence end,
+              reply_hash=case when excluded.reply_hash=''
+                then finding_outcomes.reply_hash else excluded.reply_hash end,
+              reply_verdict=case when excluded.reply_hash=''
+                then finding_outcomes.reply_verdict else excluded.reply_verdict end,
+              reply_false_positive=case when excluded.reply_hash=''
+                then finding_outcomes.reply_false_positive
+                else excluded.reply_false_positive end,
               last_checked_at=excluded.last_checked_at
             """,
             (
@@ -1112,9 +1158,159 @@ def record_finding_outcome(
                     developer_disposition or outcome.get("developer_disposition"), outcome
                 ),
                 _outcome_evidence(disposition_evidence or outcome.get("disposition_evidence")),
+                str(outcome.get("reply_hash") or ""),
+                str(outcome.get("reply_verdict") or ""),
+                int(bool(outcome.get("reply_false_positive", False))),
                 now(),
             ),
         )
+
+
+FEEDBACK_TEXT_LIMIT = 8000
+
+
+def record_finding_feedback(
+    *,
+    project: str,
+    iid: int,
+    sha: str,
+    fingerprint: str,
+    reply_text: str,
+    reply_hash: str,
+    responders: list[JsonObject],
+    verdict: str,
+    false_positive: bool,
+    source: str,
+) -> None:
+    """Keep the developer reply behind a finding's outcome (#184).
+
+    Rows are keyed by finding and reply hash: re-observing the same reply
+    refreshes its verdict, a new or edited reply adds a row, so the history of
+    what the team said about a finding stays reviewable.
+    """
+    finding_id = f"{project}:{iid}:{sha}:{fingerprint}"
+    stamp = now()
+    with connect_db() as db:
+        db.execute(
+            """
+            insert into finding_feedback(
+              finding_id,reply_hash,project,iid,sha,fingerprint,reply_text,responders,
+              verdict,false_positive,source,first_seen_at,updated_at)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            on conflict(finding_id,reply_hash) do update set
+              responders=excluded.responders,
+              verdict=case when excluded.verdict='' then finding_feedback.verdict
+                else excluded.verdict end,
+              false_positive=case when excluded.verdict='' then finding_feedback.false_positive
+                else excluded.false_positive end,
+              source=case when excluded.verdict='' then finding_feedback.source
+                else excluded.source end,
+              updated_at=excluded.updated_at
+            """,
+            (
+                finding_id,
+                reply_hash,
+                project,
+                iid,
+                sha,
+                fingerprint,
+                reply_text[:FEEDBACK_TEXT_LIMIT],
+                json.dumps(responders, sort_keys=True),
+                verdict,
+                int(false_positive),
+                source,
+                stamp,
+                stamp,
+            ),
+        )
+
+
+def _has_table(db: sqlite3.Connection, name: str) -> bool:
+    row = db.execute(
+        "select 1 from sqlite_master where type='table' and name=?", (name,)
+    ).fetchone()
+    return row is not None
+
+
+def _rejected_findings(db: sqlite3.Connection, project: str) -> list[JsonObject]:
+    """Every disputed finding of ``project`` with its latest stored reason.
+
+    A finding counts when its outcome is disputed or a false positive (the same
+    signal :func:`disputed_finding_classes` aggregates). The reason is the
+    newest rejecting reply in ``finding_feedback``; findings disputed before
+    feedback was kept carry ``reason=None``.
+    """
+    feedback = _has_table(db, "finding_feedback")
+    reason_sql = (
+        """(select json_array(ff.reply_text, ff.responders, ff.verdict)
+             from finding_feedback ff
+             where ff.finding_id = fo.finding_id
+               and (ff.verdict in ('rejected','disagrees','false_positive')
+                    or ff.false_positive = 1)
+             order by ff.updated_at desc limit 1)"""
+        if feedback
+        else "null"
+    )
+    rows = db.execute(
+        f"""
+        select lower(trim(rf.category)), rf.file, rf.line, rf.iid, rf.sha, {reason_sql}
+        from finding_outcomes fo
+        join review_findings rf
+          on rf.project || ':' || rf.iid || ':' || rf.sha || ':' || rf.fingerprint
+             = fo.finding_id
+        where rf.project = ?
+          and (fo.disputed = 1 or fo.false_positive = 1)
+          and rf.category is not null and trim(rf.category) != ''
+        order by fo.last_checked_at desc
+        """,
+        (project,),
+    ).fetchall()
+    out: list[JsonObject] = []
+    for category, file, line, iid, sha, reason in rows:
+        entry: JsonObject = {
+            "category": str(category),
+            "file": str(file or ""),
+            "line": line,
+            "iid": int(iid),
+            "sha": str(sha),
+            "scope": dispute_scope(str(file or "")),
+            "reason": None,
+            "responders": [],
+            "verdict": None,
+        }
+        if reason:
+            text, responders, verdict = json.loads(reason)
+            entry["reason"] = str(text)
+            entry["responders"] = json.loads(responders or "[]")
+            entry["verdict"] = str(verdict)
+        out.append(entry)
+    return out
+
+
+def dispute_scope(file: str) -> str:
+    """The area a rejection applies to: the file's directory, or the file itself
+    when it sits at the repository root (so one root file never silences a whole
+    repository)."""
+    path = file.strip().lstrip("/")
+    parent = path.rsplit("/", 1)[0] if "/" in path else ""
+    return parent or path
+
+
+def disputed_class_scopes(project: str, categories: set[str]) -> dict[str, list[JsonObject]]:
+    """Where each suppressed category was rejected, with the reason (#184).
+
+    Dispute suppression applies only inside these scopes, so a category the
+    team rejected in one area keeps being reviewed everywhere else.
+    """
+    if not categories:
+        return {}
+    with connect_db() as db:
+        rejected = _rejected_findings(db, project)
+    scopes: dict[str, list[JsonObject]] = {}
+    for entry in rejected:
+        if entry["category"] in categories:
+            scopes.setdefault(entry["category"], []).append(entry)
+    return scopes
 
 
 def record_finding_outcome_sync_attempt(
@@ -1218,6 +1414,65 @@ def open_finding_with_identity(project: str, iid: int, identity: str) -> JsonObj
              limit 1
             """,
             (project, iid, identity, FindingStatus.POSTED),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"sha": str(row[0]), "fingerprint": str(row[1]), "discussion_id": str(row[2])}
+
+
+def open_finding_at_locus(
+    project: str, iid: int, head_sha: str, finding: JsonObject
+) -> JsonObject | None:
+    """Return an open Bubo thread from an earlier commit at the same locus (#135).
+
+    The locus is file, line, type, severity and category, normalized and
+    defaulted the way :func:`bubo.findings.finding_body` renders them. Unlike
+    :func:`open_finding_with_identity` it ignores the reviewer's wording, which
+    changes from run to run. Only earlier commits count, so two distinct
+    findings on one line in the same review both post; a finding whose line
+    moved is not matched here (a residual duplicate, never a hidden finding).
+    """
+    file = finding.get("file") or finding.get("path")
+    line = finding.get("line") or finding.get("new_line")
+    if not file or line is None:
+        return None
+    try:
+        line_number = int(line)
+    except (TypeError, ValueError):
+        return None
+
+    def label(key: str, default: str) -> str:
+        return str(finding.get(key) or default).strip().lower()
+
+    with connect_db(readonly=True) as db:
+        row = db.execute(
+            """
+            select rf.sha,rf.fingerprint,rf.discussion_id
+              from review_findings rf
+              left join finding_outcomes fo
+                on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha
+                  || ':' || rf.fingerprint
+             where rf.project=? and rf.iid=? and rf.sha!=? and rf.status=?
+               and rf.file=? and rf.line=?
+               and lower(trim(coalesce(nullif(rf.type,''),'issue')))=?
+               and lower(trim(coalesce(nullif(rf.severity,''),'blocking')))=?
+               and lower(trim(coalesce(nullif(rf.category,''),'correctness')))=?
+               and rf.discussion_id is not null and rf.discussion_id != ''
+               and coalesce(fo.resolved,0)=0 and coalesce(fo.deleted,0)=0
+             order by rf.updated_at desc
+             limit 1
+            """,
+            (
+                project,
+                iid,
+                head_sha,
+                FindingStatus.POSTED,
+                str(file),
+                line_number,
+                label("type", "issue"),
+                label("severity", "blocking"),
+                label("category", "correctness"),
+            ),
         ).fetchone()
     if row is None:
         return None
@@ -1366,7 +1621,9 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
                    coalesce(fo.false_positive,0), coalesce(fo.duplicate,0),
                    rf.type, rf.severity, rf.category,
                    coalesce(fo.developer_disposition,'unknown'),
-                   rf.verified, rr.model, rr.prompt_version, rr.tone
+                   rf.verified, rr.model, rr.prompt_version, rr.tone,
+                   coalesce(fo.reply_hash,''), coalesce(fo.reply_verdict,''),
+                   coalesce(fo.reply_false_positive,0)
             from review_findings rf
             left join finding_outcomes fo
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
@@ -1406,6 +1663,9 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
             "model": row[17],
             "prompt_version": row[18],
             "tone": row[19],
+            "reply_hash": row[20],
+            "reply_verdict": row[21],
+            "reply_false_positive": bool(row[22]),
         }
         for row in rows
     ]
@@ -1489,6 +1749,10 @@ def disputed_finding_classes(
     }
 
 
+DISPUTE_FEEDBACK_SAMPLES = 5
+_FEEDBACK_KEYS = ("file", "line", "iid", "scope", "reason", "responders")
+
+
 def disputed_class_stats(project: str, *, min_samples: int) -> list[JsonObject]:
     """Return raw per-category dispute stats for ``project`` (read-only).
 
@@ -1511,6 +1775,7 @@ def disputed_class_stats(project: str, *, min_samples: int) -> list[JsonObject]:
     """
     with connect_db(readonly=True) as db:
         rows = _dispute_class_rows(db, project)
+        rejections = _rejected_findings(db, project)
     # Sort the raw triples (rate desc, category asc) BEFORE building dicts so the
     # sort key is concretely typed (mypy can't see into a dict[str, Any] value).
     ranked = sorted(
@@ -1521,10 +1786,16 @@ def disputed_class_stats(project: str, *, min_samples: int) -> list[JsonObject]:
         {
             "category": category,
             "total": total,
-            "rejected": rejected,
-            "dispute_rate": rejected / total,
+            "rejected": rejected_count,
+            "dispute_rate": rejected_count / total,
+            # Why the team rejected this category, and where (#184).
+            "feedback": [
+                {key: entry[key] for key in _FEEDBACK_KEYS}
+                for entry in rejections
+                if entry["category"] == category
+            ][:DISPUTE_FEEDBACK_SAMPLES],
         }
-        for category, total, rejected in ranked
+        for category, total, rejected_count in ranked
     ]
     return stats
 
