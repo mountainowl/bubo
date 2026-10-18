@@ -128,6 +128,8 @@ from bubo.scm import ScmProvider, get_provider
 from bubo.scm.base import (
     FindingThreadState,
     OutcomeMemo,
+    change_bases,
+    change_diff_evidence,
     git_added_lines,
     git_is_ancestor,
     path_slug,
@@ -2121,11 +2123,10 @@ def worker(job: Path) -> int:
                 )
                 return 0
             with telemetry.span("llm_review.agent", repo=project, model=model) as agent_span:
+                prompt = provider.review_prompt(project, mr, cfg, extra_directive=extra_directive)
+                diff = change_diff_evidence(repo, change_bases(mr), sha)
                 result = run(
-                    [
-                        *cfg.reviewer_command,
-                        provider.review_prompt(project, mr, cfg, extra_directive=extra_directive),
-                    ],
+                    [*cfg.reviewer_command, f"{prompt}\n{diff}"],
                     cwd=repo,
                     timeout=cfg.timeout_seconds,
                     env=env,
