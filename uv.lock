@@ -160,7 +160,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", specifier = ">=1.2.0,<2" },
+    { name = "mcp", specifier = ">=1.2.0,<3" },
     { name = "opentelemetry-api", specifier = ">=1.42.1" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.42.1" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.42.1" },
