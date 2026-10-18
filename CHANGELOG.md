@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.29.0](https://github.com/mountainowl/bubo/compare/v0.28.4...v0.29.0) (2026-10-18)
+
+
+### Features
+
+* add idle updates and review operations dashboard ([#257](https://github.com/mountainowl/bubo/issues/257)) ([97501ad](https://github.com/mountainowl/bubo/commit/97501adc83fb1d9e9f46a021e99b0f2c3ca5b556))
+
+
+### Documentation
+
+* add search metadata and verified sitemap generation ([#249](https://github.com/mountainowl/bubo/issues/249)) ([79ee646](https://github.com/mountainowl/bubo/commit/79ee64646cf376258bd3affb616217b3db70c30e))
+
 ## [0.28.4](https://github.com/mountainowl/bubo/compare/v0.28.3...v0.28.4) (2026-10-16)
 
 
