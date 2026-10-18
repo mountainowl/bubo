@@ -992,3 +992,54 @@ def test_outcome_sync_otel_counts_each_outcome_once_with_finding_dimensions() ->
         }
     finally:
         paths.DB = original_db
+
+
+def test_outcome_sync_exports_explicit_agreement_once(monkeypatch) -> None:
+    """An explicit ``[llm-review:agreed]`` reply is the one positive signal; ship it.
+
+    Runs the real analytics path (consent on, network blocked by conftest) and
+    reads Bubo's own outbound queue.
+    """
+    monkeypatch.setattr(poller.analytics, "analytics_enabled", lambda cfg: True)
+    monkeypatch.setattr(poller.analytics, "flush", lambda: None)
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            _seed_posted_finding(paths.DB)
+            fake = _SilentTelemetry()
+            consent = AnalyticsConfig(enabled=True, api_key="phc_test")
+            cfg = ReviewConfig(
+                gitlab_url="https://gitlab.com",
+                telemetry_config=TelemetryConfig(analytics=consent, emit_outcome_sync=False),
+            )
+            outcome = {
+                "resolved": False,
+                "deleted": False,
+                "developer_replied": True,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "developer_agreed": True,
+                "developer_disposition": "agrees",
+                "disposition_evidence": "explicit_marker",
+                "resolved_at": None,
+                "merged_unresolved": False,
+            }
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeProvider(outcome)):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
+                        poller.sync_outcomes(limit=1)
+                        poller.sync_outcomes(limit=1)
+            with sqlite3.connect(paths.DB) as conn:
+                stored = conn.execute("select developer_disposition from finding_outcomes")
+                assert stored.fetchone() == ("agrees",)
+        sent = [
+            event["properties"]["outcome"]
+            for _, _, event in analytics._pending_events
+            if event["event"] == "finding_outcome"
+        ]
+        assert sorted(sent) == ["developer_agreed", "developer_replied"]
+    finally:
+        paths.DB = original_db

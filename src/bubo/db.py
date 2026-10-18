@@ -967,7 +967,7 @@ def _resolution_source(value: object) -> str:
     return value if value in {"developer", "bubo_auto", "unknown"} else "unknown"
 
 
-def _developer_disposition(value: object, outcome: JsonObject) -> str:
+def normalize_disposition(value: object, outcome: JsonObject) -> str:
     """Normalize only explicit agreement, never resolution or code movement."""
     raw = str(value or "").strip().lower()
     if raw in {"agrees", "disagrees", "false_positive", "unknown"}:
@@ -1108,7 +1108,7 @@ def record_finding_outcome(
                 int(bool(outcome.get("reply_classified", False))),
                 source,
                 source_evidence,
-                _developer_disposition(
+                normalize_disposition(
                     developer_disposition or outcome.get("developer_disposition"), outcome
                 ),
                 _outcome_evidence(disposition_evidence or outcome.get("disposition_evidence")),
@@ -1343,7 +1343,8 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
                    coalesce(fo.resolved,0), coalesce(fo.deleted,0),
                    coalesce(fo.developer_replied,0), coalesce(fo.disputed,0),
                    coalesce(fo.false_positive,0), coalesce(fo.duplicate,0),
-                   rf.type, rf.severity, rf.category
+                   rf.type, rf.severity, rf.category,
+                   coalesce(fo.developer_disposition,'unknown')
             from review_findings rf
             left join finding_outcomes fo
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
@@ -1373,6 +1374,7 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
                 "disputed": bool(row[9]),
                 "false_positive": bool(row[10]),
                 "duplicate": bool(row[11]),
+                "developer_agreed": row[15] == "agrees",
             },
             "type": row[12],
             "severity": row[13],
@@ -1694,7 +1696,7 @@ def outcomes_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
             "reply_classified": bool(row[10]),
             "resolution_source": _resolution_source(row[11]),
             "resolution_evidence": _outcome_evidence(row[12]),
-            "developer_disposition": _developer_disposition(row[13], {}),
+            "developer_disposition": normalize_disposition(row[13], {}),
             "disposition_evidence": _outcome_evidence(row[14]),
             "last_checked_at": row[15],
             "severity": _normalized_severity(row[16]),
@@ -2274,6 +2276,7 @@ __all__ = [
     "list_recent_reviews",
     "metrics_summary",
     "noise_trend",
+    "normalize_disposition",
     "open_finding_with_identity",
     "outcomes_for",
     "outcomes_summary",

@@ -64,6 +64,7 @@ from bubo.db import (
     init_db,
     last_completed_review_sha,
     latest_reviewed_row,
+    normalize_disposition,
     open_finding_with_identity,
     posted_findings_for_outcome_sync,
     prior_posted_findings_for_reconciliation,
@@ -2609,6 +2610,15 @@ def sync_outcomes(limit: int = 200) -> int:
             )
             prior_outcome = finding.get("prior_outcome") or {}
             analytics_on = analytics.analytics_enabled(cfg.analytics_config)
+            # Agreement is stored as a disposition, not a flag; read it the way
+            # the DB stores it so analytics and SQLite agree.
+            outcome_flags = {
+                **outcome,
+                "developer_agreed": normalize_disposition(
+                    outcome.get("developer_disposition"), outcome
+                )
+                == "agrees",
+            }
             for name in (
                 "resolved",
                 "deleted",
@@ -2616,12 +2626,13 @@ def sync_outcomes(limit: int = 200) -> int:
                 "disputed",
                 "false_positive",
                 "duplicate",
+                "developer_agreed",
             ):
                 # Emit only on the false->true transition: the same posted
                 # finding is re-checked every cycle and neither OTel nor PostHog
                 # has a per-finding key to dedupe on (the fingerprint is never
                 # sent), so an every-sync emit would multiply the count.
-                if not outcome[name] or prior_outcome.get(name):
+                if not outcome_flags.get(name) or prior_outcome.get(name):
                     continue
                 if telemetry.config.emit_outcome_sync:
                     telemetry.record_finding(
