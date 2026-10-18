@@ -281,3 +281,47 @@ def test_unchanged_head_still_posts(monkeypatch, fake) -> None:
 
 def test_superseded_status_is_a_known_reporting_dimension() -> None:
     assert safe_context({"status": "superseded"}).get("status") == "superseded"
+
+
+# ---------------------------------------------------------------------------
+# C. Duplicate suppression across commits
+# ---------------------------------------------------------------------------
+
+
+def test_reworded_finding_with_same_identity_is_not_posted_again(monkeypatch, fake) -> None:
+    cfg = use_config(monkeypatch, tone="collaborative")
+
+    def post(sha: str, item: dict) -> tuple[int, int, int]:
+        fake.head = sha
+        return poller.post_or_plan_findings(
+            cfg=cfg,
+            token="t",
+            project=PROJECT,
+            mr={"number": 1, "head": {"sha": sha}},
+            raw_review=json.dumps([item]),
+        )
+
+    assert post(S1, finding(7, "Heads up: xs[i+1] reads past the end.")) == (1, 0, 0)
+    # New head, the line moved, and the posted wording changed: the exact-body
+    # remote check cannot match, but the finding identity does.
+    assert post(S2, finding(12, "Out-of-bounds read of xs[i+1] on the last pass?")) == (0, 0, 1)
+    assert len(fake.comments) == 1
+
+    # Once the developer resolves the earlier thread, a re-found issue posts again.
+    fake.comments[0]["resolved"] = True
+    assert post(S3, finding(12, "Still reading past the end of xs.")) == (1, 0, 0)
+    assert len(fake.comments) == 2
+
+
+def test_distinct_finding_on_new_head_still_posts(monkeypatch, fake) -> None:
+    cfg = use_config(monkeypatch)
+    for sha, item in ((S1, finding(7)), (S2, finding(12, title="Different bug entirely"))):
+        fake.head = sha
+        poller.post_or_plan_findings(
+            cfg=cfg,
+            token="t",
+            project=PROJECT,
+            mr={"number": 1, "head": {"sha": sha}},
+            raw_review=json.dumps([item]),
+        )
+    assert len(fake.comments) == 2

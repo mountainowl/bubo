@@ -59,6 +59,7 @@ from bubo.db import (
     finding_seen,
     init_db,
     latest_reviewed_row,
+    open_finding_with_identity,
     posted_findings_for_outcome_sync,
     prior_posted_findings_for_reconciliation,
     prompt_version,
@@ -1275,6 +1276,41 @@ def capture_provenance(
         return None
 
 
+def duplicate_open_finding(
+    *,
+    cfg: ReviewConfig,
+    token: str,
+    project: str,
+    number: int,
+    identity: str,
+    provider: ScmProvider,
+) -> JsonObject | None:
+    """Return the open Bubo thread this finding duplicates, if any.
+
+    Matches the sha-independent :func:`finding_identity` against findings
+    already posted on the change, then confirms the provider thread is still
+    open. A resolved, deleted, or unprovable (foreign) thread does not
+    suppress the new post; a provider error does, because the stored thread
+    is otherwise unknown-but-present and a duplicate is the likelier harm.
+    """
+    prior = open_finding_with_identity(project, number, identity)
+    if prior is None:
+        return None
+    try:
+        thread = provider.finding_thread(
+            cfg, token, project, number, prior["discussion_id"], provider.bot_username(), ""
+        )
+    except Exception as exc:
+        log(
+            "finding_duplicate_check_failed",
+            project=project,
+            iid=number,
+            error=type(exc).__name__,
+        )
+        return prior
+    return prior if thread.state is FindingThreadState.OPEN else None
+
+
 def post_or_plan_findings(
     *,
     cfg: ReviewConfig,
@@ -1397,6 +1433,47 @@ def post_or_plan_findings(
         fp = finding_fingerprint(project, number, sha, finding)
         identity = finding_identity(project, number, finding)
         if finding_seen(project, number, sha, fp):
+            skipped += 1
+            continue
+        duplicate_of = duplicate_open_finding(
+            cfg=cfg,
+            token=token,
+            project=project,
+            number=number,
+            identity=identity,
+            provider=provider,
+        )
+        if duplicate_of is not None:
+            # Same finding (file + canonical body, any line, any commit) is
+            # already an open Bubo thread on this change: posting it again
+            # would only differ in wording/line. Recorded for audit.
+            record_finding(
+                project=project,
+                iid=number,
+                sha=sha,
+                fingerprint=fp,
+                finding=finding,
+                status=FindingStatus.SKIPPED,
+                run_id=run_id,
+                finding_identity=identity,
+            )
+            emit_finding_metric(
+                telemetry,
+                repo=project,
+                status=FindingStatus.SKIPPED,
+                finding=finding,
+                dry_run=cfg.dry_run,
+            )
+            log(
+                "finding_skipped",
+                project=project,
+                iid=number,
+                file=finding.get("file") or finding.get("path"),
+                line=finding.get("line") or finding.get("new_line"),
+                reason="duplicate_open_thread",
+                prior_sha=duplicate_of["sha"],
+                discussion_id=duplicate_of["discussion_id"],
+            )
             skipped += 1
             continue
         position = provider.build_position(change, changed, finding)

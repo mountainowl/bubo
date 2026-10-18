@@ -1050,6 +1050,35 @@ def prior_posted_findings_for_reconciliation(
     return findings
 
 
+def open_finding_with_identity(project: str, iid: int, identity: str) -> JsonObject | None:
+    """Return the newest posted Bubo finding on this change with ``identity``.
+
+    ``identity`` is the sha- and line-independent
+    :func:`bubo.reconciliation.finding_identity`. Only rows with a provider
+    thread id that outcome sync has not seen resolved or deleted qualify; the
+    caller re-checks the live thread state before suppressing a post.
+    """
+    with connect_db(readonly=True) as db:
+        row = db.execute(
+            """
+            select rf.sha,rf.fingerprint,rf.discussion_id
+              from review_findings rf
+              left join finding_outcomes fo
+                on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha
+                  || ':' || rf.fingerprint
+             where rf.project=? and rf.iid=? and rf.finding_identity=? and rf.status=?
+               and rf.discussion_id is not null and rf.discussion_id != ''
+               and coalesce(fo.resolved,0)=0 and coalesce(fo.deleted,0)=0
+             order by rf.updated_at desc
+             limit 1
+            """,
+            (project, iid, identity, FindingStatus.POSTED),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"sha": str(row[0]), "fingerprint": str(row[1]), "discussion_id": str(row[2])}
+
+
 def claim_finding_reconciliation(
     *,
     project: str,
@@ -2090,6 +2119,7 @@ __all__ = [
     "list_recent_reviews",
     "metrics_summary",
     "noise_trend",
+    "open_finding_with_identity",
     "outcomes_for",
     "outcomes_summary",
     "policy_decisions_summary",
