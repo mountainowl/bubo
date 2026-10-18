@@ -43,6 +43,7 @@ import sys
 import time
 import urllib.error
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -64,6 +65,7 @@ from bubo.db import (
     init_db,
     last_completed_review_sha,
     latest_reviewed_row,
+    normalize_disposition,
     open_finding_with_identity,
     posted_findings_for_outcome_sync,
     prior_posted_findings_for_reconciliation,
@@ -77,6 +79,7 @@ from bubo.db import (
     record_review_run_finish,
     record_review_run_start,
     review_run_id,
+    run_finding_counts,
     status_age_seconds,
 )
 from bubo.db import record as _db_record
@@ -1968,6 +1971,7 @@ def worker(job: Path) -> int:
     report = paths.REPORTS / slug(project) / str(iid) / sha[:12] / "review.md"
     report.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
+    started_at = now()
     tokens = TokenUsage()
     cost_usd = 0.0
     # Every agent call this review makes (review, verify, reconcile) adds to it.
@@ -1980,6 +1984,7 @@ def worker(job: Path) -> int:
     queued_seconds: float | None = None
     project_profile: dict[str, Any] = {}
     review_run_started = False
+    review_prompt_version: str | None = None
     posted = planned = skipped = 0
 
     def defer_review_run() -> None:
@@ -2019,13 +2024,14 @@ def worker(job: Path) -> int:
         )
         record(project, iid, sha, ReviewStatus.RUNNING, str(report))
         rendered_prompt = write_rendered_meta_prompt(cfg)
+        review_prompt_version = prompt_version(rendered_prompt)
         record_review_run_start(
             run_id=run_id,
             project=project,
             iid=iid,
             sha=sha,
             model=model,
-            prompt_version=prompt_version(rendered_prompt),
+            prompt_version=review_prompt_version,
             review_mode=ReviewMode.DIFF,
             dry_run=cfg.dry_run,
             tone=cfg.tone,
@@ -2270,6 +2276,7 @@ def worker(job: Path) -> int:
                 cost_usd=cost_usd,
                 tone=cfg.tone,
                 lines_reviewed=lines_reviewed,
+                prompt_version=review_prompt_version,
             )
             analytics.record_review_completed(
                 cfg.analytics_config,
@@ -2294,6 +2301,7 @@ def worker(job: Path) -> int:
                 languages=languages,
                 queue_seconds=queued_seconds,
                 profile=project_profile,
+                prompt_version=review_prompt_version,
             )
             log(
                 "review_done",
@@ -2353,6 +2361,11 @@ def worker(job: Path) -> int:
         else:
             report.with_suffix(report.suffix + ".error").write_text(error, encoding="utf-8")
         record(project, iid, sha, ReviewStatus.FAILED, str(report), error)
+        # A failure part-way through posting leaves comments on the change
+        # that post_or_plan_findings never got to return; count them anyway.
+        with suppress(Exception):
+            stored_posted, stored_planned = run_finding_counts(run_id, since=started_at)
+            posted, planned = max(posted, stored_posted), max(planned, stored_planned)
         if cfg is not None:
             record_review_run_finish(
                 run_id=run_id,
@@ -2380,6 +2393,7 @@ def worker(job: Path) -> int:
                 cost_usd=cost_usd,
                 tone=cfg.tone if cfg is not None else None,
                 lines_reviewed=lines_reviewed,
+                prompt_version=review_prompt_version,
             )
         if cfg is not None:
             analytics.record_review_completed(
@@ -2405,6 +2419,7 @@ def worker(job: Path) -> int:
                 languages=languages,
                 queue_seconds=queued_seconds,
                 profile=project_profile,
+                prompt_version=review_prompt_version,
             )
         log(
             "review_failed",
@@ -2508,6 +2523,17 @@ def _accepts_outcome_memo(provider: ScmProvider) -> bool:
 
 
 @admitted(writable=True)
+def outcome_project_id(cfg: ReviewConfig, project: str) -> str | None:
+    """The random analytics project id ``review_completed`` used for ``project``."""
+    from bubo.project_analytics import project_id
+
+    installation = analytics.install_id()
+    if installation is None:
+        return None
+    base = cfg.github_api_url if cfg.provider == "github" else cfg.gitlab_url
+    return project_id(installation, cfg.provider, base, project)
+
+
 def sync_outcomes(limit: int = 200) -> int:
     """Refresh provider-side outcomes for up to ``limit`` posted findings.
 
@@ -2609,6 +2635,15 @@ def sync_outcomes(limit: int = 200) -> int:
             )
             prior_outcome = finding.get("prior_outcome") or {}
             analytics_on = analytics.analytics_enabled(cfg.analytics_config)
+            # Agreement is stored as a disposition, not a flag; read it the way
+            # the DB stores it so analytics and SQLite agree.
+            outcome_flags = {
+                **outcome,
+                "developer_agreed": normalize_disposition(
+                    outcome.get("developer_disposition"), outcome
+                )
+                == "agrees",
+            }
             for name in (
                 "resolved",
                 "deleted",
@@ -2616,24 +2651,28 @@ def sync_outcomes(limit: int = 200) -> int:
                 "disputed",
                 "false_positive",
                 "duplicate",
+                "developer_agreed",
             ):
-                if not outcome[name]:
+                # Emit only on the false->true transition: the same posted
+                # finding is re-checked every cycle and neither OTel nor PostHog
+                # has a per-finding key to dedupe on (the fingerprint is never
+                # sent), so an every-sync emit would multiply the count.
+                if not outcome_flags.get(name) or prior_outcome.get(name):
                     continue
                 if telemetry.config.emit_outcome_sync:
                     telemetry.record_finding(
                         repo=project,
                         status=name,
-                        finding={"type": "unknown", "severity": "unknown", "category": "unknown"},
+                        finding=finding,
                         dry_run=False,
                     )
-                # Anonymous analytics fan-out, beside the DB upsert above. Emit
-                # only on the false->true transition: the same posted finding is
-                # re-checked every cycle and PostHog has no per-finding key to
-                # dedupe on (the fingerprint is never sent), so an every-sync
-                # emit would multiply the count.
-                if analytics_on and not prior_outcome.get(name):
+                if analytics_on:
                     analytics.record_finding_outcome(
-                        cfg.analytics_config, scm_provider=cfg.provider, outcome=name
+                        cfg.analytics_config,
+                        scm_provider=cfg.provider,
+                        outcome=name,
+                        finding=finding,
+                        project_id=outcome_project_id(cfg, project),
                     )
             synced += 1
         except Exception as exc:
