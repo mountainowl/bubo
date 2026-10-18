@@ -67,6 +67,7 @@ from bubo.db import (
     last_completed_review_sha,
     latest_reviewed_row,
     normalize_disposition,
+    open_finding_at_locus,
     open_finding_with_identity,
     posted_findings_for_outcome_sync,
     prior_posted_findings_for_reconciliation,
@@ -1414,16 +1415,22 @@ def duplicate_open_finding(
     number: int,
     identity: str,
     provider: ScmProvider,
+    finding: JsonObject | None = None,
+    head_sha: str = "",
 ) -> JsonObject | None:
     """Return the open Bubo thread this finding duplicates, if any.
 
     Matches the sha-independent :func:`finding_identity` against findings
-    already posted on the change, then confirms the provider thread is still
+    already posted on the change, or, when ``finding`` is given, an earlier
+    commit's finding at the same file, line, type, severity and category
+    whatever its wording (#135); then confirms the provider thread is still
     open. A resolved, deleted, or unprovable (foreign) thread does not
     suppress the new post; a provider error does, because the stored thread
     is otherwise unknown-but-present and a duplicate is the likelier harm.
     """
     prior = open_finding_with_identity(project, number, identity)
+    if prior is None and finding is not None:
+        prior = open_finding_at_locus(project, number, head_sha, finding)
     if prior is None:
         return None
     try:
@@ -1642,11 +1649,14 @@ def post_or_plan_findings(
             number=number,
             identity=identity,
             provider=provider,
+            finding=finding,
+            head_sha=sha,
         )
         if duplicate_of is not None:
-            # Same finding (file + canonical body, any line, any commit) is
-            # already an open Bubo thread on this change: posting it again
-            # would only differ in wording/line. Recorded for audit.
+            # Same finding (file + canonical body at any line, or the same
+            # locus from an earlier commit in any wording) is already an open
+            # Bubo thread on this change: posting it again would only differ in
+            # wording/line. Recorded for audit.
             record_finding(
                 project=project,
                 iid=number,

@@ -1421,6 +1421,65 @@ def open_finding_with_identity(project: str, iid: int, identity: str) -> JsonObj
     return {"sha": str(row[0]), "fingerprint": str(row[1]), "discussion_id": str(row[2])}
 
 
+def open_finding_at_locus(
+    project: str, iid: int, head_sha: str, finding: JsonObject
+) -> JsonObject | None:
+    """Return an open Bubo thread from an earlier commit at the same locus (#135).
+
+    The locus is file, line, type, severity and category, normalized and
+    defaulted the way :func:`bubo.findings.finding_body` renders them. Unlike
+    :func:`open_finding_with_identity` it ignores the reviewer's wording, which
+    changes from run to run. Only earlier commits count, so two distinct
+    findings on one line in the same review both post; a finding whose line
+    moved is not matched here (a residual duplicate, never a hidden finding).
+    """
+    file = finding.get("file") or finding.get("path")
+    line = finding.get("line") or finding.get("new_line")
+    if not file or line is None:
+        return None
+    try:
+        line_number = int(line)
+    except (TypeError, ValueError):
+        return None
+
+    def label(key: str, default: str) -> str:
+        return str(finding.get(key) or default).strip().lower()
+
+    with connect_db(readonly=True) as db:
+        row = db.execute(
+            """
+            select rf.sha,rf.fingerprint,rf.discussion_id
+              from review_findings rf
+              left join finding_outcomes fo
+                on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha
+                  || ':' || rf.fingerprint
+             where rf.project=? and rf.iid=? and rf.sha!=? and rf.status=?
+               and rf.file=? and rf.line=?
+               and lower(trim(coalesce(nullif(rf.type,''),'issue')))=?
+               and lower(trim(coalesce(nullif(rf.severity,''),'blocking')))=?
+               and lower(trim(coalesce(nullif(rf.category,''),'correctness')))=?
+               and rf.discussion_id is not null and rf.discussion_id != ''
+               and coalesce(fo.resolved,0)=0 and coalesce(fo.deleted,0)=0
+             order by rf.updated_at desc
+             limit 1
+            """,
+            (
+                project,
+                iid,
+                head_sha,
+                FindingStatus.POSTED,
+                str(file),
+                line_number,
+                label("type", "issue"),
+                label("severity", "blocking"),
+                label("category", "correctness"),
+            ),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"sha": str(row[0]), "fingerprint": str(row[1]), "discussion_id": str(row[2])}
+
+
 def claim_finding_reconciliation(
     *,
     project: str,
