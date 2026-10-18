@@ -272,6 +272,19 @@ def init_db() -> None:
             )
             """
         )
+        # Debounce state for [review].settle_seconds: the head the poller last
+        # saw per change, and when it first saw it (#254).
+        db.execute(
+            """
+            create table if not exists change_heads (
+              project text not null,
+              iid integer not null,
+              sha text not null,
+              first_seen_at text not null,
+              primary key(project, iid)
+            )
+            """
+        )
 
 
 def ensure_column(db: sqlite3.Connection, table: str, name: str, definition: str) -> None:
@@ -661,6 +674,49 @@ def active_review_sha(project: str, iid: int, sha: str, ttl_seconds: int) -> str
         if status_age_seconds(updated_at) <= ttl_seconds:
             return str(other)
     return None
+
+
+def head_stable_seconds(project: str, iid: int, sha: str) -> float:
+    """Record ``sha`` as the change's observed head; return how long it has been.
+
+    The clock starts the first time the poller sees a head and restarts
+    whenever the head changes, so a burst of pushes keeps resetting it.
+    """
+    with connect_db() as db:
+        db.execute(
+            """
+            insert into change_heads(project,iid,sha,first_seen_at) values(?,?,?,?)
+            on conflict(project,iid) do update set
+              sha=excluded.sha,
+              first_seen_at=excluded.first_seen_at
+            where change_heads.sha != excluded.sha
+            """,
+            (project, iid, sha, now()),
+        )
+        row = db.execute(
+            "select first_seen_at from change_heads where project=? and iid=?",
+            (project, iid),
+        ).fetchone()
+    return status_age_seconds(row[0]) if row else 0.0
+
+
+def last_completed_review_sha(project: str, iid: int, sha: str) -> str | None:
+    """Return the newest other SHA of this change whose review completed.
+
+    "Completed" means ``success`` or ``no_findings``: a failed, deferred or
+    superseded run never counts as having reviewed the change.
+    """
+    with connect_db() as db:
+        row = db.execute(
+            """
+            select sha from reviewed_mrs
+            where project=? and iid=? and sha != ? and status in (?, ?)
+            order by updated_at desc
+            limit 1
+            """,
+            (project, iid, sha, ReviewStatus.SUCCESS, ReviewStatus.NO_FINDINGS),
+        ).fetchone()
+    return str(row[0]) if row else None
 
 
 def status_age_seconds(updated_at: object) -> float:
@@ -2112,8 +2168,10 @@ __all__ = [
     "get_review_row",
     "governance_decision_for",
     "governance_decisions_for",
+    "head_stable_seconds",
     "init_db",
     "init_dirs",
+    "last_completed_review_sha",
     "latency_summary",
     "latest_reviewed_row",
     "list_recent_reviews",

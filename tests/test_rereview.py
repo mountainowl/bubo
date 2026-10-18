@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,7 +19,9 @@ from types import SimpleNamespace
 import pytest
 
 from bubo import db, github, paths, poller
-from bubo.review_config import ReviewConfig
+from bubo.config_values import ConfigError
+from bubo.reconciliation import ReconciliationOutcome, ReconciliationStatus
+from bubo.review_config import ReviewConfig, review_config_from_dict
 from bubo.statuses import ReviewStatus
 from bubo.telemetry.posthog import safe_context
 
@@ -325,3 +328,179 @@ def test_distinct_finding_on_new_head_still_posts(monkeypatch, fake) -> None:
             raw_review=json.dumps([item]),
         )
     assert len(fake.comments) == 2
+
+
+# ---------------------------------------------------------------------------
+# D. [review].rereview and [review].settle_seconds
+# ---------------------------------------------------------------------------
+
+
+def test_rereview_settle_defaults_are_todays_behaviour() -> None:
+    cfg = review_config_from_dict({})
+    assert cfg.rereview == "full"
+    assert cfg.settle_seconds == 0
+    parsed = review_config_from_dict({"review": {"rereview": "incremental", "settle_seconds": 300}})
+    assert (parsed.rereview, parsed.settle_seconds) == ("incremental", 300)
+    assert review_config_from_dict({"review": {"rereview": "off"}}).rereview == "off"
+    with pytest.raises(ConfigError):
+        review_config_from_dict({"review": {"rereview": "sometimes"}})
+    with pytest.raises(ConfigError):
+        review_config_from_dict({"review": {"settle_seconds": -1}})
+
+
+def test_two_pushes_inside_settle_window_produce_one_review(monkeypatch, fake, forked) -> None:
+    use_config(monkeypatch, settle_seconds=300)
+    poller.poll()
+    fake.head = S2
+    poller.poll()
+    assert forked == []
+
+    # Five minutes after S2 was first seen, with no further push.
+    old = (datetime.now(UTC) - timedelta(seconds=301)).isoformat()
+    with sqlite3.connect(paths.DB) as conn:
+        conn.execute("update change_heads set first_seen_at=?", (old,))
+    poller.poll()
+    poller.poll()
+    assert forked == [S2]
+
+
+def test_settle_zero_reviews_immediately(monkeypatch, fake, forked) -> None:
+    use_config(monkeypatch)
+    poller.poll()
+    assert forked == [S1]
+
+
+def test_rereview_off_reviews_only_first_commit(monkeypatch, fake, forked) -> None:
+    use_config(monkeypatch, rereview="off")
+    poller.poll()
+    assert forked == [S1]
+    poller.record(PROJECT, 1, S1, ReviewStatus.SUCCESS)
+
+    fake.head = S2
+    fake.extra_prs = [{**fake.pr(2), "head": {"sha": S3}}]
+    poller.poll()
+
+    # PR 1 already had a completed review; PR 2 is new and is reviewed.
+    assert forked == [S1, S3]
+
+
+def test_rereview_off_still_reviews_when_first_commit_never_completed(
+    monkeypatch, fake, forked
+) -> None:
+    use_config(monkeypatch, rereview="off")
+    poller.record(PROJECT, 1, S1, ReviewStatus.SUPERSEDED)
+    fake.head = S2
+    poller.poll()
+    assert forked == [S2]
+
+
+# ---------------------------------------------------------------------------
+# D. rereview = "incremental" (real git through the mirror checkout)
+# ---------------------------------------------------------------------------
+
+
+def git(*args: str, cwd: Path | None = None) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+@pytest.fixture
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    bare = tmp_path / "origin.git"
+    gitconfig = tmp_path / "gitconfig"
+    gitconfig.write_text(
+        "[user]\n\tname = T\n\temail = t@example.com\n"
+        f'[url "file://{bare}"]\n\tinsteadOf = {CLONE_URL}\n'
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    src = tmp_path / "src"
+    src.mkdir()
+    git("init", "-q", "-b", "main", str(src))
+    (src / "README").write_text("base\n")
+    git("add", ".", cwd=src)
+    git("commit", "-q", "-m", "base", cwd=src)
+    git("clone", "-q", "--bare", str(src), str(bare))
+    git("checkout", "-q", "-b", "feature", cwd=src)
+
+    def commit(lines: list[str], *, reset_to: str = "") -> str:
+        if reset_to:
+            git("reset", "-q", "--hard", reset_to, cwd=src)
+        (src / "a.py").write_text("".join(f"{line}\n" for line in lines))
+        git("add", ".", cwd=src)
+        git("commit", "-q", "-m", "c", cwd=src)
+        sha = git("rev-parse", "HEAD", cwd=src)
+        git("push", "-q", "--force", str(bare), "HEAD:refs/pull/1/head", cwd=src)
+        return sha
+
+    return SimpleNamespace(
+        src=src, bare=bare, commit=commit, base=git("rev-parse", "main", cwd=src)
+    )
+
+
+def _incremental_worker(monkeypatch, fake: FakeGitHub, stdout: str) -> tuple[list[str], list]:
+    prompts: list[str] = []
+    reconciled: list[ReviewConfig] = []
+
+    def agent(argv, *, cwd, timeout, env):
+        prompts.append(argv[-1])
+        return SimpleNamespace(stdout=stdout, returncode=0)
+
+    def reconcile(**kwargs):
+        reconciled.append(kwargs["cfg"])
+        return ReconciliationOutcome(ReconciliationStatus.NO_CANDIDATES)
+
+    monkeypatch.setattr(poller, "run", agent)
+    monkeypatch.setattr(poller, "reconcile_prior_findings", reconcile)
+    assert poller.worker(poller.write_job(PROJECT, fake.pr())) == 0
+    return prompts, reconciled
+
+
+def test_incremental_reviews_only_new_commits_and_reconciles(monkeypatch, fake, repo) -> None:
+    first_lines = [f"line{i}" for i in range(1, 11)]
+    prior = repo.commit(first_lines)
+    head = repo.commit([*first_lines, "added11", "added12"])
+    poller.record(PROJECT, 1, prior, ReviewStatus.SUCCESS)
+    fake.head = head
+    fake.patches[head] = _patch_for([*first_lines, "added11", "added12"])
+    use_config(monkeypatch, rereview="incremental")
+    # Line 7 is in the PR diff but unchanged since `prior`; line 12 is new.
+    raw = json.dumps([finding(7), finding(12, title="New bug in added code")])
+
+    prompts, reconciled = _incremental_worker(monkeypatch, fake, raw)
+
+    assert [c["line"] for c in fake.comments] == [12]
+    assert prior in prompts[0]
+    assert f"{prior[:12]}..{head[:12]}" in prompts[0] or f"{prior}..{head}" in prompts[0]
+    assert [cfg.reconcile_fixed_findings for cfg in reconciled] == [True]
+
+
+def test_incremental_falls_back_to_full_review_after_force_push(monkeypatch, fake, repo) -> None:
+    first_lines = [f"line{i}" for i in range(1, 11)]
+    prior = repo.commit(first_lines)
+    # Rewritten history: `prior` is no longer an ancestor of the head.
+    head = repo.commit([*first_lines, "added11", "added12"], reset_to=repo.base)
+    poller.record(PROJECT, 1, prior, ReviewStatus.SUCCESS)
+    fake.head = head
+    fake.patches[head] = _patch_for([*first_lines, "added11", "added12"])
+    use_config(monkeypatch, rereview="incremental")
+    raw = json.dumps([finding(7), finding(12, title="New bug in added code")])
+
+    prompts, _ = _incremental_worker(monkeypatch, fake, raw)
+
+    assert sorted(c["line"] for c in fake.comments) == [7, 12]
+    assert prior not in prompts[0]
+
+
+def test_full_rereview_does_not_force_reconciliation(monkeypatch, fake, repo) -> None:
+    prior = repo.commit(["a"])
+    head = repo.commit(["a", "b"])
+    poller.record(PROJECT, 1, prior, ReviewStatus.SUCCESS)
+    fake.head = head
+    fake.patches[head] = _patch_for(["a", "b"])
+    cfg = use_config(monkeypatch)
+    assert cfg.rereview == "full"
+    prompts, reconciled = _incremental_worker(monkeypatch, fake, "[]")
+    assert prior not in prompts[0]
+    assert [c.reconcile_fixed_findings for c in reconciled] == [False]

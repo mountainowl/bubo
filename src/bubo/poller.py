@@ -42,6 +42,7 @@ import sys
 import time
 import urllib.error
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -57,7 +58,9 @@ from bubo.db import (
     disputed_class_stats,
     disputed_finding_classes,
     finding_seen,
+    head_stable_seconds,
     init_db,
+    last_completed_review_sha,
     latest_reviewed_row,
     open_finding_with_identity,
     posted_findings_for_outcome_sync,
@@ -87,6 +90,7 @@ from bubo.findings import (
     finding_comment_body,
     finding_fingerprint,
     normalize_finding_categories,
+    resolve_finding_line,
     surface_predicate_for_mode,
 )
 from bubo.governance_policy import (
@@ -110,7 +114,14 @@ from bubo.reconciliation import (
 )
 from bubo.review_config import ReviewConfig, load_review_config, review_config_from_dict
 from bubo.scm import ScmProvider, get_provider
-from bubo.scm.base import FindingThreadState, path_slug, prune_mirrors, remove_worktree
+from bubo.scm.base import (
+    FindingThreadState,
+    git_added_lines,
+    git_is_ancestor,
+    path_slug,
+    prune_mirrors,
+    remove_worktree,
+)
 from bubo.secrets import redact_secrets
 from bubo.signals import (
     install_signal_handlers as _install_signal_handlers,
@@ -887,11 +898,27 @@ def review_blocker(cfg: ReviewConfig, project: str, number: int, sha: str) -> Js
     re-evaluates it:
 
     * another head of the same change is queued/running (one review per
-      change at a time; the newest head wins when it finishes).
+      change at a time; the newest head wins when it finishes);
+    * ``[review].rereview = "off"`` and the change already has a completed
+      review of an earlier head;
+    * the head has not yet been stable for ``[review].settle_seconds``.
     """
+    # Start the settle clock even while blocked, so waiting on an active
+    # review also counts toward the quiet period.
+    stable = head_stable_seconds(project, number, sha) if cfg.settle_seconds > 0 else None
     active = active_review_sha(project, number, sha, ttl_seconds=cfg.timeout_seconds * 2)
     if active:
         return {"reason": "active_review", "active_sha": active}
+    if cfg.rereview == "off":
+        reviewed = last_completed_review_sha(project, number, sha)
+        if reviewed:
+            return {"reason": "rereview_off", "reviewed_sha": reviewed}
+    if stable is not None and stable < cfg.settle_seconds:
+        return {
+            "reason": "settling",
+            "stable_seconds": round(stable, 1),
+            "settle_seconds": cfg.settle_seconds,
+        }
     return None
 
 
@@ -1276,6 +1303,67 @@ def capture_provenance(
         return None
 
 
+def incremental_review_directive(prior_sha: str, head_sha: str) -> str:
+    """Prompt addendum that scopes an incremental re-review to new commits."""
+    return (
+        f"Incremental re-review: this change was already reviewed at commit {prior_sha}. "
+        f"Report findings only on lines added or changed by the new commits, i.e. in "
+        f"`git diff {prior_sha}..{head_sha}`. Use the full change diff against the target "
+        "branch only as context, and do not repeat findings about code that has not "
+        f"changed since {prior_sha}; earlier findings are re-checked separately."
+    )
+
+
+def incremental_scope(
+    cfg: ReviewConfig, *, project: str, iid: int, sha: str, repo: Path
+) -> tuple[str, dict[str, JsonObject]] | None:
+    """Return ``(prompt directive, allowed changed lines)`` for an incremental review.
+
+    ``None`` means review the whole change: ``rereview`` is not
+    ``incremental``, there is no completed earlier review, or the earlier
+    reviewed commit is not an ancestor of the head (force-push/rebase) or is
+    missing from the checkout.
+    """
+    if cfg.rereview != "incremental":
+        return None
+    prior = last_completed_review_sha(project, iid, sha)
+    if not prior:
+        return None
+    try:
+        if not git_is_ancestor(repo, prior, sha):
+            log(
+                "incremental_review_fallback",
+                project=project,
+                iid=iid,
+                sha=sha,
+                prior_sha=prior,
+                reason="prior_not_ancestor",
+            )
+            return None
+        allowed = git_added_lines(repo, prior, sha)
+    except Exception as exc:
+        log(
+            "incremental_review_fallback",
+            project=project,
+            iid=iid,
+            sha=sha,
+            prior_sha=prior,
+            reason="git_failed",
+            error=type(exc).__name__,
+        )
+        return None
+    log(
+        "incremental_review",
+        project=project,
+        iid=iid,
+        sha=sha,
+        prior_sha=prior,
+        files=len(allowed),
+        lines=count_added_lines(allowed),
+    )
+    return incremental_review_directive(prior, sha), allowed
+
+
 def duplicate_open_finding(
     *,
     cfg: ReviewConfig,
@@ -1323,6 +1411,7 @@ def post_or_plan_findings(
     provider: ScmProvider | None = None,
     repo: Path | None = None,
     pending_external_ids: list[bool] | None = None,
+    allowed_lines: dict[str, JsonObject] | None = None,
 ) -> tuple[int, int, int]:
     """Parse, filter, and post (or plan) findings for one change.
 
@@ -1347,6 +1436,11 @@ def post_or_plan_findings(
     ``mr`` is the change payload (kept named ``mr`` for call-site
     compatibility). ``repo`` is the checked-out worktree path the verifier
     subprocess runs in (``cwd``); only used when verification is enabled.
+
+    ``allowed_lines`` (incremental re-review) is a changed-line map of the
+    commits since the last completed review; a finding whose file/line is not
+    an added line there is recorded ``SKIPPED`` and not posted. ``None`` (the
+    default) applies no such restriction.
 
     Raises :class:`ReviewSuperseded` (before posting anything) when the
     re-fetched change's head is no longer the reviewed SHA.
@@ -1433,6 +1527,34 @@ def post_or_plan_findings(
         fp = finding_fingerprint(project, number, sha, finding)
         identity = finding_identity(project, number, finding)
         if finding_seen(project, number, sha, fp):
+            skipped += 1
+            continue
+        if allowed_lines is not None and resolve_finding_line(allowed_lines, finding) is None:
+            record_finding(
+                project=project,
+                iid=number,
+                sha=sha,
+                fingerprint=fp,
+                finding=finding,
+                status=FindingStatus.SKIPPED,
+                run_id=run_id,
+                finding_identity=identity,
+            )
+            emit_finding_metric(
+                telemetry,
+                repo=project,
+                status=FindingStatus.SKIPPED,
+                finding=finding,
+                dry_run=cfg.dry_run,
+            )
+            log(
+                "finding_skipped",
+                project=project,
+                iid=number,
+                file=finding.get("file") or finding.get("path"),
+                line=finding.get("line") or finding.get("new_line"),
+                reason="outside_incremental_range",
+            )
             skipped += 1
             continue
         duplicate_of = duplicate_open_finding(
@@ -1831,6 +1953,9 @@ def worker(job: Path) -> int:
                     telemetry=telemetry,
                 )
             extra_directive = governance[1] if governance else ""
+            incremental = incremental_scope(cfg, project=project, iid=iid, sha=sha, repo=repo)
+            if incremental is not None:
+                extra_directive = "\n\n".join(d for d in (extra_directive, incremental[0]) if d)
             env = reviewer_env(os.environ, cfg)
             allowed, reason = subscription_gate(cfg)
             if not allowed:
@@ -1902,6 +2027,7 @@ def worker(job: Path) -> int:
                     provider=provider,
                     repo=repo,
                     pending_external_ids=pending_external_ids,
+                    allowed_lines=incremental[1] if incremental is not None else None,
                 )
                 telemetry.set_span_attrs(
                     post_span,
@@ -1929,8 +2055,15 @@ def worker(job: Path) -> int:
                 and not cfg.dry_run
                 and not pending_external_ids
             ):
+                # Incremental re-review only looks for new findings, so earlier
+                # ones are revisited by reconciliation (as if it were enabled).
+                reconcile_cfg = (
+                    replace(cfg, reconcile_fixed_findings=True)
+                    if cfg.rereview == "incremental"
+                    else cfg
+                )
                 reconciliation = reconcile_prior_findings(
-                    cfg=cfg,
+                    cfg=reconcile_cfg,
                     token=token,
                     project=project,
                     number=iid,

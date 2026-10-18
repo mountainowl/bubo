@@ -102,6 +102,8 @@ Controls polling, filtering, and review-output policy.
 | `reconcile_timeout_seconds` | integer | `300` | Per-proof verifier timeout. |
 | `reconcile_lease_seconds` | integer | `300` | Per-finding claim lease for concurrent workers. |
 | `reconcile_command` | string array | `[]` | Dedicated proof verifier; empty reuses verifier/reviewer. |
+| `rereview` | string | `"full"` | Policy for new commits after a completed review. Allowed: `"full"` (review the whole change again), `"incremental"` (only the commits since the last completed review, plus reconciliation of earlier findings), `"off"` (only the first commit). See [Operate](/operate#new-commits-on-a-reviewed-change). |
+| `settle_seconds` | integer | `0` | Start a review only once the head has been unchanged this long, measured from when the poller first saw it. `0` starts immediately. |
 
 Canonical categories for `category_min_confidence`: `correctness`, `security`,
 `concurrency`, `resource`, `error_handling`, `performance`, `style`, `docs`,
@@ -238,6 +240,7 @@ One block per repository.
 | `$BUBO_ROOT/config/env.toml` | Operator config. |
 | `$BUBO_BASE_DIR/state/reviewer.sqlite` | Review state, findings, and outcomes. |
 | `$BUBO_BASE_DIR/work/` | Per-change worktrees. |
+| `$BUBO_BASE_DIR/work/_mirrors/` | One bare git mirror per configured project, shared by that project's worktrees. Safe to delete; it is re-created on the next review. Mirrors of projects removed from `[[projects]]` are pruned automatically. |
 | `$BUBO_BASE_DIR/reports/` | Agent transcripts. |
 | `$BUBO_BASE_DIR/log/` | JSON-line logs. |
 | `$BUBO_BASE_DIR/rendered-prompts/` | Rendered prompt files. |

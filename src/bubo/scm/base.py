@@ -26,6 +26,7 @@ from typing import Protocol
 
 from bubo.errors import describe
 from bubo.events import log
+from bubo.findings import changed_lines_from_files
 from bubo.hash_utils import stable_hash
 from bubo.review_config import ReviewConfig
 from bubo.secrets import redact_secrets
@@ -410,6 +411,58 @@ def git_checkout_change(
         cwd=dest,
         what="git checkout failed for the change",
     )
+
+
+def git_is_ancestor(repo: Path, ancestor: str, head: str) -> bool:
+    """Return whether ``ancestor`` is a commit reachable from ``head`` in ``repo``.
+
+    ``False`` for a rewritten history (force-push/rebase) and for an object
+    the checkout does not have. Local; never touches the remote.
+    """
+    result = run_bounded(
+        ["git", "merge-base", "--is-ancestor", ancestor, head], cwd=repo, timeout=120
+    )
+    return result.returncode == 0
+
+
+def git_added_lines(repo: Path, base: str, head: str) -> dict[str, JsonObject]:
+    """Changed-line map (added lines only) of ``base..head`` in ``repo``.
+
+    Same shape as :meth:`ScmProvider.changed_lines`, so the poster can test a
+    finding against it with :func:`bubo.findings.resolve_finding_line`.
+    Raises ``RuntimeError`` if git fails.
+    """
+    result = run_bounded(
+        [
+            "git",
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "-U0",
+            "--no-color",
+            "--no-ext-diff",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            base,
+            head,
+        ],
+        cwd=repo,
+        timeout=300,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            describe(
+                "git diff failed for the incremental range",
+                reason=redact_secrets(result.stdout[-1000:]),
+                fix="the previous review's commit may be missing from the checkout.",
+            )
+        )
+    files: list[tuple[str | None, str | None, str]] = []
+    for block in re.split(r"(?m)^diff --git ", result.stdout):
+        match = re.search(r"(?m)^\+\+\+ b/(.+)$", block)
+        if match:
+            files.append((match.group(1), None, block))
+    return changed_lines_from_files(files)
 
 
 def _worktree_mirror(repo: Path) -> Path | None:
