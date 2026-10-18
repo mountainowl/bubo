@@ -50,8 +50,12 @@ def test_terminal_classifier_requires_true_structured_error_envelope() -> None:
     assert not is_subscription_failure(findings, terminal_only=True)
     object_result = '{"type":"finding","evidence":"insufficient_quota"}'
     assert not is_subscription_failure(object_result, terminal_only=True)
-    assert is_subscription_failure('{"type":"error","code":"insufficient_quota"}', terminal_only=True)
-    assert is_subscription_failure('{"kind":"error","code":"insufficient_quota"}', terminal_only=True)
+    assert is_subscription_failure(
+        '{"type":"error","code":"insufficient_quota"}', terminal_only=True
+    )
+    assert is_subscription_failure(
+        '{"kind":"error","code":"insufficient_quota"}', terminal_only=True
+    )
 
 
 def test_state_write_is_atomic_and_gate_fails_closed(tmp_path: Path) -> None:
@@ -98,11 +102,18 @@ def test_singleton_monitor_lock_rejects_second_owner(tmp_path: Path) -> None:
 def test_config_is_opt_in_and_parses_circuit_controls() -> None:
     assert not review_config_from_dict({}).subscription_circuit.enabled
     config = review_config_from_dict(
-        {"subscription_circuit": {"enabled": True, "monitor_interval_seconds": 2,
-         "error_patterns": ["quota exhausted"]}, "poller": {
-             "interval_seconds": 7, "outcome_sync_interval_seconds": 11,
-             "outcome_sync_limit": 13,
-         }}
+        {
+            "subscription_circuit": {
+                "enabled": True,
+                "monitor_interval_seconds": 2,
+                "error_patterns": ["quota exhausted"],
+            },
+            "poller": {
+                "interval_seconds": 7,
+                "outcome_sync_interval_seconds": 11,
+                "outcome_sync_limit": 13,
+            },
+        }
     )
     assert config.subscription_circuit.enabled
     assert config.subscription_circuit.monitor_interval_seconds == 2
@@ -121,7 +132,9 @@ def test_service_outcome_sync_isolated_from_review_polling(monkeypatch) -> None:
     service._sync_outcomes(cfg)
     assert calls == [17]
 
-    monkeypatch.setattr("bubo.poller.sync_outcomes", lambda _limit: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(
+        "bubo.poller.sync_outcomes", lambda _limit: (_ for _ in ()).throw(RuntimeError())
+    )
     logged = MagicMock()
     monkeypatch.setattr(service, "log", logged)
     service._sync_outcomes(cfg)
@@ -132,7 +145,9 @@ def test_service_deadlines_choose_each_due_task_order_and_do_not_drift() -> None
     from bubo import service
 
     assert service._next_due_task(current=11, poll_deadline=10, outcome_deadline=12) == "poll"
-    assert service._next_due_task(current=11, poll_deadline=12, outcome_deadline=10) == "outcome_sync"
+    assert (
+        service._next_due_task(current=11, poll_deadline=12, outcome_deadline=10) == "outcome_sync"
+    )
     assert service._next_due_task(current=12, poll_deadline=12, outcome_deadline=12) == "poll"
     # A slow task skips missed periods from its original fixed deadline rather
     # than moving the next execution relative to completion time.
@@ -220,8 +235,14 @@ def test_monitor_opens_then_recovers(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(paths, "DB", tmp_path / "reviewer.sqlite")
     cfg = review_config_from_dict(
-        {"subscription_circuit": {"enabled": True, "monitor_interval_seconds": 1,
-          "probe_interval_seconds": 1, "probe_backoff_max_seconds": 2}}
+        {
+            "subscription_circuit": {
+                "enabled": True,
+                "monitor_interval_seconds": 1,
+                "probe_interval_seconds": 1,
+                "probe_backoff_max_seconds": 2,
+            }
+        }
     )
     # No exporter or PostHog is configured; test transitions without network.
     monkeypatch.setattr(service, "_probe", lambda _cfg: True)
@@ -294,7 +315,9 @@ def test_no_findings_write_rechecks_open_circuit(tmp_path: Path, monkeypatch) ->
     from bubo import paths, poller
 
     monkeypatch.setattr(paths, "DB", tmp_path / "reviewer.sqlite")
-    cfg = review_config_from_dict({"subscription_circuit": {"enabled": True}, "review": {"dry_run": False}})
+    cfg = review_config_from_dict(
+        {"subscription_circuit": {"enabled": True}, "review": {"dry_run": False}}
+    )
     write_state(state_path(tmp_path), CircuitState(status="open", heartbeat_at=time.time()))
     provider = MagicMock()
     verdict, _detail = poller.post_no_findings_comment(
@@ -340,11 +363,99 @@ def test_windows_stop_is_cooperative_and_never_kills_pid(tmp_path: Path, monkeyp
     monkeypatch.setattr(service.os, "kill", kill)
     assert service.service_status() == ("running", 42)
     assert service.stop_service()
-    assert (tmp_path / "bubo-service.stop").read_text(encoding="utf-8") == "token"
+    assert service._stop_path("token").read_text(encoding="utf-8") == "token"
     kill.assert_not_called()
 
 
-def test_windows_heartbeat_keeps_status_and_stop_live_during_long_poll(tmp_path: Path, monkeypatch) -> None:
+def test_windows_stop_publishes_complete_token_before_watcher_can_consume(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from bubo import paths, service
+
+    monkeypatch.setattr(paths, "SERVICE_PID", tmp_path / "bubo-service.pid")
+    service._write_pid("token")
+    monkeypatch.setattr(service.os, "name", "nt")
+    target = service._stop_path("token")
+    original_open = Path.open
+
+    def watch_open(path, mode="r", *args, **kwargs):
+        stream = original_open(path, mode, *args, **kwargs)
+        if path == target and mode == "w":
+            # Reproduce the watcher running after truncation, before write.
+            assert not service._consume_stop_request("token")
+        return stream
+
+    monkeypatch.setattr(Path, "open", watch_open)
+    assert service.stop_service()
+    assert service._consume_stop_request("token")
+    assert not list(tmp_path.glob(target.name + ".*"))
+
+
+def test_windows_stale_stop_caller_cannot_overwrite_new_generation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from bubo import paths, service
+
+    monkeypatch.setattr(paths, "SERVICE_PID", tmp_path / "bubo-service.pid")
+    monkeypatch.setattr(service.os, "name", "nt")
+    # A delayed caller has already read the old identity when the new
+    # generation receives its own stop request.
+    monkeypatch.setattr(service, "_read_identity", lambda: (42, "new", time.time()))
+    assert service.stop_service()
+    monkeypatch.setattr(service, "_read_identity", lambda: (42, "old", time.time()))
+    assert service.stop_service()
+    assert service._consume_stop_request("old")
+    assert service._consume_stop_request("new")
+
+
+def test_windows_stop_cleans_temporary_on_publication_failure(tmp_path: Path, monkeypatch) -> None:
+    from bubo import paths, service
+
+    monkeypatch.setattr(paths, "SERVICE_PID", tmp_path / "bubo-service.pid")
+    monkeypatch.setattr(service.os, "name", "nt")
+    monkeypatch.setattr(service, "_read_identity", lambda: (42, "token", time.time()))
+
+    def fail_replace(*_args):
+        raise PermissionError("replacement denied")
+
+    monkeypatch.setattr(service.os, "replace", fail_replace)
+    with pytest.raises(PermissionError):
+        service.stop_service()
+    assert not list(tmp_path.iterdir())
+
+
+def test_windows_two_stop_consumers_can_observe_same_request(tmp_path: Path, monkeypatch) -> None:
+    from bubo import paths, service
+
+    monkeypatch.setattr(paths, "SERVICE_PID", tmp_path / "bubo-service.pid")
+    target = service._stop_path("token")
+    target.write_text("token", encoding="utf-8")
+    barrier = threading.Barrier(2)
+    original_read = Path.read_text
+
+    def concurrent_read(path, *args, **kwargs):
+        value = original_read(path, *args, **kwargs)
+        if path == target:
+            barrier.wait(timeout=2)
+        return value
+
+    monkeypatch.setattr(Path, "read_text", concurrent_read)
+    results = []
+    workers = [
+        threading.Thread(target=lambda: results.append(service._consume_stop_request("token")))
+        for _ in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+    assert results == [True, True]
+
+
+def test_windows_heartbeat_keeps_status_and_stop_live_during_long_poll(
+    tmp_path: Path, monkeypatch
+) -> None:
     from bubo import paths, service
 
     monkeypatch.setattr(paths, "SERVICE_PID", tmp_path / "bubo-service.pid")
@@ -363,13 +474,18 @@ def test_windows_heartbeat_keeps_status_and_stop_live_during_long_poll(tmp_path:
     assert not heartbeat.is_alive()
 
 
-def test_windows_heartbeat_starts_before_blocked_monitor_readiness(tmp_path: Path, monkeypatch) -> None:
+def test_windows_heartbeat_starts_before_blocked_monitor_readiness(
+    tmp_path: Path, monkeypatch
+) -> None:
     from bubo import paths, poller, service
 
     monkeypatch.setattr(paths, "SERVICE_PID", tmp_path / "bubo-service.pid")
     monkeypatch.setattr(service.os, "name", "nt")
     cfg = review_config_from_dict(
-        {"subscription_circuit": {"enabled": True, "heartbeat_ttl_seconds": 6}, "poller": {"interval_seconds": 1}}
+        {
+            "subscription_circuit": {"enabled": True, "heartbeat_ttl_seconds": 6},
+            "poller": {"interval_seconds": 1},
+        }
     )
     ready_seen: list[threading.Event] = []
 
@@ -379,6 +495,7 @@ def test_windows_heartbeat_starts_before_blocked_monitor_readiness(tmp_path: Pat
 
     monkeypatch.setattr(service, "monitor_loop", blocked_monitor)
     monkeypatch.setattr(poller, "poll", lambda: 0)
+    monkeypatch.setattr(service, "_sync_outcomes", lambda _cfg: None)
     service._write_pid("token")
     runner = threading.Thread(target=service._run_service_loop, args=(cfg, "token"), daemon=True)
     runner.start()
@@ -485,7 +602,9 @@ def test_detached_service_reports_immediate_child_error_without_orphan(monkeypat
     child.poll.return_value = 2
     monkeypatch.setattr(service, "service_status", lambda: ("stopped", None))
     monkeypatch.setattr(service.subprocess, "Popen", lambda *_args, **_kwargs: child)
-    monkeypatch.setattr(service, "_read_startup_result", lambda _token: ("error", "OPENAI_API_KEY=sk-secret"))
+    monkeypatch.setattr(
+        service, "_read_startup_result", lambda _token: ("error", "OPENAI_API_KEY=sk-secret")
+    )
     cleanup = MagicMock()
     logged = MagicMock()
     monkeypatch.setattr(service, "_cleanup_failed_start", cleanup)
@@ -510,7 +629,9 @@ def test_detached_service_reports_child_launch_error_without_state(monkeypatch) 
     logged.assert_called_once_with("service_start_failed", error="<redacted>")
 
 
-def test_failed_start_cleanup_only_removes_matching_token_state(tmp_path: Path, monkeypatch) -> None:
+def test_failed_start_cleanup_only_removes_matching_token_state(
+    tmp_path: Path, monkeypatch
+) -> None:
     from bubo import paths, service
 
     monkeypatch.setattr(paths, "SERVICE_PID", tmp_path / "service.pid")
@@ -533,7 +654,9 @@ def test_failed_start_cleanup_only_removes_matching_token_state(tmp_path: Path, 
     assert lock.exists()
 
 
-def test_concurrent_detached_starts_keep_token_handshakes_isolated(tmp_path: Path, monkeypatch) -> None:
+def test_concurrent_detached_starts_keep_token_handshakes_isolated(
+    tmp_path: Path, monkeypatch
+) -> None:
     from bubo import paths, service
 
     monkeypatch.setattr(paths, "SERVICE_PID", tmp_path / "service.pid")
@@ -557,7 +680,9 @@ def test_concurrent_detached_starts_keep_token_handshakes_isolated(tmp_path: Pat
         lambda token: ("ready", "") if token == "winner" else ("error", "already running"),
     )
     results: list[int] = []
-    threads = [threading.Thread(target=lambda: results.append(service.start_detached())) for _ in range(2)]
+    threads = [
+        threading.Thread(target=lambda: results.append(service.start_detached())) for _ in range(2)
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:

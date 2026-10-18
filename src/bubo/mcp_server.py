@@ -35,6 +35,7 @@ import os
 import re
 import secrets
 import time
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any
 
@@ -60,8 +61,28 @@ from bubo.subscription import (
     signal_subscription_failure,
     state_path,
 )
+from bubo.update_admission import admitted
 
-mcp: FastMCP = FastMCP("bubo")
+
+@asynccontextmanager
+async def _resident_lifespan(server: FastMCP):
+    from bubo.update_readiness import ResidentStartup
+
+    try:
+        startup = ResidentStartup.from_environment("mcp-stdio")
+        if startup is not None:
+            load_review_config(paths.CONFIG)
+            startup.signal_ready()
+            await startup.wait_async()
+    except Exception:
+        # FastMCP's stdio reader may be waiting in an uncancellable stdin
+        # thread. This candidate has not admitted application work, so close
+        # the process/connection immediately; clients must reconnect.
+        os._exit(75)
+    yield {}
+
+
+mcp: FastMCP = FastMCP("bubo", lifespan=_resident_lifespan)
 
 # URL parsers for the two supported providers. Loose host check on the
 # GitLab regex so self-hosted GitLab instances (gitlab.example.com,
@@ -161,6 +182,7 @@ def _extract_findings(raw_output: str) -> list[dict[str, Any]] | None:
 
 
 @mcp.tool()
+@admitted
 def health() -> dict[str, Any]:
     """Report whether the reviewer has produced state recently.
 
@@ -194,6 +216,7 @@ def health() -> dict[str, Any]:
 
 
 @mcp.tool()
+@admitted
 def list_recent_reviews(
     limit: int = 20,
     status: str | None = None,
@@ -215,6 +238,7 @@ def list_recent_reviews(
 
 
 @mcp.tool()
+@admitted
 def get_review(project: str, iid: int, sha: str | None = None) -> dict[str, Any]:
     """Return the most recent ``reviewed_mrs`` row for one MR/PR.
 
@@ -235,6 +259,7 @@ def get_review(project: str, iid: int, sha: str | None = None) -> dict[str, Any]
 
 
 @mcp.tool()
+@admitted
 def get_findings(project: str, iid: int, sha: str | None = None) -> list[dict[str, Any]]:
     """Return one row per finding for ``(project, iid[, sha])``.
 
@@ -251,6 +276,7 @@ def get_findings(project: str, iid: int, sha: str | None = None) -> list[dict[st
 
 
 @mcp.tool()
+@admitted
 def get_finding_outcomes(project: str, iid: int, sha: str | None = None) -> list[dict[str, Any]]:
     """Return per-finding resolution state for ``(project, iid[, sha])``.
 
@@ -268,6 +294,7 @@ def get_finding_outcomes(project: str, iid: int, sha: str | None = None) -> list
 
 
 @mcp.tool()
+@admitted
 def get_metrics(since_hours: int = 24, project: str | None = None) -> dict[str, Any]:
     """Aggregate counts and totals across recent reviews.
 
@@ -292,6 +319,7 @@ def get_metrics(since_hours: int = 24, project: str | None = None) -> dict[str, 
 
 
 @mcp.tool()
+@admitted
 def get_governance_report(
     since_hours: int = 24,
     since: str | None = None,
@@ -344,12 +372,11 @@ def get_governance_report(
     """
     from bubo import report
 
-    return report.build_report(
-        since_hours=since_hours, since=since, until=until, project=project
-    )
+    return report.build_report(since_hours=since_hours, since=since, until=until, project=project)
 
 
 @mcp.tool()
+@admitted
 def get_dispute_classes(project: str) -> dict[str, Any]:
     """Per-category dispute rates for ``project``, with truthful suppression flag.
 
@@ -388,7 +415,7 @@ def get_dispute_classes(project: str) -> dict[str, Any]:
         cfg = load_review_config(ENV_CONFIG)
         threshold = cfg.dispute_suppress_threshold
         min_samples = cfg.dispute_suppress_min_samples
-    except (ConfigError, OSError):
+    except ConfigError, OSError:
         # Config unreadable: fall back to raw stats (no would_suppress flag)
         # rather than guessing thresholds and misreporting reality.
         threshold = None
@@ -403,6 +430,7 @@ def get_dispute_classes(project: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+@admitted(writable=True)
 def review_change(
     url: str | None = None,
     number: int | None = None,
@@ -597,6 +625,14 @@ def _run_http() -> None:
     """
     import uvicorn
 
+    from bubo.update_readiness import ResidentStartup, StartupRejected
+    from bubo.update_windows_resident import http_stop_event
+
+    stop_event = http_stop_event()
+    startup_gate = ResidentStartup.from_environment("mcp-http")
+    if startup_gate is not None:
+        load_review_config(paths.CONFIG)
+
     host, port, token = _http_settings()
     if _bind_is_external(host):
         # Single structured warning at boot so an operator who skimmed
@@ -604,10 +640,46 @@ def _run_http() -> None:
         # exposing this externally" signal in their journalctl tail.
         log("mcp_http_bound_external", host=host, port=port)
     app = _BearerAuthASGI(mcp.streamable_http_app(), expected_token=token)
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    if startup_gate is None and stop_event is None:
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+        return
+
+    class StartupServer(uvicorn.Server):
+        rejection = None
+
+        async def startup(self, sockets=None):
+            await super().startup(sockets=sockets)
+            if self.started and startup_gate is not None:
+                try:
+                    startup_gate.signal_ready()
+                except StartupRejected as exc:
+                    self.rejection = exc
+                    self.should_exit = True
+                    await self.shutdown(sockets=sockets)
+
+        async def on_tick(self, counter):
+            nonlocal committed
+            if stop_event is not None and stop_event.is_set():
+                return True
+            if startup_gate is not None and not committed:
+                try:
+                    committed = startup_gate.committed()
+                    if not committed and time.monotonic() >= deadline:
+                        raise StartupRejected("Resident startup commit timed out")
+                except StartupRejected as exc:
+                    self.rejection = exc
+                    return True
+            return await super().on_tick(counter)
+
+    committed = False
+    deadline = time.monotonic() + 300
+    server = StartupServer(uvicorn.Config(app, host=host, port=port, log_level="warning"))
+    server.run()
+    if server.rejection is not None:
+        raise SystemExit(75)
 
 
-def main() -> None:
+def _main() -> None:
     """Entry point for the ``bubo-mcp`` console script.
 
     Reads ``BUBO_MCP_TRANSPORT`` (default ``"stdio"``) and dispatches:
@@ -620,9 +692,17 @@ def main() -> None:
     """
     transport = os.environ.get("BUBO_MCP_TRANSPORT", "stdio").strip().lower()
     if transport == "stdio":
-        mcp.run()
+        from bubo.update_admission import resident_restart
+
+        # An old stdio connection cannot be transferred to a new client session.
+        # Exit only after commit; the client must reconnect and launch fresh code.
+        with resident_restart(lambda: os._exit(75)):
+            mcp.run()
     elif transport == "http":
-        _run_http()
+        from bubo.update_admission import resident_restart, restart_process
+
+        with resident_restart(restart_process):
+            _run_http()
     else:
         raise SystemExit(
             describe(
@@ -649,3 +729,20 @@ __all__ = [
     "mcp",
     "review_change",
 ]
+
+
+def main() -> None:
+    import sys
+
+    from bubo.update_readiness import StartupRejected
+    from bubo.update_supervisor import delegate
+
+    transport = os.environ.get("BUBO_MCP_TRANSPORT", "stdio").strip().lower()
+    if transport in {"stdio", "http"}:
+        delegate("mcp-stdio" if transport == "stdio" else "mcp-http")
+
+    try:
+        _main()
+    except* StartupRejected:
+        print("Bubo update startup rejected; reconnect after recovery.", file=sys.stderr)
+        raise SystemExit(75) from None

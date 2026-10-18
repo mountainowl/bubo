@@ -4,7 +4,7 @@ Bubo is free and open source. The only way the project learns what real
 installs actually use — which SCM, which models, how many reviews, how much
 gets reviewed — is usage signal. This module ships that signal to
 PostHog through its Product Analytics batch API. It is **on by default**; see
-:mod:`bubo.analytics_config` for the three opt-outs.
+:mod:`bubo.analytics_config` for the telemetry preference.
 
 Design — privacy is the whole point, so it is enforced structurally:
 
@@ -30,7 +30,6 @@ Design — privacy is the whole point, so it is enforced structurally:
 from __future__ import annotations
 
 import atexit
-import fcntl
 import json
 import os
 import platform
@@ -38,13 +37,15 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Iterable
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
 from bubo import paths
 from bubo.analytics_config import AnalyticsConfig
+from bubo.update_identity import guard_path, guarded_identity
+from bubo.update_locking import lock_file
+from bubo.version import installed_version
 
 # Bump when the event field set changes in a way PostHog dashboards care about.
 SCHEMA_VERSION = 3
@@ -61,6 +62,7 @@ _ALLOWED_ATTRS = frozenset(
         "install_id",
         "bubo_version",
         "python_version",
+        "os_family",
         "os",
         "arch",
         "schema_version",
@@ -109,6 +111,20 @@ _ALLOWED_ATTRS = frozenset(
         # per-outcome engagement event — one per finding-outcome transition
         # (see `record_finding_outcome`). The value is the outcome name only.
         "outcome",
+        "otel_name",
+        "llm_provider",
+        "model_family",
+        "finding_type",
+        "severity",
+        "category",
+        "governance_mode",
+        "governance_action",
+        "provenance_band",
+        "provenance_source",
+        "languages",
+        "operation",
+        "metric_value",
+        "metric_count",
     }
 )
 
@@ -125,6 +141,8 @@ _KNOWN_EVENTS = frozenset(
         "project_technology",
         "finding_outcome",
         "subscription_circuit",
+        "otel_span",
+        "otel_metric",
     }
 )
 # Developer-engagement outcome dimensions. Mirrors the per-finding flags the
@@ -138,6 +156,15 @@ _KNOWN_OUTCOMES = frozenset(
 # anything with whitespace/control chars so a misconfigured model id cannot
 # smuggle multi-line content.
 _MAX_STR = 64
+
+
+class _QueuedEvent(dict):
+    """Keep consent provenance out of the serialized event payload."""
+
+    def __init__(self, config, event, properties):
+        super().__init__(event=event, properties=properties)
+        self.config = config
+
 
 # Buffered per-process; workers are exec'd, not forked, so each gets a fresh
 # queue. Keeping destination beside each event also handles callers that use
@@ -197,25 +224,9 @@ def language_counts(files: Iterable[str]) -> dict[str, int]:
     return counts
 
 
-def _truthy(value: str) -> bool:
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def analytics_enabled(cfg: AnalyticsConfig) -> bool:
-    """Return whether analytics should send, honoring env kill-switches.
-
-    Precedence: the cross-tool ``DO_NOT_TRACK`` opt-out wins, then an explicit
-    ``BUBO_ANALYTICS``, then the config flag. A blank endpoint or api_key
-    always disables sending (there is nowhere to send).
-    """
-    dnt = os.environ.get("DO_NOT_TRACK")
-    if dnt is not None and _truthy(dnt):
-        return False
-    has_dest = bool(cfg.endpoint and cfg.api_key)
-    override = os.environ.get("BUBO_ANALYTICS")
-    if override is not None:
-        return _truthy(override) and has_dest
-    return cfg.enabled and has_dest
+    """Use the single persisted telemetry preference and a valid destination."""
+    return bool(cfg.enabled and cfg.endpoint.strip() and cfg.api_key.strip())
 
 
 def install_id() -> str | None:
@@ -228,13 +239,19 @@ def install_id() -> str | None:
     global _install_id, _install_path
     path = paths.DB.parent / "install_id"
     with _identity_lock:
-        if _install_id is not None and _install_path == path:
+        if (
+            _install_id is not None
+            and _install_path == path
+            and not guard_path(path.parent).exists()
+        ):
             return _install_id
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with (path.parent / "install_id.lock").open("a") as lock:
                 # Never stall a review behind another process's telemetry.
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_file(lock.fileno(), exclusive=True)
+                if guard_path(path.parent).exists():
+                    return guarded_identity(path.parent)
                 try:
                     existing = path.read_text(encoding="utf-8").strip()
                     parsed = uuid.UUID(existing)
@@ -257,15 +274,15 @@ def install_id() -> str | None:
                             Path(temporary).unlink(missing_ok=True)
                 _install_id, _install_path = existing, path
                 return existing
-        except OSError:
+        except OSError, ValueError, UnicodeError, TypeError, AttributeError:
             return None
 
 
 def _bubo_version() -> str:
-    try:
-        return version("bubo")
-    except PackageNotFoundError:
-        return "unknown"
+    value = installed_version()
+    if value is None:
+        raise OSError("Installed Bubo version unavailable")
+    return value
 
 
 def agent_label(reviewer_command: list[str]) -> str:
@@ -294,6 +311,9 @@ def _base_attrs() -> dict[str, Any]:
         "bubo_version": _bubo_version(),
         "python_version": f"{py[0]}.{py[1]}",
         "os": platform.system() or "unknown",
+        "os_family": {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}.get(
+            platform.system(), "unknown"
+        ),
         "arch": platform.machine() or "unknown",
         "schema_version": SCHEMA_VERSION,
         # The capture API otherwise derives and stores location from the
@@ -355,11 +375,22 @@ def _emit(cfg: AnalyticsConfig, event: str, attrs: dict[str, Any]) -> None:
         payload["$ip"] = "0.0.0.0"
         payload["$process_person_profile"] = False
         with _pending_lock:
-            _pending_events.append(
-                (cfg.endpoint, cfg.api_key, {"event": event, "properties": payload})
-            )
+            _pending_events.append((cfg.endpoint, cfg.api_key, _QueuedEvent(cfg, event, payload)))
     except Exception:
         return
+
+
+def discard_pending(config: AnalyticsConfig) -> None:
+    """Revoke queued events for exactly this consent configuration."""
+    with _pending_lock:
+        _pending_events[:] = [
+            item for item in _pending_events if getattr(item[2], "config", None) != config
+        ]
+
+
+def track(cfg: AnalyticsConfig, event: str, **props: Any) -> None:
+    """Emit a known event through the shared consent and identity transport."""
+    _emit(cfg, event, props)
 
 
 def record_session_start(cfg: AnalyticsConfig, *, scm_provider: str, projects_count: int) -> None:
@@ -518,6 +549,12 @@ def flush() -> None:
     Called at the end of a worker / poll cycle so a short-lived process ships
     its events before exit.
     """
+    try:
+        from bubo.telemetry.posthog import flush_otel
+
+        flush_otel()
+    except Exception:
+        pass
     try:
         with _pending_lock:
             queued = list(_pending_events)

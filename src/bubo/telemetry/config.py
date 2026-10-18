@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from bubo.analytics_config import AnalyticsConfig, analytics_config_from_dict
 from bubo.config_values import (
     ConfigError,
     bool_value,
@@ -22,7 +23,7 @@ class ModelPricing:
 
 @dataclass(frozen=True, slots=True)
 class TelemetryConfig:
-    enabled: bool = False
+    analytics: AnalyticsConfig = field(default_factory=AnalyticsConfig)
     service_name: str = "bubo"
     environment: str = "dev"
     otlp_endpoint: str = ""
@@ -30,6 +31,10 @@ class TelemetryConfig:
     emit_finding_events: bool = True
     emit_outcome_sync: bool = True
     pricing: dict[str, ModelPricing] = field(default_factory=lambda: {"default": ModelPricing()})
+
+    @property
+    def enabled(self) -> bool:
+        return self.analytics.enabled
 
     def price_for(self, model: str | None) -> ModelPricing:
         if model and model in self.pricing:
@@ -57,11 +62,12 @@ def telemetry_config_from_dict(data: dict[str, Any]) -> TelemetryConfig:
             )
         )
 
+    consent = analytics_config_from_dict(data)
     pricing = {"default": _default_pricing_from_telemetry(raw)}
     return TelemetryConfig(
         # bool_value/text_value reject the ``= "false"`` / ``= "0"`` footgun:
         # a quoted string is truthy to bare bool(), silently inverting intent.
-        enabled=bool_value(raw.get("enabled"), "telemetry.enabled", default=False),
+        analytics=consent,
         service_name=text_value(raw.get("service_name"), "telemetry.service_name", default="bubo"),
         environment=text_value(raw.get("environment"), "telemetry.environment", default="dev"),
         otlp_endpoint=text_value(raw.get("otlp_endpoint"), "telemetry.otlp_endpoint", default=""),

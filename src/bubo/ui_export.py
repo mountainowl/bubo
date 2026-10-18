@@ -1,43 +1,20 @@
-"""Build the static ``data.json`` snapshot the operator UI renders.
+"""Build the read-only offline or live operator dashboard snapshot.
 
-This is the read-only data layer for ``bubo ui-export`` (see
-:func:`bubo.cli.cmd_ui_export`). It assembles a single self-contained JSON
-document from the existing :mod:`bubo.report` + :mod:`bubo.db` *reader*
-functions plus the installed package version. The static Svelte SPA
-``fetch()``es this file (or reads it from an inlined ``window.__BUBO_DATA__``
-global on ``file://``), so **everything the UI needs must be precomputed
-here** — there is no server to re-query.
-
-Design rules, mirroring :mod:`bubo.report`:
-
-* **Read-only and non-mutating.** The builder calls only reader functions
-  and never :func:`bubo.db.init_db`. On a *missing* DB it short-circuits to
-  a valid empty skeleton **without opening any connection** (the writer-mode
-  readers would otherwise create an empty DB file on the operator's disk).
-  On an *existing* DB it reads from a throwaway read-only snapshot copy (see
-  :func:`_readonly_db_snapshot`), so the operator's file is never opened
-  read-write and a read-only mount works. On a missing ``env.toml`` it falls
-  back to :class:`ReviewConfig` defaults for the read-only config display.
-* **No network.** ``version.installed`` comes from
-  :func:`importlib.metadata.version`; ``version.update`` is always ``None``
-  (the design's PyPI update check is a later, online phase).
-* **Deterministic shape.** The top-level keys are always present and in a
-  fixed order regardless of whether the DB exists, is empty, or is
-  populated, so the SPA can rely on the shape.
-
-The document's top-level sections, in fixed emission order: ``meta``,
-``version``, ``health``, ``inflight``, ``dashboard``, ``reviews``,
-``reports``, ``config``.
+Legacy report readers and dashboard aggregates run against a coherent private
+SQLite backup. No schema migration, external telemetry, update registration or
+source DB writes are performed. Missing databases return an empty skeleton;
+unreadable databases surface an error, and invalid schemas carry a visible
+error message. Local review detail may contain repository information.
 """
 
 from __future__ import annotations
 
 import re
-import shutil
 import sqlite3
 import tempfile
+import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import fields, is_dataclass
 from importlib import metadata
 from pathlib import Path
@@ -48,6 +25,7 @@ from bubo.config_values import ConfigError
 from bubo.events import now
 from bubo.review_config import ReviewConfig, load_review_config
 from bubo.types import JsonObject
+from bubo.ui_metrics import build_metrics
 
 SCHEMA_VERSION = 1
 
@@ -287,7 +265,7 @@ def _load_config() -> ReviewConfig:
     """
     try:
         return load_review_config(paths.CONFIG)
-    except (ConfigError, OSError, ValueError, TypeError):
+    except ConfigError, OSError, ValueError, TypeError:
         # Display-only: a missing/invalid env.toml must never fail a read-only
         # export. Degrade to the dataclass defaults (what the runtime uses for
         # those fields anyway).
@@ -312,7 +290,11 @@ def _empty_skeleton(version: str) -> JsonObject:
         "version": {"installed": version, "update": None},
         "health": {"status": "empty", "threshold_seconds": cfg.timeout_seconds * 3},
         "inflight": 0,
-        "dashboard": {"recent": [], "reports": []},
+        "dashboard": {
+            "recent": [],
+            "reports": [],
+            "metrics": {"inventory": {}, "windows": [], "active": []},
+        },
         "reviews": [],
         "reports": [],
         "config": _config_schema(cfg),
@@ -321,37 +303,27 @@ def _empty_skeleton(version: str) -> JsonObject:
 
 @contextmanager
 def _readonly_db_snapshot() -> Iterator[None]:
-    """Retarget ``paths.DB`` at a private filesystem copy of the operator DB.
+    """Take a coherent SQLite online backup through a read-only connection.
 
-    Several readers we call (``list_recent_reviews``, ``findings_for``,
-    ``count_inflight_workers``, …) open the *writer* connection, which runs
-    ``pragma journal_mode=WAL`` — a write. Against a read-only mount that fails;
-    against a writable one it would touch the operator's DB. Either way the
-    failure path would be swallowed into an empty document, silently losing data
-    in an auditable tool.
-
-    So we ``copy`` the DB file (plus its ``-wal`` sidecar, which carries
-    uncheckpointed rows) into a private temp dir with the filesystem, then point
-    ``paths.DB`` at the copy for the build. Every reader — writer- or
-    readonly-connection — then hits the throwaway copy in a *writable* temp dir,
-    where it can checkpoint the WAL normally; the operator's DB is never opened
-    at all. The ``-shm`` is deliberately NOT copied: SQLite rebuilds it from the
-    copied ``-wal`` in the writable temp dir, and a stale copied ``-shm`` would
-    be worse than none.
-
-    A failure to *read* the source (permission denied, unreadable mount) raises
-    ``OSError`` from :func:`shutil.copy2` and is left to surface — the export
-    must not mask it. Concurrency note: this is a plain file copy, so a copy
-    racing a live poller write can be torn; that is inherent to the
-    "snapshot, not live" design and is acceptable for a read-only export.
+    All legacy readers then operate on a private copy. A deadline bounds
+    repeated busy retries while a writer is active; no source migration runs.
     """
     original = paths.DB
+    with original.open("rb"):
+        pass  # Preserve a clear filesystem permission error before SQLite opens it.
     with tempfile.TemporaryDirectory(prefix="bubo-ui-") as tmp:
         snapshot = Path(tmp) / "snapshot.sqlite"
-        shutil.copy2(original, snapshot)
-        wal = Path(f"{original}-wal")
-        if wal.exists():
-            shutil.copy2(wal, Path(f"{snapshot}-wal"))
+        deadline = time.monotonic() + 5
+
+        def progress(status: int, remaining: int, total: int) -> None:
+            if time.monotonic() > deadline:
+                raise OSError("Dashboard snapshot timed out; retry after the current write")
+
+        with (
+            closing(sqlite3.connect(f"{original.resolve().as_uri()}?mode=ro", uri=True)) as source,
+            closing(sqlite3.connect(snapshot)) as target,
+        ):
+            source.backup(target, pages=256, progress=progress, sleep=0.05)
         paths.DB = snapshot
         try:
             yield
@@ -372,7 +344,7 @@ def build_data() -> JsonObject:
     A DB that exists but is empty yields the same shape with empty aggregates.
     A DB that exists but is *unreadable as SQLite* (truncated / not a database)
     degrades to the empty skeleton; a DB file that cannot be *read at all*
-    (permission denied) raises ``OSError`` from the snapshot copy so the CLI
+    (permission denied) raises ``OSError`` before backup so the CLI
     surfaces it rather than silently emptying a populated DB.
     """
     version = _installed_version()
@@ -386,14 +358,16 @@ def build_data() -> JsonObject:
             reports = _reports()
             health = _health(cfg.timeout_seconds)
             inflight = db.count_inflight_workers()
+            metrics = build_metrics(paths.DB)
     except sqlite3.DatabaseError:
-        # The snapshot copy opened but is not a usable SQLite/bubo DB
-        # (truncated, "file is not a database", pre-schema). Treat as "nothing
-        # to show yet" rather than crash. NOTE: an unreadable *source* file
-        # raises OSError from shutil.copy2 inside the context manager — that is
-        # deliberately NOT caught here, so it propagates to the CLI (which exits
-        # non-zero) instead of silently producing an empty, data-losing export.
-        return _empty_skeleton(version)
+        # Preserve an explicit error for corrupt/incompatible schemas; never
+        # disguise an existing unreadable database as a fresh installation.
+        empty = _empty_skeleton(version)
+        empty["meta"]["db_present"] = True
+        empty["meta"]["error"] = (
+            "The state database could not be read. Check its schema and integrity."
+        )
+        return empty
 
     return {
         "meta": {
@@ -409,6 +383,7 @@ def build_data() -> JsonObject:
         "dashboard": {
             "recent": reviews[:10],
             "reports": reports,
+            "metrics": metrics,
         },
         "reviews": reviews,
         "reports": reports,

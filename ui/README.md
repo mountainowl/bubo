@@ -1,7 +1,7 @@
 # bubo operator UI (read-only v1)
 
 A static SPA (Svelte 5 + Vite + Tailwind v4) that renders a `data.json`
-snapshot produced by `bubo ui-export`. No server, no auth, no daemon.
+snapshot produced by `bubo ui-export`. Offline export plus an optional read-only loopback live view.
 
 ## How it runs
 
@@ -18,13 +18,13 @@ is blocked).
 
 ## Views
 
-- **Dashboard** — health pill + version, in-flight/queue, recent reviews,
-  today's posted / accept-rate / cost, failures.
+- **Dashboard** — snapshot freshness and version, period selector, review-state
+  breakdown, resolution rate, recorded cost, median/p95 latency, and recent failures.
 - **Reviews** — filterable list → detail (the change, each finding with
   Issue/Impact/Evidence/Fix/Confidence rendered from the comment body, outcome,
   provenance band, tokens/cost, run-span timeline).
 - **Reports** — windowed aggregates (today / 7d / 30d) with an exec-rollup
-  preset (big numbers + sparklines).
+  preset, labeled trends, and expandable daily values.
 - **Config** — read-only schema + values + descriptions. Editing is a later
   server phase, intentionally out of scope.
 
@@ -51,3 +51,17 @@ npm --prefix ui run build
 
 `dist/` is force-included into the wheel under `bubo/_assets/ui/` (see
 `pyproject.toml`); `bubo ui-export` copies it next to `data.json`.
+
+## Live dashboard
+
+Run `bubo ui-serve --root ROOT` and open the printed secret localhost URL. The
+stdlib HTTP server binds only 127.0.0.1, validates Host, serves no arbitrary files,
+and exposes no writes or CORS. It does not start updates or a background daemon.
+The CLI holds an activity lease; stop it before automatic package replacement.
+Snapshots refresh every five seconds with a coherent SQLite online backup.
+
+The dashboard aggregates all six canonical tables for 24h/7d/30d windows, reports
+missing observations, separates unfinished and completed runs, and includes
+model families, canonical security categories, outcomes, governance/provenance,
+reconciliations and all-time inventory. ROI is an editable scenario, not measured
+savings; formulas and cohort definitions are displayed in the page.

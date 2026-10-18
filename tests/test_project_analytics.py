@@ -23,8 +23,6 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(analytics, "_install_id", None)
     monkeypatch.setattr(analytics, "_install_path", None)
     monkeypatch.setattr(analytics, "_pending_events", [])
-    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
-    monkeypatch.delenv("BUBO_ANALYTICS", raising=False)
 
 
 @pytest.mark.parametrize("provider", ["github", "gitlab"])
@@ -146,7 +144,7 @@ def tracked_repo(tmp_path: Path) -> Path:
             "user.email=test@example.invalid",
             "commit",
             "-qm",
-            "fixture",
+            "test: create project analytics fixture",
         ],
         check=True,
     )

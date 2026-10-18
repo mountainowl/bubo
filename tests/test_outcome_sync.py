@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bubo import db, gitlab, paths, poller
+from bubo.analytics_config import AnalyticsConfig
 from bubo.review_config import ReviewConfig
 from bubo.telemetry.config import TelemetryConfig
 
@@ -114,7 +115,7 @@ def test_classify_discussion_outcome_uses_note_resolved_state() -> None:
 
 def test_outcome_sync_flag_suppresses_outcome_metric_emission() -> None:
     class FakeTelemetry:
-        config = TelemetryConfig(enabled=True, emit_outcome_sync=False)
+        config = TelemetryConfig(analytics=AnalyticsConfig(enabled=True), emit_outcome_sync=False)
 
         def __init__(self) -> None:
             self.finding_metrics = 0
@@ -201,7 +202,7 @@ def _replied_unresolved_outcome() -> dict[str, object]:
 
 
 class _SilentTelemetry:
-    config = TelemetryConfig(enabled=True, emit_outcome_sync=False)
+    config = TelemetryConfig(analytics=AnalyticsConfig(enabled=True), emit_outcome_sync=False)
 
     def record_finding(self, **_: object) -> None:
         pass
@@ -360,8 +361,18 @@ def test_outcome_sync_caps_reply_classifications_per_run() -> None:
                         insert into review_findings(project,iid,sha,fingerprint,file,line,status,discussion_id,body,updated_at)
                         values(?,?,?,?,?,?,?,?,?,?)
                         """,
-                        ("group/repo", 1, "sha", f"fp{i}", "src/A.py", 1, "posted",
-                         f"disc{i}", "body", poller.now()),
+                        (
+                            "group/repo",
+                            1,
+                            "sha",
+                            f"fp{i}",
+                            "src/A.py",
+                            1,
+                            "posted",
+                            f"disc{i}",
+                            "body",
+                            poller.now(),
+                        ),
                     )
             poller.MAX_REPLY_CLASSIFICATIONS_PER_SYNC = 2
             fake = _SilentTelemetry()
@@ -385,7 +396,7 @@ def test_outcome_sync_caps_reply_classifications_per_run() -> None:
 
 def test_outcome_sync_failure_advances_last_checked_at() -> None:
     class FakeTelemetry:
-        config = TelemetryConfig(enabled=True, emit_outcome_sync=True)
+        config = TelemetryConfig(analytics=AnalyticsConfig(enabled=True), emit_outcome_sync=True)
 
         def record_finding(self, **_: object) -> None:
             raise AssertionError("unexpected finding metric")
@@ -581,21 +592,24 @@ def test_backfill_github_bot_comments_imports_resolved_threads() -> None:
             thread = {
                 "is_resolved": True,
                 "comments": [
-                        {
-                            "database_id": 555,
-                            "node_id": "PRRC_x",
-                            "login": "lt-bubo",
-                            "user": {"type": "Bot"},
+                    {
+                        "database_id": 555,
+                        "node_id": "PRRC_x",
+                        "login": "lt-bubo",
+                        "user": {"type": "Bot"},
                         "body": (
                             "**Issue (blocking, correctness):** bad path\n\n**Confidence:** 0.91"
                         ),
                         "path": "src/A.java",
                         "line": 12,
                     },
-                        {
-                                "database_id": 556, "node_id": "PRRC_y", "login": "dev1",
-                                "user": {"type": "User"}, "body": "thanks",
-                        },
+                    {
+                        "database_id": 556,
+                        "node_id": "PRRC_y",
+                        "login": "dev1",
+                        "user": {"type": "User"},
+                        "body": "thanks",
+                    },
                 ],
             }
 
@@ -726,20 +740,60 @@ def test_outcomes_for_keeps_legacy_unknown_and_derives_durable_bubo_auto() -> No
                 con.execute(
                     """insert into review_findings(project,iid,sha,fingerprint,file,line,status,
                        discussion_id,body,severity,updated_at) values(?,?,?,?,?,?,?,?,?,?,?)""",
-                    ("group/repo", 1, "oldsha", "fp", "a.py", 1, "posted", "disc", "body", "blocking", poller.now()),
+                    (
+                        "group/repo",
+                        1,
+                        "oldsha",
+                        "fp",
+                        "a.py",
+                        1,
+                        "posted",
+                        "disc",
+                        "body",
+                        "blocking",
+                        poller.now(),
+                    ),
                 )
             # SCM resolved state alone never claims automatic resolution.
-            outcome = {"resolved": True, "deleted": False, "developer_replied": False,
-                       "disputed": False, "false_positive": False, "duplicate": False,
-                       "merged_unresolved": False}
-            db.record_finding_outcome(project="group/repo", iid=1, sha="oldsha", fingerprint="fp", discussion_id="disc", outcome=outcome)
+            outcome = {
+                "resolved": True,
+                "deleted": False,
+                "developer_replied": False,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "merged_unresolved": False,
+            }
+            db.record_finding_outcome(
+                project="group/repo",
+                iid=1,
+                sha="oldsha",
+                fingerprint="fp",
+                discussion_id="disc",
+                outcome=outcome,
+            )
             assert db.outcomes_for("group/repo", 1, "oldsha")[0]["resolution_source"] == "unknown"
             db.record_finding_reconciliation(
-                project="group/repo", iid=1, prior_sha="oldsha", fingerprint="fp", head_sha="newsha",
-                discussion_id="disc", state="resolved", reply_marker="marker", verdict="fixed",
-                evidence="line no longer divides", causal_commit="newsha",
+                project="group/repo",
+                iid=1,
+                prior_sha="oldsha",
+                fingerprint="fp",
+                head_sha="newsha",
+                discussion_id="disc",
+                state="resolved",
+                reply_marker="marker",
+                verdict="fixed",
+                evidence="line no longer divides",
+                causal_commit="newsha",
             )
-            db.record_finding_outcome(project="group/repo", iid=1, sha="oldsha", fingerprint="fp", discussion_id="disc", outcome=outcome)
+            db.record_finding_outcome(
+                project="group/repo",
+                iid=1,
+                sha="oldsha",
+                fingerprint="fp",
+                discussion_id="disc",
+                outcome=outcome,
+            )
             row = db.outcomes_for("group/repo", 1, "oldsha")[0]
             assert row["severity"] == "blocking"
             assert row["resolution_source"] == "bubo_auto"

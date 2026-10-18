@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "postbuild": "node scripts/publish-llms.mjs",
+    "postbuild": "node scripts/publish-llms.mjs && node scripts/publish-sitemap.mjs",
     "start": "next start"
   },
   "license": "MIT",

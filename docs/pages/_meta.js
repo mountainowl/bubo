@@ -29,6 +29,7 @@ export default {
   recipes: 'Recipes',
   mcp: 'MCP server',
   operate: 'Operate',
+  'auto-update': 'Updates & recovery',
   telemetry: 'Metrics & telemetry',
   troubleshooting: 'Troubleshooting',
   configuration: 'Configuration reference',
