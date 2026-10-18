@@ -166,3 +166,28 @@ def test_review_run_carries_prompt_version_to_otel_and_posthog() -> None:
     assert len(stored) == 12
     assert _completed(result)["prompt_version"] == stored
     assert {point.get("prompt_version") for point in result.points["llm_review.runs"]} == {stored}
+
+
+def test_failure_after_a_comment_posted_still_reports_it() -> None:
+    """The first comment posts, the second POST fails: telemetry must say 1 posted."""
+    posts: list[str] = []
+    base = _route
+
+    def flaky(method: str, url: str, body: Any) -> Any:
+        if method == "POST" and urlparse(url).path.endswith("/pulls/1/comments"):
+            posts.append(url)
+            if len(posts) == 2:
+                raise RuntimeError("GitHub 502 on second comment")
+        return base(method, url, body)
+
+    second = {**FINDING, "line": 3, "title": "t2", "body": "b2"}
+    with _state() as tmp, patch(f"{__name__}._route", flaky):
+        result = run_worker(tmp, _cfg(), findings=[FINDING, second])
+        stored = db.connect_db().execute(
+            "select count(*) from review_findings where status='posted'"
+        ).fetchone()[0]
+    assert result.rc == 1
+    assert len(posts) == 2
+    assert stored == 1
+    completed = _completed(result)
+    assert (completed["status"], completed["findings_posted"]) == ("failed", 1)
