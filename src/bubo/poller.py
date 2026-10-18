@@ -37,7 +37,6 @@ import os
 import re
 import secrets
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -109,7 +108,7 @@ from bubo.reconciliation import (
 )
 from bubo.review_config import ReviewConfig, load_review_config, review_config_from_dict
 from bubo.scm import ScmProvider, get_provider
-from bubo.scm.base import FindingThreadState
+from bubo.scm.base import FindingThreadState, path_slug, prune_mirrors, remove_worktree
 from bubo.secrets import redact_secrets
 from bubo.signals import (
     install_signal_handlers as _install_signal_handlers,
@@ -731,7 +730,7 @@ def render_meta_prompt(prompt_text: str, max_findings: int) -> str:
 
 def slug(value: str) -> str:
     """Make ``value`` safe for use as a path or filename component."""
-    return "".join(c if c.isalnum() else "-" for c in value).strip("-").lower()
+    return path_slug(value)
 
 
 def sha_for(change: JsonObject) -> str:
@@ -901,6 +900,12 @@ def poll(*, worker_mode: str = "detached") -> int:
     analytics.record_session_start(
         cfg.analytics_config, scm_provider=cfg.provider, projects_count=len(cfg.projects)
     )
+    # Mirrors are a cache keyed by project; drop the ones no longer configured.
+    try:
+        for pruned in prune_mirrors(cfg.projects):
+            log("git_mirror_pruned", poll_run_id=poll_run_id, mirror=pruned.name)
+    except OSError as exc:
+        log("git_mirror_prune_failed", poll_run_id=poll_run_id, error=type(exc).__name__)
     if inflight >= inflight_cap:
         log(
             "poll_throttled_inflight",
@@ -978,13 +983,15 @@ def cleanup_worktree(repo: Path) -> None:
 
     Guarded with a path-containment check so a misconfigured ``repo``
     path cannot ``rm -rf`` an arbitrary location. Resolves ``paths.WORK``
-    via the module so test monkey-patches reach this code.
+    via the module so test monkey-patches reach this code. A worktree of the
+    project's git mirror is detached with ``git worktree remove`` / ``prune``
+    (keeping the mirror); ``rmtree`` stays as the last resort.
     """
     try:
         repo.resolve().relative_to(paths.WORK.resolve())
     except ValueError:
         return
-    shutil.rmtree(repo, ignore_errors=True)
+    remove_worktree(repo)
 
 
 def review_prompt(project: str, change: JsonObject, cfg: ReviewConfig | None = None) -> str:

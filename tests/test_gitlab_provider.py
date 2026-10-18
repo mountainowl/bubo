@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from bubo import gitlab
+from bubo import gitlab, paths
 from bubo.review_config import ReviewConfig
 from bubo.scm import get_provider
 from bubo.scm.base import FindingThreadState
@@ -62,11 +62,20 @@ def test_checkout_clones_credential_safe(tmp_path: Path, monkeypatch) -> None:
 
     dest = tmp_path / "wt"
     with patch("bubo.scm.base.run_bounded", side_effect=fake_run):
-        GitLabProvider().checkout(_cfg(), "grp/sub/proj", {"iid": 7, "sha": "abc123"}, dest)
+        GitLabProvider().checkout(
+            _cfg(), "grp/sub/proj", {"iid": 7, "sha": "abc123", "target_branch": "main"}, dest
+        )
 
     clone = next(a for a in calls if "clone" in a)
-    # Plain HTTPS URL (sub-groups preserved), and the raw token never appears in argv.
+    # A bare per-project mirror; plain HTTPS URL (sub-groups preserved), and
+    # the raw token never appears in argv.
+    assert "--bare" in clone
     assert "https://gl.example/grp/sub/proj.git" in clone
+    assert Path(clone[-1]).parent == paths.WORK / "_mirrors"
+    fetch = next(a for a in calls if "fetch" in a)
+    assert "--prune" not in fetch
+    assert "+refs/merge-requests/7/head:refs/remotes/origin/mr-7" in fetch
+    assert "+refs/heads/main:refs/remotes/origin/main" in fetch
     assert not any("glpat-SECRET" in part for part in clone)
     # Every remote-touching call carries the per-invocation auth header.
     remote = [a for a in calls if "-c" in a]
@@ -74,8 +83,9 @@ def test_checkout_clones_credential_safe(tmp_path: Path, monkeypatch) -> None:
     assert all(
         any(part.startswith("http.extraHeader=Authorization: Basic ") for part in a) for a in remote
     )
-    # The final step detaches at the head SHA and is local (no auth header).
-    assert calls[-1] == ["git", "checkout", "--detach", "abc123"]
+    # The final step adds a detached worktree at the head SHA and is local
+    # (no auth header).
+    assert calls[-1] == ["git", "worktree", "add", "--detach", str(dest), "abc123"]
 
 
 def _discussion(
