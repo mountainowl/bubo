@@ -1,3 +1,7 @@
+---
+description: "Operate Bubo: verify signed releases, run review services, synchronize outcomes, generate governance reports, and backfill review comments."
+---
+
 import { Eyebrow } from '../components/Eyebrow'
 
 # Operate
@@ -266,3 +270,28 @@ BUBO_PROVIDER=github bubo-poller --backfill-github-bot-comments-since 2026-05-25
 
 Both backfill commands are idempotent — a comment already in SQLite is upserted,
 not duplicated — so re-running with a different cutoff is safe.
+
+### Dashboard management summaries
+
+The dashboard rolls up recorded production spend, audit evidence coverage, policy
+activity, and discussion outcomes, with links to supporting records. Audit rows and
+CSV include `dry_run` and `cost_recorded`; missing cost is not a free review.
+
+Audit coverage matches distinct production runs started in the period to policy
+records by run ID, even if decisions were written outside that period. Known provenance
+is counted separately. Gaps can include unfinished work or disabled controls; these
+are evidence-coverage fractions, not compliance certification. Policy activity uses
+its own decision-creation-time cohort. Advisory actions are not enforced merge gates.
+The policy report's availability flag describes the existence of its storage table,
+not whether policy was enabled for every review in the period.
+
+The discussion proxy counts resolved findings without recorded disputes or false-positive
+flags among observed findings updated in the period. It does not prove acceptance or
+a code fix. The legacy report ROI proxy mixes finding-update and run-start cohorts and
+includes dry runs in cost and success totals. Its accepted-per-dollar value is not
+measured financial return or directly comparable to production-only dashboard figures.
+
+The optional planning calculator uses your minutes-saved and hourly-cost assumptions,
+recorded production spend, and other costs. It shows a break-even time per successful
+production review; missing recorded costs can understate investment. It is a scenario,
+not measured savings.

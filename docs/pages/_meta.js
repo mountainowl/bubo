@@ -30,6 +30,7 @@ export default {
   mcp: 'MCP server',
   'github-action': 'GitHub Action',
   operate: 'Operate',
+  'auto-update': 'Updates & recovery',
   telemetry: 'Metrics & telemetry',
   troubleshooting: 'Troubleshooting',
   configuration: 'Configuration reference',
