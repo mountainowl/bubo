@@ -1332,7 +1332,8 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     Each row carries ``prior_outcome`` — the currently-stored outcome flags
     (all ``False`` if never synced) — so the caller can detect the
     ``false -> true`` transition of each dimension and emit analytics exactly
-    once per outcome rather than on every re-check.
+    once per outcome rather than on every re-check. ``type``, ``severity`` and
+    ``category`` are the finding's own labels, for outcome metrics.
     """
     with connect_db() as db:
         rows = db.execute(
@@ -1341,7 +1342,8 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
                    fo.reply_classified,
                    coalesce(fo.resolved,0), coalesce(fo.deleted,0),
                    coalesce(fo.developer_replied,0), coalesce(fo.disputed,0),
-                   coalesce(fo.false_positive,0), coalesce(fo.duplicate,0)
+                   coalesce(fo.false_positive,0), coalesce(fo.duplicate,0),
+                   rf.type, rf.severity, rf.category
             from review_findings rf
             left join finding_outcomes fo
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
@@ -1372,6 +1374,9 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
                 "false_positive": bool(row[10]),
                 "duplicate": bool(row[11]),
             },
+            "type": row[12],
+            "severity": row[13],
+            "category": row[14],
         }
         for row in rows
     ]
