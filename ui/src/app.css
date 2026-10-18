@@ -5,37 +5,38 @@
  * [data-theme="dark"]. Everything the UI paints references a token, so an
  * operator can re-theme the whole surface — or sync it to a host page over
  * postMessage (?embed=1) — by overriding these variables alone.
- * Brand accent is indigo by default.
+ * The documentation supplies the neutral surfaces and blue navigation accent.
  * ------------------------------------------------------------------------- */
 :root {
-  --bg: #f8fafc;
+  /* Surfaces and link colors follow docs/components/quickstart.module.css. */
+  --bg: #ffffff;
   --surface: #ffffff;
-  --surface-2: #f1f5f9;
-  --border: #e2e8f0;
-  --text: #0f172a;
-  --text-muted: #64748b;
-  --brand: #4f46e5;
+  --surface-2: #f9fafb;
+  --border: #e5e7eb;
+  --text: #111827;
+  --text-muted: #4b5563;
+  --brand: #2563eb;
   --brand-fg: #ffffff;
-  --ok: #16a34a;
+  --ok: #216c50;
   --ok-bg: #dcfce7;
-  --warn: #d97706;
+  --warn: #925a12;
   --warn-bg: #fef3c7;
-  --danger: #dc2626;
+  --danger: #b93c36;
   --danger-bg: #fee2e2;
-  --info: #0284c7;
+  --info: #136b87;
   --info-bg: #e0f2fe;
-  --radius: 0.625rem;
+  --radius: 0.3rem;
 }
 
 [data-theme="dark"] {
-  --bg: #0b1120;
-  --surface: #111827;
-  --surface-2: #1e293b;
-  --border: #334155;
-  --text: #e2e8f0;
-  --text-muted: #94a3b8;
-  --brand: #818cf8;
-  --brand-fg: #0b1120;
+  --bg: #111111;
+  --surface: #111111;
+  --surface-2: #181818;
+  --border: #2a2a2a;
+  --text: #f3f4f6;
+  --text-muted: #9ca3af;
+  --brand: #93b4ff;
+  --brand-fg: #111111;
   --ok: #4ade80;
   --ok-bg: #14331f;
   --warn: #fbbf24;
@@ -100,4 +101,20 @@ body.embed {
 }
 .prose-bubo strong {
   color: var(--text);
+}
+
+a:focus-visible, button:focus-visible, select:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
+}
+
+meter::-webkit-meter-bar {
+  background: var(--surface-2);
+  border: 0;
+}
+meter::-webkit-meter-optimum-value {
+  background: var(--brand);
+}
+meter::-moz-meter-bar {
+  background: var(--brand);
 }

@@ -1,275 +1,91 @@
-# Telemetry
+---
+description: "Use Bubo’s local HTML dashboard and OpenTelemetry to understand review activity, finding outcomes, latency, token usage, and recorded cost."
+---
 
-Bubo emits OpenTelemetry metrics and traces, namespaced `llm_review.*` and defined in
-`src/bubo/telemetry/metrics.py`. Telemetry is off by default. Enable it and point it at an
-OTLP/gRPC collector for live dashboards. For one-off numbers without a collector, read the
-same rollups over [MCP](#over-mcp), [`bubo report`](#recipe--reproduce-the-overview-metrics),
-or the [static UI](#static-html-dashboard).
+# Metrics & OpenTelemetry
 
-## Enable
+See review activity, finding outcomes, latency, token usage, and recorded cost in
+Bubo's local HTML dashboard. OpenTelemetry provides the accompanying operational
+measurements.
 
-### Product analytics and privacy
+## Open your dashboard
 
-Product analytics is separate from the opt-in OpenTelemetry collector below.
-It is enabled by default and can be disabled with `DO_NOT_TRACK=1`,
-`BUBO_ANALYTICS=0`, or `[analytics] enabled = false`.
+For a live local view:
 
-On first telemetry use, Bubo creates a random UUID seed in `state/install_id`
-beside the state database. It derives the reported installation ID by hashing
-that seed together with the local machine node returned by `uuid.getnode()`.
-Only the SHA-256 digest is sent; the UUID seed and raw MAC address never leave
-the machine. The digest is PostHog's `install_id` and `distinct_id`, and the
-enabled OpenTelemetry resource's `service.instance.id`, `install_id`, and
-`distinct_id`. Concurrent workers use atomic persistence and a shared lock.
-Valid existing UUID seeds survive upgrades; invalid seed files are replaced.
-If persistent identity is unavailable, telemetry is skipped rather than
-assigning an ephemeral identity. A busy identity lock drops that event and
-retries next time.
-
-An installation means one state directory on one machine, not a person,
-repository, or process. Keep that directory on persistent storage across
-container restarts. Copying the state to a machine with a different MAC address
-produces a different reported ID; deleting state also resets the identity.
-
-Schema version 2 adds `queue_seconds` to `review_completed` and a
-`review_language` event per changed-file language category per completed review.
-The latter contains `language`, `language_files`, `status`, `dry_run`, and
-`scm_provider`, alongside anonymous installation context. Categories come from
-file extensions (including Python, C, C++, Java, JavaScript, TypeScript, Go,
-Rust, and others); unknown extensions become `other`. Header `.h` files count
-as C. These are changed-file categories, not a full repository language inventory.
-No filenames, code, credentials, review text, or personal account names are sent.
-IP storage, GeoIP enrichment, and person-profile processing remain disabled.
-
-Schema version 3 adds `project_profile` and `project_technology` per reviewed
-project, plus project context on review events. `project_id` is a locally persisted
-random UUID scoped to an installation and SCM project. It counts project-install
-pairs, not globally unique repositories or people.
-
-Provider metadata is checked through an authenticated HTTPS read. `org` is sent
-for verified GitHub Organizations and GitLab groups for both private and public
-repositories; GitLab uses the root group namespace. Personal namespaces are omitted.
-`repo_name` is sent only when the provider confirms public visibility AND an
-allowlisted open-source license. Missing metadata, unknown licenses, proprietary
-and source-available licenses do not permit disclosure of the repository name.
-Organization labels can identify organizations: this is pseudonymous telemetry,
-not wholly anonymous data. Opting out also disables metadata reads and profiling.
-
-Stack detection reads tracked filenames and bounded manifests locally. It sends
-only fixed language, framework and database labels (including Python, JavaScript,
-Java, C, R, Oracle, MySQL, PostgreSQL and ClickHouse). Manifest references are
-heuristics, not proof of runtime usage; comments, examples and transitive references
-can affect results. `stack_coverage` distinguishes bounded, partial and unavailable
-scans. No manifest contents or paths leave the installation.
-
-Domain and project type are optional declared categories, never guessed from code
-or names. Undeclared values stay `unknown`. Local lookup keys are not transmitted:
-
-```toml
-[analytics.profiles."github:acme/repo"]
-domain = "fintech"
-project_type = "backend_api"
+```sh
+bubo ui-serve --root /path/to/bubo-root
 ```
 
-Domains: `unknown`, `travel`, `fintech`, `healthcare`, `education`, `retail`,
-`gaming`, `media`, `logistics`, `government`, `developer_tools`, `other`.
-Project types: `unknown`, `backend_api`, `frontend`, `full_stack`, `mobile`,
-`library`, `cli`, `data_pipeline`, `infrastructure`, `other`.
-Use `gitlab:group/project` for GitLab, including subgroups in the local key.
+Open the printed localhost URL. Activity refreshes every five seconds while this
+command runs. Stop it with Ctrl-C. It reads your database without changing it.
+Automatic package updates wait until this command closes.
 
-Recommended product views:
+For a portable offline snapshot:
 
-| View | Definition |
-|---|---|
-| Active installations | Distinct `distinct_id` across poll and review events, daily/weekly |
-| Activation | First observed successful non-dry-run review per installation |
-| Retention | Installations returning to review in subsequent weeks |
-| Reliability | `review_completed` counts by status; circuit transitions by state |
-| Language adoption | Distinct installations or event counts by `review_language.language` |
-| Language volume | Sum `language_files` by language; multi-language reviews appear in multiple categories |
-| Efficiency | Review and queue duration averages/p95; total/cached tokens; configured cost |
-| Developer engagement | Finding outcome transitions by outcome |
+```sh
+bubo ui-export --root /path/to/bubo-root --out ./bubo-metrics
+```
 
-Filter value/activation/language views to `dry_run = false`. `session_start`
-counts poll cycles, not human sessions. Outcome categories overlap and their
-counts are not acceptance rates. Cost is an estimate based on configured prices;
-zero cost does not prove free usage. First observed activity is not a download or
-installation timestamp. New fields have no historical backfill; dashboards can
-be empty until updated clients send the corresponding schema version.
+Open `bubo-metrics/index.html` in your browser. The page works offline and reads a
+snapshot of your local review history. Re-run the command to refresh it; no server
+or collector setup is needed.
 
-GitHub clone traffic is aggregate acquisition data, separate from runtime telemetry.
-Maintainers can run `python scripts/snapshot_github_traffic.py --output snapshots.jsonl`
-with an authenticated `gh` CLI that can read repository traffic. Snapshots retain
-GitHub's rolling 14-day clone/view totals and daily buckets. GitHub does not reveal
-individual cloners or provide a clone-to-install join. Daily uniques cannot be summed
-into lifetime unique users; automation, repeated installs and copied state limit
-deduplication. The script is manual and does not create a recurring collection job.
+- **Dashboard** — live recorded activity, model families and usage, duration
+  statistics, security and finding classifications, observed outcomes, governance
+  evidence, reconciliation, database inventory, and an editable potential ROI scenario.
+- **Reports** — compare the last 24 hours, 7 days, or 30 days; inspect finding
+  outcomes and review efficiency.
+- **Reviews** — open an individual review for findings, provenance, and usage.
 
-### OpenTelemetry collector
+The export stays local and works regardless of telemetry preferences. It can
+contain repository names and review details, so share it as you would a review
+report. For JSON or CSV, use [`bubo report`](/operate#governance-report).
 
-Configure `[telemetry]` in `config/env.toml`. `enabled = false` (the default) makes every
-metric and span a no-op. With `enabled = true` and no `otlp_endpoint`, instruments record
-in-process but nothing exports.
+## Reading the numbers
+
+Dashboard comparisons use finished successful production runs; dry runs and
+unknown or unfinished states are excluded from terminal success/failure rates.
+Successful duration uses non-negative finish-minus-start spans. Percentiles
+interpolate at `(n − 1) × p`; sample count and population standard deviation
+make the coverage visible. Detailed reports also retain all-run summaries. Missing observations
+and zero denominators display as unavailable, not zero success.
+
+Outcome percentages divide each flag count by observed outcomes for the selected
+finding cohort. Flags overlap; a resolved discussion does not prove a code fix.
+Security counts use Bubo's canonical category taxonomy. Governance and provenance
+are recorded evidence, not compliance certification.
+
+Cost and token totals show how many runs have recorded values. Missing cost is
+unknown, not free usage. Model families are inferred from stored model names,
+not the API host. Potential ROI uses successful production runs and your explicit minutes, hourly value and other
+cost assumptions; its formulas and incomplete-cost warning are visible beside it.
+
+Runs are selected by start time, findings/reconciliations by latest update, and
+policy decisions by creation time. The dashboard lists every application table's
+all-time row count. It summarizes stored structured fields; it does not dump
+credentials, prompt text or raw provenance signals. It cannot reconstruct history
+that the database overwrites or infer unrecorded vulnerabilities. Very large
+cohorts show an explicit unavailable notice instead of partial statistics; the
+three windows share a 50,000-row processing budget.
+
+OpenTelemetry measurements carry the installed Bubo version. The installation
+identity stays consistent across upgrades.
+
+## Preferences
+
+Delivery follows your [telemetry preferences](/configuration#analytics). The local
+HTML dashboard remains available with delivery disabled.
+
+Optional measurement and pricing settings:
 
 ```toml
 [telemetry]
-enabled                 = true
-otlp_endpoint           = "otel-collector:4317"   # OTLP/gRPC; empty = record but do not export
-otlp_protocol           = "grpc"                  # grpc is the only supported protocol
-service_name            = "bubo"
-environment             = "prod"                  # low-cardinality label: dev / staging / prod
 export_interval_seconds = 30
-
-# Per-finding and outcome-sync metrics — drop either to cut emission volume.
 emit_finding_events = true
-emit_outcome_sync   = true
-
-# LLM pricing for llm_review.cost.usd, USD per 1M tokens. All default to 0.
-input_per_1m        = 2.50
-output_per_1m       = 10.00
-cached_input_per_1m = 0.25
+emit_outcome_sync = true
+input_per_1m = 1.0
+output_per_1m = 2.0
 ```
 
-Per-review cost = `(input × input_per_1m + output × output_per_1m + cached × cached_input_per_1m) / 1e6`.
-Leave the rates at `0` to skip cost.
-
-## Metrics
-
-Every instrument carries `repo`. Run-scoped instruments also carry `model`, `prompt_version`,
-`review_mode` (`poller`/`manual`), `status`, `dry_run`, and `tone`.
-
-| Metric | Type | Counts | Extra attributes |
-|---|---|---|---|
-| `llm_review.runs` | counter | one per completed review run | — |
-| `llm_review.findings` | counter | one per finding lifecycle event — initial post plus every outcome-sync transition | `status` (`planned`/`posted`/`skipped`/`resolved`/`disputed`/`false_positive`/`duplicate`/`deleted`/`developer_replied`), `finding_type`, `severity`, `category` |
-| `llm_review.tokens` | counter | LLM tokens per review | `operation` (`input`/`output`/`cached`/`total`) |
-| `llm_review.cost.usd` | counter | estimated USD per review | — |
-| `llm_review.provenance` | counter | one per AI-provenance signal | `provenance_band`, `provenance_source` |
-| `llm_review.governance` | counter | one per policy decision | `governance_mode`, `governance_action` |
-| `llm_review.verifications` | counter | one per verification-lens result | `outcome` (`verified`/`refuted`) |
-| `llm_review.failures` | counter | one per failed stage | `error_type`, `operation` (`review`/`outcome_sync`) |
-| `llm_review.latency.review_seconds` | histogram | worker wall-clock per review | — |
-| `llm_review.latency.queue_seconds` | histogram | queue wait before a worker picks up a job — the saturation signal | `repo` only |
-| `llm_review.lines_reviewed` | histogram | added lines reviewed per run | — |
-
-Trim volume with two switches: `emit_finding_events = false` drops the per-finding counter;
-`emit_outcome_sync = false` keeps only the initial-post events on `llm_review.findings`.
-
-## Dashboards
-
-- **Throughput** — `rate(llm_review.runs[5m])` by `repo`, `status`.
-- **Saturation** — `histogram_quantile(0.95, llm_review.latency.queue_seconds_bucket)`. Rising means raise `max_merge_requests_per_poll`.
-- **Cost** — `sum(rate(llm_review.cost.usd[1d])) by (repo, model)`.
-- **Precision** — `llm_review.findings{status="resolved"} / llm_review.findings{status="posted"}` by `severity`.
-- **Reliability** — `rate(llm_review.failures[5m])` by `operation`.
-
-## Traces
-
-Each review is one trace. `llm_review.run` opens a child span per stage. A trace shows
-where a review's wall-clock went — a slow review is almost always the agent stage.
-
-```text
-llm_review.run              repo, mr_iid, sha, run_id
-├─ llm_review.checkout      repo, sha
-├─ llm_review.provenance    repo                       (governance only)
-├─ llm_review.agent         repo, model, tokens_input/output/total, cost_usd, exit_code
-└─ llm_review.post          repo, dry_run, findings_posted/planned/skipped
-```
-
-Any OTel backend (Tempo, Jaeger, Honeycomb, Grafana, Datadog) breaks latency, tokens, and
-cost down by stage and model. Spans export only when `otlp_endpoint` is set.
-
-## Cardinality
-
-Metric attributes stay low-cardinality. MR IID, SHA, file path, line, fingerprint, and
-discussion ID live in SQLite or span attributes, never as metric labels. Spans carry the
-per-MR context for trace-level drilldown.
-
-## Reading metrics without a collector
-
-Three read-only paths return the same rollups without OTLP, without writes, and without the
-Slack attachment. None require the poller to be running.
-
-### Over MCP
-
-The [MCP server](/mcp) exposes the metrics tools to any chat client or agent. Ask in plain
-language; the client picks the tool.
-
-| Ask the agent | Tool called |
-|---|---|
-| Counts, tokens, and cost for `acme/app` over the last 48 hours. | `get_metrics` |
-| Full governance report for the last 7 days. | `get_governance_report` |
-| Which finding categories `acme/app` disputes most. | `get_dispute_classes` |
-
-`get_metrics(since_hours=48, project="acme/app")` returns:
-
-```json
-{
-  "window_hours": 48,
-  "project": "acme/app",
-  "reviews_total": 124,
-  "by_status": { "success": 70, "no_findings": 48, "failed": 5, "running": 1 },
-  "findings_total": 74,
-  "tokens_total_sum": 13125521,
-  "cost_usd_sum": 25.61
-}
-```
-
-`get_governance_report` returns the full nested report (the same document as `bubo report`,
-below). Every metrics tool reads SQLite and is safe to call anytime — only `review_change`
-writes.
-
-### Recipe — reproduce the overview metrics
-
-The [overview](/overview) figures come from `bubo report`, the rollup also exposed as
-`get_governance_report`. Run it against your install:
-
-```sh
-# Full JSON report for a fixed window (the overview's month view).
-bubo report --format json --since 2026-06-01 --until 2026-07-01 > report.json
-
-# Rolling window, one project.
-bubo report --format json --since-hours 720 --project acme/app
-```
-
-The JSON maps to the overview panels:
-
-| Overview panel | Report field |
-|---|---|
-| Total review runs / completed / completion rate | `reviews.reviews_total`, `reviews.by_status` |
-| Findings returned / posted | `reviews.findings_total` |
-| Findings tracked (outcome records) | `outcomes.total` |
-| Developer replied | `outcomes.developer_replied` |
-| Resolved / Resolution rate | `outcomes.resolved`, `outcomes.accept_rate` |
-| Disputed / False positives | `outcomes.disputed`, `outcomes.false_positive` |
-| Findings accepted / — of which blocking | `roi.accepted`, `roi.blocking_accepted` |
-| Accepted per $ | `roi.accepted_per_usd` |
-| Total tokens / total cost | `reviews.tokens_total_sum`, `reviews.cost_usd_sum` |
-| Latency p50 / p95 / avg | `latency.p50_seconds`, `latency.p95_seconds`, `latency.avg_seconds` |
-
-Export one tabular section as CSV instead of JSON:
-
-```sh
-bubo report --format csv --section audit --since-hours 720 > audit.csv
-# --section noise_trend      → daily false-positive trend
-# --section dispute_classes  → per-category dispute rates
-```
-
-Two overview numbers are not report fields. `cost_usd_sum` is the recorded provider cost; the
-overview's all-in cost and its reviewer-time dollar value are estimates it documents in its own
-footnote. The changed/added/removed LoC and files-reviewed counts are derived from diff stats,
-not from `bubo report`.
-
-### Static HTML dashboard
-
-`bubo ui-export` writes a self-contained static site — recent reviews, health, and the same
-report windows — with no server and no writes to the database.
-
-```sh
-bubo ui-export --out ./bubo-ui
-open ./bubo-ui/index.html          # macOS; or xdg-open, or serve the directory
-```
-
-The bundle is `index.html` plus `data.json`, a read-only snapshot holding the 24h/7d/30d
-reports, the 50 most recent reviews, health, and the effective config. It loads over `file://`
-or from any static host, and never touches `reviewed_mrs`.
+Prices are illustrative USD per million tokens. See the
+[configuration reference](/configuration#telemetry) for all settings.

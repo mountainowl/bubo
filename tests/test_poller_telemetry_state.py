@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bubo import gitlab, paths, poller
+from bubo.analytics_config import AnalyticsConfig
 from bubo.findings import build_position, changed_lines_from_diffs
 from bubo.review_config import ReviewConfig
 from bubo.telemetry.config import TelemetryConfig
@@ -124,7 +125,7 @@ def test_empty_gitlab_discussion_id_is_not_marked_posted() -> None:
 
 def test_finding_metric_flag_suppresses_finding_emission() -> None:
     class FakeTelemetry:
-        config = TelemetryConfig(enabled=True, emit_finding_events=False)
+        config = TelemetryConfig(analytics=AnalyticsConfig(enabled=True), emit_finding_events=False)
 
         def __init__(self) -> None:
             self.count = 0
