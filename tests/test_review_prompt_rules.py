@@ -74,6 +74,16 @@ def test_worker_passes_rendered_meta_prompt_to_agent(
     assert "{{MAX_FINDINGS_PER_REVIEW}}" not in prompt
 
 
+def test_reviewer_skill_no_findings_instruction_matches_the_contract() -> None:
+    """The interactive skill once said to "return exactly" a sentence fragment
+    (`a schema-version-1 result ...`), which is neither JSON nor the contract."""
+    skill = Path(__file__).resolve().parents[1] / "skills" / "code-reviewer" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    assert "return exactly" not in text
+    assert "a schema-version-1 result with explicit status and coverage" not in text
+    assert "empty `findings` array" in text
+
+
 def test_contract_does_not_turn_standing_review_conditions_into_incomplete() -> None:
     """Every review is read-only and executes nothing. When the contract let models list
     that as a limitation, live Haiku/Sonnet/Opus runs marked 26 of 45 reviews incomplete
