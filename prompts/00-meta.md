@@ -20,7 +20,7 @@
 
 1. Identify stated requirements, contracts, and invariants. Label inferred intent separately.
 2. Select checks relevant to the artifact: API authorization, UI state, migration integrity, infrastructure permissions, concurrency, memory safety, or ordinary business logic as applicable.
-3. Trace triggering inputs or states through concrete behavior, including relevant callers and failure paths.
+3. Trace triggering inputs or states through concrete behavior, including relevant callers and failure paths. When changed code catches a configuration, schema, or contract error and turns it into an ordinary result (a failure code, `false`, a note), check whether a caller already fails, logs, or alerts on that error, and ask whether it should propagate there.
 4. Attempt to disprove every candidate with counterevidence. A test is counterevidence only if its setup and assertions exercise the claimed path; tests can encode a regression.
 5. Distinguish source inspection, hypothetical reasoning, and observed execution. Never claim tests passed or a failure reproduced without execution evidence.
 6. Deduplicate independent root causes and rank findings by impact before applying output limits. Security, data integrity, and severe availability defects precede minor issues.
