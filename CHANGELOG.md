@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.30.0](https://github.com/mountainowl/bubo/compare/v0.29.2...v0.30.0) (2026-10-18)
+
+
+### Features
+
+* **analytics:** export explicit developer agreement ([#274](https://github.com/mountainowl/bubo/issues/274)) ([2f9e9d1](https://github.com/mountainowl/bubo/commit/2f9e9d17f86a98ddebd7d7659a8b31e443797b4e))
+* **analytics:** label finding outcomes with the review that produced them ([#275](https://github.com/mountainowl/bubo/issues/275)) ([b91f0fd](https://github.com/mountainowl/bubo/commit/b91f0fd028cbd5fa21698c99a10c175438575aee))
+* **analytics:** tag every event with the Bubo surface that sent it ([#279](https://github.com/mountainowl/bubo/issues/279)) ([8bfa1c2](https://github.com/mountainowl/bubo/commit/8bfa1c2648f975f1adcc982327d514f992225489))
+* **mcp:** report MCP reviews to product analytics ([#280](https://github.com/mountainowl/bubo/issues/280)) ([dac2078](https://github.com/mountainowl/bubo/commit/dac2078dca3206e09e87fe294e222b3e31f33027))
+* **metrics:** record real review cost; give Claude its own model ([#272](https://github.com/mountainowl/bubo/issues/272)) ([1020e65](https://github.com/mountainowl/bubo/commit/1020e65c41d5af95032e617071174969153edbcd))
+* **telemetry:** send prompt_version with every review run ([#276](https://github.com/mountainowl/bubo/issues/276)) ([82ee8e7](https://github.com/mountainowl/bubo/commit/82ee8e74cd53f1a2cce8e0a73e93ab51dd4af5af))
+
+
+### Bug Fixes
+
+* **analytics:** count comments posted before a review failed ([#277](https://github.com/mountainowl/bubo/issues/277)) ([96c82d4](https://github.com/mountainowl/bubo/commit/96c82d41aef7c45a4d231c3e75fffbf22dcca284))
+* **analytics:** keep install_id stable on machines without a MAC address ([#278](https://github.com/mountainowl/bubo/issues/278)) ([b9b8320](https://github.com/mountainowl/bubo/commit/b9b8320528dca5a4d59b18dec069b6fd9f640b98))
+* refine review reliability ([#248](https://github.com/mountainowl/bubo/issues/248)) ([446c8be](https://github.com/mountainowl/bubo/commit/446c8be45fa9b42ff4e0150047d84f807d957044))
+* **telemetry:** count each finding outcome once and keep its labels ([#273](https://github.com/mountainowl/bubo/issues/273)) ([47b484e](https://github.com/mountainowl/bubo/commit/47b484e1fe4e5e91a17ef13bce016e1ab11d61dd))
+
+
+### Performance Improvements
+
+* **verify:** stop running lenses once the vote is settled ([#269](https://github.com/mountainowl/bubo/issues/269)) ([ab7cb9c](https://github.com/mountainowl/bubo/commit/ab7cb9c46b57059cd27c187ee22c7a56f08c3924))
+
 ## [0.29.2](https://github.com/mountainowl/bubo/compare/v0.29.1...v0.29.2) (2026-10-18)
 
 
