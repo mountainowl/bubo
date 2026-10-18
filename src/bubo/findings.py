@@ -50,7 +50,11 @@ from bubo.types import JsonObject
 # ``changed_lines_from_diffs`` do not pay the compile cost on every call.
 _FENCE_START = re.compile(r"^```(?:json)?\s*")
 _FENCE_END = re.compile(r"\s*```$")
-_JSON_ARRAY_START = re.compile(r"\[")
+# A salvaged findings array must be a list of objects, so it can only start
+# with ``[`` followed by optional whitespace and ``{`` or ``]``. Anchoring the
+# scan there skips the thousands of other ``[`` in a transcript, each of which
+# used to cost a raw_decode over the rest of the text.
+_JSON_ARRAY_START = re.compile(r"\[(?=\s*[{\]])")
 _CODEX_ASSISTANT_MARKER = re.compile(r"(?m)^codex\s*$")
 _HUNK_HEADER = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
@@ -497,8 +501,7 @@ def extract_findings(raw: str, max_findings: int | None = None) -> list[JsonObje
             describe(
                 "review JSON must be an array or an object with findings",
                 reason=(
-                    "the reviewer did not return the structured findings JSON the contract "
-                    "requires"
+                    "the reviewer did not return the structured findings JSON the contract requires"
                 ),
                 fix=(
                     "check the review prompt/model and the run transcript; the agent may "
@@ -891,4 +894,3 @@ def finding_fingerprint(project: str, iid: int, sha: str, finding: JsonObject) -
         "body": " ".join(finding_body(finding).split()),
     }
     return stable_hash(payload)
-
