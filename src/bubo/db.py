@@ -1167,7 +1167,6 @@ def record_finding_outcome(
 
 
 FEEDBACK_TEXT_LIMIT = 8000
-_REJECTING_VERDICTS = ("rejected", "disagrees", "false_positive")
 
 
 def record_finding_feedback(
