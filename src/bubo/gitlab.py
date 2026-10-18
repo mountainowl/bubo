@@ -245,16 +245,16 @@ def classify_discussion_outcome(
         bool(note.get("resolvable")) and bool(note.get("resolved")) for note in notes
     )
     active_notes = [note for note in notes if not note.get("deleted")]
-    reply_notes = [
-        note
-        for note in active_notes
-        if ((note.get("author") or {}).get("username") or "") != bot_username
-    ]
-    bot_notes = [
-        note
-        for note in active_notes
-        if ((note.get("author") or {}).get("username") or "") == bot_username
-    ]
+    # Bubo opened this discussion, so its first note is the finding even when
+    # it was posted under an earlier bot identity (#127). Later notes count as
+    # Bubo's only when written by the current bot account.
+    root = notes[0] if notes else None
+
+    def is_bot(note: JsonObject) -> bool:
+        return note is root or (((note.get("author") or {}).get("username") or "") == bot_username)
+
+    reply_notes = [note for note in active_notes if not is_bot(note)]
+    bot_notes = [note for note in active_notes if is_bot(note)]
     developer_replied = bool(reply_notes)
     note_text = "\n".join(str(note.get("body") or "").lower() for note in active_notes)
     false_positive = "[llm-review:false-positive]" in note_text

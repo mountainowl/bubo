@@ -214,6 +214,9 @@ def init_db() -> None:
               resolution_evidence text not null default 'unknown',
               developer_disposition text not null default 'unknown',
               disposition_evidence text not null default 'unknown',
+              reply_hash text not null default '',
+              reply_verdict text not null default '',
+              reply_false_positive integer not null default 0,
               last_checked_at text not null
             )
             """
@@ -225,6 +228,11 @@ def init_db() -> None:
             "resolution_evidence": "text not null default 'unknown'",
             "developer_disposition": "text not null default 'unknown'",
             "disposition_evidence": "text not null default 'unknown'",
+            # The reply text the cached classifier verdict was computed for, so
+            # a new or edited developer reply is classified again (#127).
+            "reply_hash": "text not null default ''",
+            "reply_verdict": "text not null default ''",
+            "reply_false_positive": "integer not null default 0",
         }.items():
             ensure_column(db, "finding_outcomes", name, definition)
         db.execute(
@@ -845,7 +853,7 @@ def prior_verification(
         return None
     try:
         votes = json.loads(row[1])
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not isinstance(votes, list) or not votes:
         return None
@@ -1064,9 +1072,10 @@ def record_finding_outcome(
               finding_id,project,iid,sha,fingerprint,discussion_id,
               resolved,deleted,developer_replied,disputed,false_positive,duplicate,
               resolved_at,merged_unresolved,reply_classified,resolution_source,
-              resolution_evidence,developer_disposition,disposition_evidence,last_checked_at
+              resolution_evidence,developer_disposition,disposition_evidence,
+              reply_hash,reply_verdict,reply_false_positive,last_checked_at
               )
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(finding_id) do update set
               discussion_id=excluded.discussion_id,
               resolved=excluded.resolved,
@@ -1082,12 +1091,23 @@ def record_finding_outcome(
               resolution_evidence=excluded.resolution_evidence,
               developer_disposition=case
                 when excluded.developer_disposition='unknown'
+                  and not (excluded.reply_hash != ''
+                           and finding_outcomes.disposition_evidence='reply_classifier')
                   then finding_outcomes.developer_disposition
                 else excluded.developer_disposition end,
               disposition_evidence=case
                 when excluded.developer_disposition='unknown'
+                  and not (excluded.reply_hash != ''
+                           and finding_outcomes.disposition_evidence='reply_classifier')
                   then finding_outcomes.disposition_evidence
                 else excluded.disposition_evidence end,
+              reply_hash=case when excluded.reply_hash=''
+                then finding_outcomes.reply_hash else excluded.reply_hash end,
+              reply_verdict=case when excluded.reply_hash=''
+                then finding_outcomes.reply_verdict else excluded.reply_verdict end,
+              reply_false_positive=case when excluded.reply_hash=''
+                then finding_outcomes.reply_false_positive
+                else excluded.reply_false_positive end,
               last_checked_at=excluded.last_checked_at
             """,
             (
@@ -1112,6 +1132,9 @@ def record_finding_outcome(
                     developer_disposition or outcome.get("developer_disposition"), outcome
                 ),
                 _outcome_evidence(disposition_evidence or outcome.get("disposition_evidence")),
+                str(outcome.get("reply_hash") or ""),
+                str(outcome.get("reply_verdict") or ""),
+                int(bool(outcome.get("reply_false_positive", False))),
                 now(),
             ),
         )
@@ -1366,7 +1389,9 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
                    coalesce(fo.false_positive,0), coalesce(fo.duplicate,0),
                    rf.type, rf.severity, rf.category,
                    coalesce(fo.developer_disposition,'unknown'),
-                   rf.verified, rr.model, rr.prompt_version, rr.tone
+                   rf.verified, rr.model, rr.prompt_version, rr.tone,
+                   coalesce(fo.reply_hash,''), coalesce(fo.reply_verdict,''),
+                   coalesce(fo.reply_false_positive,0)
             from review_findings rf
             left join finding_outcomes fo
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
@@ -1406,6 +1431,9 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
             "model": row[17],
             "prompt_version": row[18],
             "tone": row[19],
+            "reply_hash": row[20],
+            "reply_verdict": row[21],
+            "reply_false_positive": bool(row[22]),
         }
         for row in rows
     ]

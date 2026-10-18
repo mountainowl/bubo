@@ -2550,6 +2550,31 @@ def outcome_project_id(cfg: ReviewConfig, project: str) -> str | None:
     return project_id(installation, cfg.provider, base, project)
 
 
+def _apply_reply_verdict(outcome: JsonObject, verdict: JsonObject, reply_hash: str) -> None:
+    """Fold a reply-classifier verdict into ``outcome`` and record what it covers."""
+    label = str(verdict.get("verdict") or "")
+    false_positive = bool(verdict.get("false_positive"))
+    if label == "rejected" or false_positive:
+        outcome["disputed"] = True
+        outcome["developer_disposition"] = "false_positive" if false_positive else "disagrees"
+        outcome["disposition_evidence"] = "reply_classifier"
+    if false_positive:
+        outcome["false_positive"] = True
+    # Agreement requires an explicit classifier conclusion ("accepted" is only
+    # "will fix"); resolution, code edits, and silence remain unknown. A false
+    # positive wins.
+    elif label == "agrees":
+        outcome["developer_agreed"] = True
+        outcome["developer_disposition"] = "agrees"
+        outcome["disposition_evidence"] = "reply_classifier"
+    # A non-empty reply_hash marks a classifier verdict, which replaces an
+    # earlier classifier-derived disposition (never an explicit marker).
+    outcome["reply_classified"] = True
+    outcome["reply_hash"] = reply_hash
+    outcome["reply_verdict"] = label
+    outcome["reply_false_positive"] = false_positive
+
+
 def sync_outcomes(limit: int = 200) -> int:
     """Refresh provider-side outcomes for up to ``limit`` posted findings.
 
@@ -2585,19 +2610,26 @@ def sync_outcomes(limit: int = 200) -> int:
             # When the developer replied but no explicit dispute marker was
             # found, ask the configured agent whether the reply accepts or
             # rejects the finding — so a thread resolved after a rebuttal is
-            # not miscounted as a success. Classify once per finding (the LLM
-            # verdict is cached via reply_classified) to bound cost.
-            already_classified = bool(finding.get("reply_classified"))
-            outcome["reply_classified"] = already_classified
+            # not miscounted as a success. The verdict is cached against a hash
+            # of the reply text: a new or edited reply is classified again
+            # (#127), an unchanged one never pays for a second call.
             reply_text = str(outcome.get("_reply_text") or "")
-            if (
+            reply_hash = stable_hash(reply_text.strip()) if reply_text.strip() else ""
+            stored = {
+                "hash": str(finding.get("reply_hash") or ""),
+                "verdict": str(finding.get("reply_verdict") or ""),
+                "false_positive": bool(finding.get("reply_false_positive")),
+            }
+            outcome["reply_classified"] = bool(finding.get("reply_classified"))
+            needs_verdict = (
                 outcome.get("developer_replied")
                 and not outcome.get("disputed")
                 and str(outcome.get("developer_disposition") or "unknown") == "unknown"
-                and not already_classified
-                and reply_text.strip()
-                and classifications < MAX_REPLY_CLASSIFICATIONS_PER_SYNC
-            ):
+                and bool(reply_hash)
+            )
+            if needs_verdict and stored["hash"] == reply_hash and stored["verdict"]:
+                _apply_reply_verdict(outcome, stored, reply_hash)
+            elif needs_verdict and classifications < MAX_REPLY_CLASSIFICATIONS_PER_SYNC:
                 classifications += 1
                 # Bill the classifier call to the review run that raised the finding.
                 classify_meter, classify_meter_token = start_metering()
@@ -2615,25 +2647,13 @@ def sync_outcomes(limit: int = 200) -> int:
                         tokens=classify_meter.tokens,
                         cost_usd=classify_meter.cost_usd,
                     )
-                # "error" is a transient classifier failure — leave the
-                # finding unclassified so a later sync retries it.
+                # "error" is a transient classifier failure — keep the last
+                # verdict and leave this reply text unclassified so a later
+                # sync retries it.
                 if verdict["verdict"] != "error":
-                    if verdict["verdict"] == "rejected" or verdict["false_positive"]:
-                        outcome["disputed"] = True
-                        outcome["developer_disposition"] = (
-                            "false_positive" if verdict["false_positive"] else "disagrees"
-                        )
-                        outcome["disposition_evidence"] = "reply_classifier"
-                    if verdict["false_positive"]:
-                        outcome["false_positive"] = True
-                    # Agreement requires an explicit classifier conclusion
-                    # ("accepted" is only "will fix"); resolution, code edits,
-                    # and silence remain unknown. A false positive wins.
-                    elif verdict["verdict"] == "agrees":
-                        outcome["developer_agreed"] = True
-                        outcome["developer_disposition"] = "agrees"
-                        outcome["disposition_evidence"] = "reply_classifier"
-                    outcome["reply_classified"] = True
+                    _apply_reply_verdict(outcome, verdict, reply_hash)
+                elif stored["verdict"]:
+                    _apply_reply_verdict(outcome, stored, str(stored["hash"]))
                 log(
                     "reply_classified",
                     project=project,
@@ -2641,6 +2661,10 @@ def sync_outcomes(limit: int = 200) -> int:
                     verdict=verdict["verdict"],
                     false_positive=verdict["false_positive"],
                 )
+            elif needs_verdict and stored["verdict"]:
+                # Over this run's classifier budget: keep the previous verdict
+                # until a later sync classifies the new reply text.
+                _apply_reply_verdict(outcome, stored, str(stored["hash"]))
             record_finding_outcome(
                 project=project,
                 iid=iid,

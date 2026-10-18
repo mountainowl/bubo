@@ -703,10 +703,15 @@ def classify_graphql_thread_outcome(
     replies are detected from non-bot comments in the thread.
     """
     comments = thread.get("comments") or []
+    # The thread root is Bubo's finding even when it was posted under an
+    # earlier bot identity (#127); it is never a developer reply.
+    root = root_review_comment(thread)
     replies = [
         c
         for c in comments
-        if (c.get("login") or "") != bot_username and is_human_reply(cast(JsonObject, c))
+        if c is not root
+        and (c.get("login") or "") != bot_username
+        and is_human_reply(cast(JsonObject, c))
     ]
     developer_replied = bool(replies)
     reply_text = "\n".join(str(c.get("body") or "").lower() for c in replies)
@@ -714,7 +719,7 @@ def classify_graphql_thread_outcome(
     duplicate = "[llm-review:duplicate]" in reply_text
     disputed = "[llm-review:disputed]" in reply_text or false_positive
     resolved = bool(thread.get("is_resolved"))
-    bot_comment = first_bot_comment(thread, bot_username)
+    bot_comment = first_bot_comment(thread, bot_username) or root
     disposition = developer_disposition_from_replies(
         replies, reply_classifier_result=reply_classifier_result
     )
@@ -776,8 +781,7 @@ def classify_review_thread_outcome(
     developer_replies = [
         r
         for r in active_replies
-        if ((r.get("user") or {}).get("login") or "") != bot_username
-        and is_human_reply(r)
+        if ((r.get("user") or {}).get("login") or "") != bot_username and is_human_reply(r)
     ]
     developer_replied = bool(developer_replies)
     reply_text = "\n".join(str(r.get("body") or "").lower() for r in developer_replies)
