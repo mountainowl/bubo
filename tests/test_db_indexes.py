@@ -145,12 +145,12 @@ def test_audit_rows_outcome_subqueries_use_index(monkeypatch: pytest.MonkeyPatch
         pytest.param(lambda: db.outcomes_for("g/p", 1, "abc"), id="outcomes_for"),
         pytest.param(db.posted_findings_for_outcome_sync, id="posted_findings_for_outcome_sync"),
         pytest.param(lambda: db.metrics_summary(24), id="metrics_summary"),
-        pytest.param(lambda: db.provenance_summary(), id="provenance_summary"),
-        pytest.param(lambda: db.outcomes_summary(), id="outcomes_summary"),
-        pytest.param(lambda: db.noise_trend(), id="noise_trend"),
-        pytest.param(lambda: db.roi_proxy(), id="roi_proxy"),
-        pytest.param(lambda: db.latency_summary(), id="latency_summary"),
-        pytest.param(lambda: db.policy_decisions_summary(), id="policy_decisions_summary"),
+        pytest.param(db.provenance_summary, id="provenance_summary"),
+        pytest.param(db.outcomes_summary, id="outcomes_summary"),
+        pytest.param(db.noise_trend, id="noise_trend"),
+        pytest.param(db.roi_proxy, id="roi_proxy"),
+        pytest.param(db.latency_summary, id="latency_summary"),
+        pytest.param(db.policy_decisions_summary, id="policy_decisions_summary"),
     ],
 )
 def test_hot_and_report_readers_do_not_full_scan(
