@@ -150,7 +150,15 @@ _KNOWN_EVENTS = frozenset(
 # poller's outcome sync writes to SQLite; a value outside the set normalizes to
 # "other" so a future column can never leak as an arbitrary string.
 _KNOWN_OUTCOMES = frozenset(
-    {"resolved", "deleted", "developer_replied", "disputed", "false_positive", "duplicate"}
+    {
+        "resolved",
+        "deleted",
+        "developer_replied",
+        "disputed",
+        "false_positive",
+        "duplicate",
+        "developer_agreed",
+    }
 )
 
 # Cap any string attribute (only model survives as a free-ish value) and reject

@@ -143,6 +143,7 @@ def safe_context(attrs):
             "disputed",
             "false_positive",
             "duplicate",
+            "developer_agreed",
         },
         "review_mode": {"diff", "repo", "repo_review"},
         "outcome": {"verified", "refuted", "opened", "recovered"},
