@@ -24,7 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from bubo.errors import describe
 from bubo.types import JsonObject
@@ -39,6 +39,29 @@ API_RETRY_STATUSES = {429, 500, 502, 503, 504}
 # Predicate for provider-specific retryable HTTP errors beyond the shared
 # status set (e.g. GitHub's primary rate-limit, which is a 403 not a 429).
 RetryPredicate = Callable[[urllib.error.HTTPError], bool]
+
+
+_SHAPE_REASON = (
+    "the API returned an unexpected response shape (often an auth error "
+    "page, a redirect, or an outage rendered as non-JSON)"
+)
+_SHAPE_FIX = (
+    "check the API URL, token validity/scope, and the host's status; inspect the raw response."
+)
+
+
+def expect_dict(data: Any, summary: str) -> JsonObject:
+    """Return ``data`` if it is a JSON object, else raise the unexpected-shape error."""
+    if not isinstance(data, dict):
+        raise RuntimeError(describe(summary, reason=_SHAPE_REASON, fix=_SHAPE_FIX))
+    return cast(JsonObject, data)
+
+
+def expect_list(data: Any, summary: str) -> list[Any]:
+    """Return ``data`` if it is a JSON array, else raise the unexpected-shape error."""
+    if not isinstance(data, list):
+        raise RuntimeError(describe(summary, reason=_SHAPE_REASON, fix=_SHAPE_FIX))
+    return data
 
 
 def retry_delay(headers: object, attempt: int) -> float:

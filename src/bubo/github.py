@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.parse
+from collections.abc import Iterator
 from typing import Any, cast
 
 from bubo import _http
@@ -96,30 +97,24 @@ def _next_link(headers: dict[str, str]) -> str | None:
     return None
 
 
-def api_pages(api_url: str, token: str, path: str) -> list[JsonObject]:
-    """Fetch all pages of a GitHub list endpoint, following ``Link`` next."""
+def iter_api_pages(api_url: str, token: str, path: str) -> Iterator[JsonObject]:
+    """Yield the objects of a GitHub list endpoint page by page, following ``Link`` next.
+
+    The next page is only requested once the caller has consumed the current
+    one, so a caller that stops early saves the remaining round-trips.
+    """
     sep = "&" if "?" in path else "?"
     url: str | None = api_url.rstrip("/") + f"{path}{sep}per_page=100"
-    out: list[JsonObject] = []
     while url:
         data, headers = _request(url, token, "GET")
-        if not isinstance(data, list):
-            raise RuntimeError(
-                describe(
-                    "GitHub API page did not return a list",
-                    reason=(
-                        "the API returned an unexpected response shape (often an auth error "
-                        "page, a redirect, or an outage rendered as non-JSON)"
-                    ),
-                    fix=(
-                        "check the API URL, token validity/scope, and the host's status; "
-                        "inspect the raw response."
-                    ),
-                )
-            )
-        out.extend(cast(JsonObject, item) for item in data if isinstance(item, dict))
+        data = _http.expect_list(data, "GitHub API page did not return a list")
+        yield from (cast(JsonObject, item) for item in data if isinstance(item, dict))
         url = _next_link(headers)
-    return out
+
+
+def api_pages(api_url: str, token: str, path: str) -> list[JsonObject]:
+    """Fetch all pages of a GitHub list endpoint, following ``Link`` next."""
+    return list(iter_api_pages(api_url, token, path))
 
 
 def _owner_repo(project: str) -> str:
@@ -138,21 +133,7 @@ def get_pr(cfg: ReviewConfig, token: str, project: str, number: int) -> JsonObje
     """Return a single pull-request payload."""
     repo = _owner_repo(project)
     data, _ = api(cfg.github_api_url, token, "GET", f"/repos/{repo}/pulls/{number}")
-    if not isinstance(data, dict):
-        raise RuntimeError(
-            describe(
-                "GitHub PR response was not an object",
-                reason=(
-                    "the API returned an unexpected response shape (often an auth error "
-                    "page, a redirect, or an outage rendered as non-JSON)"
-                ),
-                fix=(
-                    "check the API URL, token validity/scope, and the host's status; "
-                    "inspect the raw response."
-                ),
-            )
-        )
-    return cast(JsonObject, data)
+    return _http.expect_dict(data, "GitHub PR response was not an object")
 
 
 def get_pr_files(cfg: ReviewConfig, token: str, project: str, number: int) -> list[JsonObject]:
@@ -182,21 +163,7 @@ def get_pr_review_comment(
     repo = _owner_repo(project)
     encoded = urllib.parse.quote(comment_id, safe="")
     data, _ = api(cfg.github_api_url, token, "GET", f"/repos/{repo}/pulls/comments/{encoded}")
-    if not isinstance(data, dict):
-        raise RuntimeError(
-            describe(
-                "GitHub review-comment response was not an object",
-                reason=(
-                    "the API returned an unexpected response shape (often an auth error "
-                    "page, a redirect, or an outage rendered as non-JSON)"
-                ),
-                fix=(
-                    "check the API URL, token validity/scope, and the host's status; "
-                    "inspect the raw response."
-                ),
-            )
-        )
-    return cast(JsonObject, data)
+    return _http.expect_dict(data, "GitHub review-comment response was not an object")
 
 
 def pr_review_comment_deleted(
@@ -327,20 +294,7 @@ def graphql(api_url: str, token: str, query: str, variables: JsonObject) -> Json
     data, _ = _request(
         _graphql_url(api_url), token, "POST", {"query": query, "variables": variables}
     )
-    if not isinstance(data, dict):
-        raise RuntimeError(
-            describe(
-                "GitHub GraphQL response was not an object",
-                reason=(
-                    "the API returned an unexpected response shape (often an auth error "
-                    "page, a redirect, or an outage rendered as non-JSON)"
-                ),
-                fix=(
-                    "check the API URL, token validity/scope, and the host's status; "
-                    "inspect the raw response."
-                ),
-            )
-        )
+    data = _http.expect_dict(data, "GitHub GraphQL response was not an object")
     if data.get("errors"):
         raise RuntimeError(
             describe(
@@ -350,21 +304,7 @@ def graphql(api_url: str, token: str, query: str, variables: JsonObject) -> Json
             )
         )
     result = data.get("data")
-    if not isinstance(result, dict):
-        raise RuntimeError(
-            describe(
-                "GitHub GraphQL response missing data",
-                reason=(
-                    "the API returned an unexpected response shape (often an auth error "
-                    "page, a redirect, or an outage rendered as non-JSON)"
-                ),
-                fix=(
-                    "check the API URL, token validity/scope, and the host's status; "
-                    "inspect the raw response."
-                ),
-            )
-        )
-    return cast(JsonObject, result)
+    return _http.expect_dict(result, "GitHub GraphQL response missing data")
 
 
 # Query for a PR's review threads. ``isResolved`` is the resolution state
@@ -806,32 +746,12 @@ def pulls_updated_after(
     older than the cutoff.
     """
     repo = _owner_repo(project)
-    path = f"/repos/{repo}/pulls?state=all&sort=updated&direction=desc&per_page=100"
-    url: str | None = cfg.github_api_url.rstrip("/") + path
+    path = f"/repos/{repo}/pulls?state=all&sort=updated&direction=desc"
     out: list[JsonObject] = []
-    while url:
-        data, headers = _request(url, token, "GET")
-        if not isinstance(data, list):
-            raise RuntimeError(
-                describe(
-                    "GitHub API page did not return a list",
-                    reason=(
-                        "the API returned an unexpected response shape (often an auth error "
-                        "page, a redirect, or an outage rendered as non-JSON)"
-                    ),
-                    fix=(
-                        "check the API URL, token validity/scope, and the host's status; "
-                        "inspect the raw response."
-                    ),
-                )
-            )
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("updated_at") or "") < updated_after:
-                return out
-            out.append(cast(JsonObject, item))
-        url = _next_link(headers)
+    for item in iter_api_pages(cfg.github_api_url, token, path):
+        if str(item.get("updated_at") or "") < updated_after:
+            break
+        out.append(item)
     return out
 
 
