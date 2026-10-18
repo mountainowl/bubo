@@ -826,8 +826,24 @@ def write_job(project: str, change: JsonObject) -> Path:
     path = paths.JOBS / f"{slug(project)}-{number}-{sha[:12]}.json"
     from bubo.update_identity import atomic_json
 
-    atomic_json(path, {"project": project, "mr": change, "queued_at": now()})
+    atomic_json(
+        path,
+        {
+            "project": project,
+            "mr": change,
+            "queued_at": now(),
+            "surface": analytics.current_surface(),
+        },
+    )
     return path
+
+
+def job_surface(job: Path) -> str:
+    """The analytics surface of the poller that queued ``job``."""
+    try:
+        return str(json.loads(job.read_text(encoding="utf-8")).get("surface") or "unknown")
+    except OSError, ValueError, AttributeError:
+        return "unknown"
 
 
 def queue_latency_seconds(job_data: JsonObject) -> float | None:
@@ -2958,6 +2974,9 @@ def main() -> int:
         if args.command == "run-once":
             if args.service_action is not None:
                 parser.error("usage: bubo-poller run-once")
+            analytics.set_surface(
+                "github_action" if os.environ.get("GITHUB_ACTIONS") == "true" else "run_once"
+            )
             return run_once()
         if args.command is not None:
             if args.command != "service" or args.service_action not in {"start", "stop", "status"}:
@@ -2984,6 +3003,7 @@ def main() -> int:
                     from bubo.update_supervisor import delegate
 
                     delegate("service")
+                analytics.set_surface("service")
                 return run_foreground(args.service_token) if args.foreground else start_detached()
             if args.service_action == "stop":
                 stopped = stop_service()
@@ -3010,6 +3030,7 @@ def main() -> int:
             )
             return 0
         if args.worker:
+            analytics.set_surface(job_surface(args.worker))
             return worker(args.worker)
         parser.error(
             "bare bubo-poller is no longer supported; run "
