@@ -908,3 +908,87 @@ def test_outcome_sync_false_positive_beats_agreement() -> None:
         assert row == ("false_positive", "reply_classifier", 1, 1, 1)
     finally:
         paths.DB = original_db
+
+
+def _otel_finding_points(reader) -> dict[tuple[str, str], int]:
+    """Sum ``llm_review.findings`` points by (status, category) from a real SDK reader."""
+    totals: dict[tuple[str, str], int] = {}
+    data = reader.get_metrics_data()
+    for resource in data.resource_metrics if data else []:
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                if metric.name != "llm_review.findings":
+                    continue
+                for point in metric.data.data_points:
+                    key = (point.attributes.get("status"), point.attributes.get("category"))
+                    totals[key] = totals.get(key, 0) + point.value
+    return totals
+
+
+def test_outcome_sync_otel_counts_each_outcome_once_with_finding_dimensions() -> None:
+    """Re-checking a still-resolved finding must not grow the OTel outcome counter.
+
+    Real ``ReviewTelemetry`` on a real SDK ``MeterProvider`` (cumulative
+    in-memory reader): one finding, resolved + replied once, synced 3 times.
+    """
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+    from opentelemetry.trace import NoOpTracerProvider
+
+    from bubo.telemetry.metrics import ReviewTelemetry
+
+    reader = InMemoryMetricReader()
+    meter = MeterProvider(metric_readers=[reader]).get_meter("bubo")
+    telemetry = ReviewTelemetry(
+        TelemetryConfig(analytics=AnalyticsConfig(enabled=True)),
+        providers=(NoOpTracerProvider().get_tracer("bubo"), meter),
+    )
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            with sqlite3.connect(paths.DB) as conn:
+                conn.execute(
+                    "insert into review_findings(project,iid,sha,fingerprint,file,line,status,"
+                    "discussion_id,body,updated_at,type,severity,category) "
+                    "values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        "group/repo",
+                        1,
+                        "sha",
+                        "fp",
+                        "src/A.py",
+                        1,
+                        "posted",
+                        "disc",
+                        "body",
+                        poller.now(),
+                        "issue",
+                        "blocking",
+                        "correctness",
+                    ),
+                )
+            cfg = ReviewConfig(gitlab_url="https://gitlab.com", telemetry_config=telemetry.config)
+            outcome = {
+                "resolved": True,
+                "deleted": False,
+                "developer_replied": True,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "resolved_at": None,
+                "merged_unresolved": False,
+            }
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeProvider(outcome)):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=telemetry):
+                        with patch("bubo.poller.analytics.analytics_enabled", return_value=False):
+                            for _ in range(3):
+                                assert poller.sync_outcomes(limit=1) == 1
+        assert _otel_finding_points(reader) == {
+            ("resolved", "correctness"): 1,
+            ("developer_replied", "correctness"): 1,
+        }
+    finally:
+        paths.DB = original_db
