@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from bubo import poller
+from bubo import paths, poller
 from bubo.telemetry.config import TelemetryConfig, telemetry_config_from_dict
 
 
@@ -94,11 +94,11 @@ def test_read_config_disables_quoted_boolean_telemetry_without_failing_reviews()
     # subclass) that flows through read_config's disable-on-error catch, so
     # telemetry ends up *off* rather than silently on. This is the
     # operator-visible behavior the bool_value hardening protects.
-    original_config = poller.CONFIG
+    original_config = paths.CONFIG
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            poller.CONFIG = Path(tmp) / "env.toml"
-            poller.CONFIG.write_text(
+            paths.CONFIG = Path(tmp) / "env.toml"
+            paths.CONFIG.write_text(
                 """
 [gitlab]
 url = "https://gitlab.com"
@@ -118,15 +118,15 @@ enabled = true
             with pytest.raises(ValueError, match=r"analytics\.enabled"):
                 poller.read_config()
     finally:
-        poller.CONFIG = original_config
+        paths.CONFIG = original_config
 
 
 def test_read_config_disables_invalid_telemetry_without_failing_reviews() -> None:
-    original_config = poller.CONFIG
+    original_config = paths.CONFIG
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            poller.CONFIG = Path(tmp) / "env.toml"
-            poller.CONFIG.write_text(
+            paths.CONFIG = Path(tmp) / "env.toml"
+            paths.CONFIG.write_text(
                 """
 [gitlab]
 url = "https://gitlab.com"
@@ -145,15 +145,15 @@ enabled = true
             cfg = poller.read_config()
             assert cfg.telemetry_config.enabled is False
     finally:
-        poller.CONFIG = original_config
+        paths.CONFIG = original_config
 
 
 def test_read_config_disables_malformed_telemetry_shape_without_failing_reviews() -> None:
-    original_config = poller.CONFIG
+    original_config = paths.CONFIG
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            poller.CONFIG = Path(tmp) / "env.toml"
-            poller.CONFIG.write_text(
+            paths.CONFIG = Path(tmp) / "env.toml"
+            paths.CONFIG.write_text(
                 """
 telemetry = "bad"
 [gitlab]
@@ -169,7 +169,7 @@ enabled = true
             cfg = poller.read_config()
             assert cfg.telemetry_config.enabled is False
     finally:
-        poller.CONFIG = original_config
+        paths.CONFIG = original_config
 
 
 def test_analytics_setting_controls_both_transports():

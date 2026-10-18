@@ -109,7 +109,6 @@ from bubo.governance_policy import (
 )
 from bubo.hash_utils import stable_hash
 from bubo.outcome_classifier import classify_developer_reply
-from bubo.paths import CONFIG, ROOT
 from bubo.prompt import render_meta_prompt as _render_meta_prompt
 from bubo.prompt import write_rendered_meta_prompt as write_rendered_prompt_file
 from bubo.provenance import ProvenanceSignal, compile_patterns, compute_provenance
@@ -248,8 +247,8 @@ _NOTE_CONFIDENCE = re.compile(r"\*\*Confidence:\*\*\s*([0-9.]+)", re.IGNORECASE)
 
 
 def reviewer_env(source: Mapping[str, str], cfg: ReviewConfig | None = None) -> dict[str, str]:
-    """Compatibility entrypoint preserving the poller's patchable ROOT binding."""
-    return _reviewer_env(source, cfg, root=ROOT)
+    """Reviewer env rooted at the current ``paths.ROOT`` (read at call time)."""
+    return _reviewer_env(source, cfg, root=paths.ROOT)
 
 
 def metered_agent_output(
@@ -667,7 +666,7 @@ def reconcile_prior_findings(
 
 def read_config() -> ReviewConfig:
     """Load and apply ``config/env.toml``."""
-    return load_review_config(CONFIG, log_event=log)
+    return load_review_config(paths.CONFIG, log_event=log)
 
 
 def normalize_config(cfg: JsonObject) -> ReviewConfig:

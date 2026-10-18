@@ -1,11 +1,11 @@
 import subprocess
 import sys
 
-from bubo import poller, review_environment
+from bubo import paths, poller, review_environment
 
 
 def test_poller_compatibility_entrypoint_keeps_patchable_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(poller, "ROOT", tmp_path)
+    monkeypatch.setattr(paths, "ROOT", tmp_path)
     source = {"PATH": "/usr/bin", "GITHUB_TOKEN": "must-not-pass"}
     assert poller.reviewer_env(source) == review_environment.reviewer_env(source, root=tmp_path)
     assert poller.reviewer_env(source)["BUBO_ROOT"] == str(tmp_path)
