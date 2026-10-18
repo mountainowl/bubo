@@ -40,9 +40,7 @@ Prefer `glab` for GitLab metadata and API calls. Use `git` for local checkout an
 
 Return only the findings allowed by the configured meta prompt.
 
-If there are no findings, return exactly:
-
-`a schema-version-1 result with explicit status and coverage`
+If there are no findings, return the schema-version-1 JSON object with an empty `findings` array, and set `status` and `coverage` as the meta prompt requires.
 
 ## Read-only execution and output
 
