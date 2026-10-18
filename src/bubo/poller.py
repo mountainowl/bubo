@@ -38,12 +38,12 @@ import os
 import re
 import secrets
 import shlex
-import shutil
 import subprocess
 import sys
 import time
 import urllib.error
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -51,6 +51,7 @@ from typing import Any, Literal, cast
 from bubo import analytics, github, gitlab, paths
 from bubo.config_values import ConfigError
 from bubo.db import (
+    active_review_sha,
     already_seen,
     claim_finding_reconciliation,
     connect_db,
@@ -58,8 +59,11 @@ from bubo.db import (
     disputed_class_stats,
     disputed_finding_classes,
     finding_seen,
+    head_stable_seconds,
     init_db,
+    last_completed_review_sha,
     latest_reviewed_row,
+    open_finding_with_identity,
     posted_findings_for_outcome_sync,
     prior_posted_findings_for_reconciliation,
     prompt_version,
@@ -87,6 +91,7 @@ from bubo.findings import (
     finding_comment_body,
     finding_fingerprint,
     normalize_finding_categories,
+    resolve_finding_line,
     surface_predicate_for_mode,
 )
 from bubo.governance_policy import (
@@ -110,7 +115,15 @@ from bubo.reconciliation import (
 )
 from bubo.review_config import ReviewConfig, load_review_config, review_config_from_dict
 from bubo.scm import ScmProvider, get_provider
-from bubo.scm.base import FindingThreadState, OutcomeMemo
+from bubo.scm.base import (
+    FindingThreadState,
+    OutcomeMemo,
+    git_added_lines,
+    git_is_ancestor,
+    path_slug,
+    prune_mirrors,
+    remove_worktree,
+)
 from bubo.secrets import redact_secrets
 from bubo.signals import (
     install_signal_handlers as _install_signal_handlers,
@@ -170,6 +183,31 @@ def log_subscription_gate(reason: str, **fields: object) -> None:
 
 class SubscriptionUnavailable(RuntimeError):
     pass
+
+
+class ReviewSuperseded(RuntimeError):
+    """The change's head moved past the reviewed SHA before posting.
+
+    Findings carry line numbers from the reviewed checkout; anchoring them on
+    a newer head would point at unrelated code, so the run posts nothing.
+    """
+
+    def __init__(self, reviewed_sha: str, current_sha: str) -> None:
+        super().__init__(f"head moved from {reviewed_sha[:12]} to {current_sha[:12]}")
+        self.reviewed_sha = reviewed_sha
+        self.current_sha = current_sha
+
+
+def superseded_head(change: JsonObject, reviewed_sha: str) -> str | None:
+    """Return the re-fetched change's head if it is no longer ``reviewed_sha``.
+
+    Uses the same provider-neutral :func:`sha_for` that produced the reviewed
+    SHA. A payload without a head SHA is not treated as superseded.
+    """
+    current = sha_for(change)
+    if isinstance(current, str) and current and reviewed_sha and current != reviewed_sha:
+        return current
+    return None
 
 
 class CircuitPaused(RuntimeError):
@@ -732,7 +770,7 @@ def render_meta_prompt(prompt_text: str, max_findings: int) -> str:
 
 def slug(value: str) -> str:
     """Make ``value`` safe for use as a path or filename component."""
-    return "".join(c if c.isalnum() else "-" for c in value).strip("-").lower()
+    return path_slug(value)
 
 
 def sha_for(change: JsonObject) -> str:
@@ -854,6 +892,38 @@ def fork_worker(job: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
+def review_blocker(cfg: ReviewConfig, project: str, number: int, sha: str) -> JsonObject | None:
+    """Decide whether an unseen head may start a review now.
+
+    Returns ``None`` to start it, or log fields explaining why not. A blocked
+    head is left unseen (no row is written for it), so a later poll
+    re-evaluates it:
+
+    * another head of the same change is queued/running (one review per
+      change at a time; the newest head wins when it finishes);
+    * ``[review].rereview = "off"`` and the change already has a completed
+      review of an earlier head;
+    * the head has not yet been stable for ``[review].settle_seconds``.
+    """
+    # Start the settle clock even while blocked, so waiting on an active
+    # review also counts toward the quiet period.
+    stable = head_stable_seconds(project, number, sha) if cfg.settle_seconds > 0 else None
+    active = active_review_sha(project, number, sha, ttl_seconds=cfg.timeout_seconds * 2)
+    if active:
+        return {"reason": "active_review", "active_sha": active}
+    if cfg.rereview == "off":
+        reviewed = last_completed_review_sha(project, number, sha)
+        if reviewed:
+            return {"reason": "rereview_off", "reviewed_sha": reviewed}
+    if stable is not None and stable < cfg.settle_seconds:
+        return {
+            "reason": "settling",
+            "stable_seconds": round(stable, 1),
+            "settle_seconds": cfg.settle_seconds,
+        }
+    return None
+
+
 @admitted(writable=True)
 def poll(*, worker_mode: str = "detached") -> int:
     """Run one poll cycle: scan projects, queue eligible changes, fork workers.
@@ -902,6 +972,12 @@ def poll(*, worker_mode: str = "detached") -> int:
     analytics.record_session_start(
         cfg.analytics_config, scm_provider=cfg.provider, projects_count=len(cfg.projects)
     )
+    # Mirrors are a cache keyed by project; drop the ones no longer configured.
+    try:
+        for pruned in prune_mirrors(cfg.projects):
+            log("git_mirror_pruned", poll_run_id=poll_run_id, mirror=pruned.name)
+    except OSError as exc:
+        log("git_mirror_prune_failed", poll_run_id=poll_run_id, error=type(exc).__name__)
     if inflight >= inflight_cap:
         log(
             "poll_throttled_inflight",
@@ -930,6 +1006,17 @@ def poll(*, worker_mode: str = "detached") -> int:
                 queued_ttl_seconds=cfg.timeout_seconds * 2,
                 failed_ttl_seconds=cfg.timeout_seconds,
             ):
+                continue
+            blocker = review_blocker(cfg, project, number, sha)
+            if blocker is not None:
+                log(
+                    "review_not_started",
+                    poll_run_id=poll_run_id,
+                    project=project,
+                    iid=number,
+                    sha=sha,
+                    **blocker,
+                )
                 continue
             record(project, number, sha, ReviewStatus.QUEUED)
             job = write_job(project, change)
@@ -979,13 +1066,15 @@ def cleanup_worktree(repo: Path) -> None:
 
     Guarded with a path-containment check so a misconfigured ``repo``
     path cannot ``rm -rf`` an arbitrary location. Resolves ``paths.WORK``
-    via the module so test monkey-patches reach this code.
+    via the module so test monkey-patches reach this code. A worktree of the
+    project's git mirror is detached with ``git worktree remove`` / ``prune``
+    (keeping the mirror); ``rmtree`` stays as the last resort.
     """
     try:
         repo.resolve().relative_to(paths.WORK.resolve())
     except ValueError:
         return
-    shutil.rmtree(repo, ignore_errors=True)
+    remove_worktree(repo)
 
 
 def review_prompt(project: str, change: JsonObject, cfg: ReviewConfig | None = None) -> str:
@@ -1226,6 +1315,102 @@ def capture_provenance(
         return None
 
 
+def incremental_review_directive(prior_sha: str, head_sha: str) -> str:
+    """Prompt addendum that scopes an incremental re-review to new commits."""
+    return (
+        f"Incremental re-review: this change was already reviewed at commit {prior_sha}. "
+        f"Report findings only on lines added or changed by the new commits, i.e. in "
+        f"`git diff {prior_sha}..{head_sha}`. Use the full change diff against the target "
+        "branch only as context, and do not repeat findings about code that has not "
+        f"changed since {prior_sha}; earlier findings are re-checked separately."
+    )
+
+
+def incremental_scope(
+    cfg: ReviewConfig, *, project: str, iid: int, sha: str, repo: Path
+) -> tuple[str, dict[str, JsonObject]] | None:
+    """Return ``(prompt directive, allowed changed lines)`` for an incremental review.
+
+    ``None`` means review the whole change: ``rereview`` is not
+    ``incremental``, there is no completed earlier review, or the earlier
+    reviewed commit is not an ancestor of the head (force-push/rebase) or is
+    missing from the checkout.
+    """
+    if cfg.rereview != "incremental":
+        return None
+    prior = last_completed_review_sha(project, iid, sha)
+    if not prior:
+        return None
+    try:
+        if not git_is_ancestor(repo, prior, sha):
+            log(
+                "incremental_review_fallback",
+                project=project,
+                iid=iid,
+                sha=sha,
+                prior_sha=prior,
+                reason="prior_not_ancestor",
+            )
+            return None
+        allowed = git_added_lines(repo, prior, sha)
+    except Exception as exc:
+        log(
+            "incremental_review_fallback",
+            project=project,
+            iid=iid,
+            sha=sha,
+            prior_sha=prior,
+            reason="git_failed",
+            error=type(exc).__name__,
+        )
+        return None
+    log(
+        "incremental_review",
+        project=project,
+        iid=iid,
+        sha=sha,
+        prior_sha=prior,
+        files=len(allowed),
+        lines=count_added_lines(allowed),
+    )
+    return incremental_review_directive(prior, sha), allowed
+
+
+def duplicate_open_finding(
+    *,
+    cfg: ReviewConfig,
+    token: str,
+    project: str,
+    number: int,
+    identity: str,
+    provider: ScmProvider,
+) -> JsonObject | None:
+    """Return the open Bubo thread this finding duplicates, if any.
+
+    Matches the sha-independent :func:`finding_identity` against findings
+    already posted on the change, then confirms the provider thread is still
+    open. A resolved, deleted, or unprovable (foreign) thread does not
+    suppress the new post; a provider error does, because the stored thread
+    is otherwise unknown-but-present and a duplicate is the likelier harm.
+    """
+    prior = open_finding_with_identity(project, number, identity)
+    if prior is None:
+        return None
+    try:
+        thread = provider.finding_thread(
+            cfg, token, project, number, prior["discussion_id"], provider.bot_username(), ""
+        )
+    except Exception as exc:
+        log(
+            "finding_duplicate_check_failed",
+            project=project,
+            iid=number,
+            error=type(exc).__name__,
+        )
+        return prior
+    return prior if thread.state is FindingThreadState.OPEN else None
+
+
 def post_or_plan_findings(
     *,
     cfg: ReviewConfig,
@@ -1238,6 +1423,7 @@ def post_or_plan_findings(
     provider: ScmProvider | None = None,
     repo: Path | None = None,
     pending_external_ids: list[bool] | None = None,
+    allowed_lines: dict[str, JsonObject] | None = None,
 ) -> tuple[int, int, int]:
     """Parse, filter, and post (or plan) findings for one change.
 
@@ -1262,6 +1448,14 @@ def post_or_plan_findings(
     ``mr`` is the change payload (kept named ``mr`` for call-site
     compatibility). ``repo`` is the checked-out worktree path the verifier
     subprocess runs in (``cwd``); only used when verification is enabled.
+
+    ``allowed_lines`` (incremental re-review) is a changed-line map of the
+    commits since the last completed review; a finding whose file/line is not
+    an added line there is recorded ``SKIPPED`` and not posted. ``None`` (the
+    default) applies no such restriction.
+
+    Raises :class:`ReviewSuperseded` (before posting anything) when the
+    re-fetched change's head is no longer the reviewed SHA.
     """
     provider = provider or get_provider(cfg)
     number = provider.change_number(mr)
@@ -1332,6 +1526,10 @@ def post_or_plan_findings(
         return (0, 0, 0)
     change = provider.get_change(cfg, token, project, number)
     changed = provider.changed_lines(cfg, token, project, number)
+    # Never anchor this checkout's line numbers on a newer head.
+    current_head = superseded_head(change, sha)
+    if current_head:
+        raise ReviewSuperseded(sha, current_head)
     posted = planned = skipped = 0
     # Verification accounting (opt-in; counts logged at the end — no silent
     # caps). ``verified_attempts`` is the count of findings the cap has let
@@ -1341,6 +1539,75 @@ def post_or_plan_findings(
         fp = finding_fingerprint(project, number, sha, finding)
         identity = finding_identity(project, number, finding)
         if finding_seen(project, number, sha, fp):
+            skipped += 1
+            continue
+        if allowed_lines is not None and resolve_finding_line(allowed_lines, finding) is None:
+            record_finding(
+                project=project,
+                iid=number,
+                sha=sha,
+                fingerprint=fp,
+                finding=finding,
+                status=FindingStatus.SKIPPED,
+                run_id=run_id,
+                finding_identity=identity,
+            )
+            emit_finding_metric(
+                telemetry,
+                repo=project,
+                status=FindingStatus.SKIPPED,
+                finding=finding,
+                dry_run=cfg.dry_run,
+            )
+            log(
+                "finding_skipped",
+                project=project,
+                iid=number,
+                file=finding.get("file") or finding.get("path"),
+                line=finding.get("line") or finding.get("new_line"),
+                reason="outside_incremental_range",
+            )
+            skipped += 1
+            continue
+        duplicate_of = duplicate_open_finding(
+            cfg=cfg,
+            token=token,
+            project=project,
+            number=number,
+            identity=identity,
+            provider=provider,
+        )
+        if duplicate_of is not None:
+            # Same finding (file + canonical body, any line, any commit) is
+            # already an open Bubo thread on this change: posting it again
+            # would only differ in wording/line. Recorded for audit.
+            record_finding(
+                project=project,
+                iid=number,
+                sha=sha,
+                fingerprint=fp,
+                finding=finding,
+                status=FindingStatus.SKIPPED,
+                run_id=run_id,
+                finding_identity=identity,
+            )
+            emit_finding_metric(
+                telemetry,
+                repo=project,
+                status=FindingStatus.SKIPPED,
+                finding=finding,
+                dry_run=cfg.dry_run,
+            )
+            log(
+                "finding_skipped",
+                project=project,
+                iid=number,
+                file=finding.get("file") or finding.get("path"),
+                line=finding.get("line") or finding.get("new_line"),
+                reason="duplicate_open_thread",
+                prior_sha=duplicate_of["sha"],
+                discussion_id=duplicate_of["discussion_id"],
+            )
             skipped += 1
             continue
         position = provider.build_position(change, changed, finding)
@@ -1716,6 +1983,9 @@ def worker(job: Path) -> int:
                     reason="diff_unavailable",
                 )
             extra_directive = governance[1] if governance else ""
+            incremental = incremental_scope(cfg, project=project, iid=iid, sha=sha, repo=repo)
+            if incremental is not None:
+                extra_directive = "\n\n".join(d for d in (extra_directive, incremental[0]) if d)
             env = reviewer_env(os.environ, cfg)
             allowed, reason = subscription_gate(cfg)
             if not allowed:
@@ -1769,6 +2039,11 @@ def worker(job: Path) -> int:
                     reason, scope="posting", project=project, iid=iid, run_id=run_id
                 )
                 return 0
+            # Newest commit wins: if the change moved on while the agent ran,
+            # post nothing for this SHA (no findings, no acknowledgement).
+            current_head = superseded_head(provider.get_change(cfg, token, project, iid), sha)
+            if current_head:
+                raise ReviewSuperseded(sha, current_head)
             with telemetry.span("llm_review.post", repo=project, dry_run=cfg.dry_run) as post_span:
                 pending_external_ids: list[bool] = []
                 posted, planned, skipped = post_or_plan_findings(
@@ -1782,6 +2057,7 @@ def worker(job: Path) -> int:
                     provider=provider,
                     repo=repo,
                     pending_external_ids=pending_external_ids,
+                    allowed_lines=incremental[1] if incremental is not None else None,
                 )
                 telemetry.set_span_attrs(
                     post_span,
@@ -1809,8 +2085,15 @@ def worker(job: Path) -> int:
                 and not cfg.dry_run
                 and not pending_external_ids
             ):
+                # Incremental re-review only looks for new findings, so earlier
+                # ones are revisited by reconciliation (as if it were enabled).
+                reconcile_cfg = (
+                    replace(cfg, reconcile_fixed_findings=True)
+                    if cfg.rereview == "incremental"
+                    else cfg
+                )
                 reconciliation = reconcile_prior_findings(
-                    cfg=cfg,
+                    cfg=reconcile_cfg,
                     token=token,
                     project=project,
                     number=iid,
@@ -1907,6 +2190,27 @@ def worker(job: Path) -> int:
     except CircuitPaused:
         defer_review_run()
         log_subscription_gate("paused_during_write", scope="posting", project=project, iid=iid)
+        return 0
+    except ReviewSuperseded as exc:
+        record(project, iid, sha, ReviewStatus.SUPERSEDED, str(report))
+        if cfg is not None and review_run_started:
+            record_review_run_finish(
+                run_id=run_id,
+                status=ReviewStatus.SUPERSEDED,
+                tokens=tokens,
+                cost_usd=cost_usd,
+                error=None,
+                lines_reviewed=lines_reviewed,
+            )
+        log(
+            "review_superseded",
+            project=project,
+            iid=iid,
+            sha=sha,
+            current_sha=exc.current_sha,
+            seconds=round(time.monotonic() - started, 2),
+            run_id=run_id,
+        )
         return 0
     except Exception as exc:
         error = redact_secrets(str(exc))
@@ -2581,6 +2885,7 @@ def main() -> int:
 # here documents the intent and tells the linter the re-exports are
 # deliberate, not dead imports.
 __all__ = [
+    "ReviewSuperseded",
     # re-exports (canonical home in sibling modules)
     "already_seen",
     "backfill_gitlab_bot_comments",

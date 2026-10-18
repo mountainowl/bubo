@@ -25,6 +25,7 @@ from bubo.scm.base import (
     build_review_contract,
     git_checkout_change,
     memoized,
+    mirror_path,
 )
 from bubo.types import JsonObject
 
@@ -101,6 +102,8 @@ class GitLabProvider:
             dest=dest,
             token=self.token(),
             username="oauth2",
+            target_branch=str(change.get("target_branch") or ""),
+            mirror=mirror_path(project, clone_url),
         )
 
     def post_inline_comment(

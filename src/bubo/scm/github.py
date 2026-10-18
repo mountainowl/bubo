@@ -35,6 +35,7 @@ from bubo.scm.base import (
     build_review_contract,
     git_checkout_change,
     memoized,
+    mirror_path,
 )
 from bubo.types import JsonObject
 
@@ -138,6 +139,8 @@ class GitHubProvider:
             dest=dest,
             token=self.token(),
             username="x-access-token",
+            target_branch=str((change.get("base") or {}).get("ref") or ""),
+            mirror=mirror_path(project, clone_url),
         )
 
     def post_inline_comment(

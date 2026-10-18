@@ -30,6 +30,12 @@ class ReviewStatus(StrEnum):
       findings. Terminal; the MR will not be re-reviewed at this SHA.
     * ``FAILED`` — review raised an exception. Subject to a TTL re-queue
       so transient failures self-heal on the next poll.
+    * ``DEFERRED`` — the subscription circuit paused the review before it
+      could finish; nothing was posted.
+    * ``SUPERSEDED`` — the review finished, but the change's head moved to a
+      newer commit before posting, so nothing was posted (its line numbers
+      belong to the old commit). Terminal for this SHA; the newer head is
+      reviewed by a later poll.
     """
 
     QUEUED = "queued"
@@ -38,6 +44,7 @@ class ReviewStatus(StrEnum):
     NO_FINDINGS = "no_findings"
     FAILED = "failed"
     DEFERRED = "deferred"
+    SUPERSEDED = "superseded"
 
 
 class FindingStatus(StrEnum):
