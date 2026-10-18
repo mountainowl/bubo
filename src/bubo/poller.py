@@ -2617,21 +2617,20 @@ def sync_outcomes(limit: int = 200) -> int:
                 "false_positive",
                 "duplicate",
             ):
-                if not outcome[name]:
+                # Emit only on the false->true transition: the same posted
+                # finding is re-checked every cycle and neither OTel nor PostHog
+                # has a per-finding key to dedupe on (the fingerprint is never
+                # sent), so an every-sync emit would multiply the count.
+                if not outcome[name] or prior_outcome.get(name):
                     continue
                 if telemetry.config.emit_outcome_sync:
                     telemetry.record_finding(
                         repo=project,
                         status=name,
-                        finding={"type": "unknown", "severity": "unknown", "category": "unknown"},
+                        finding=finding,
                         dry_run=False,
                     )
-                # Anonymous analytics fan-out, beside the DB upsert above. Emit
-                # only on the false->true transition: the same posted finding is
-                # re-checked every cycle and PostHog has no per-finding key to
-                # dedupe on (the fingerprint is never sent), so an every-sync
-                # emit would multiply the count.
-                if analytics_on and not prior_outcome.get(name):
+                if analytics_on:
                     analytics.record_finding_outcome(
                         cfg.analytics_config, scm_provider=cfg.provider, outcome=name
                     )
