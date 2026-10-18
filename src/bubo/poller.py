@@ -344,6 +344,40 @@ def run_verification(
     return verdicts
 
 
+def reconciliation_history(repo: Path | None, original_sha: str, head_sha: str, path: str) -> str:
+    """``git log -p`` of the finding's file since it was posted, for the fix verifier.
+
+    The Claude verifier has no git tool, so this excerpt is its only view of the
+    commits (and their SHAs, for ``causal_commit``) between the two heads.
+    """
+    scope = ["--", path] if path else []
+    unavailable = (
+        f"(history unavailable: git log {original_sha}..{head_sha} failed in the checkout)"
+    )
+    try:
+        result = run_bounded(
+            [
+                "git",
+                "-c",
+                "core.quotePath=false",
+                "log",
+                "-p",
+                "--no-color",
+                "--no-ext-diff",
+                f"{original_sha}..{head_sha}",
+                *scope,
+            ],
+            cwd=repo,
+            timeout=120,
+        )
+    except Exception:
+        return unavailable
+    if result.returncode:
+        return unavailable
+    target = path or "the repository"
+    return result.stdout.strip() or f"(no commits changed {target} since {original_sha})"
+
+
 def run_reconciliation_verification(
     finding: JsonObject, *, original_sha: str, head_sha: str, repo: Path | None, cfg: ReviewConfig
 ) -> ReconciliationResult:
@@ -356,7 +390,12 @@ def run_reconciliation_verification(
             [
                 *command,
                 build_reconciliation_prompt(
-                    finding, original_sha=original_sha, current_sha=head_sha
+                    finding,
+                    original_sha=original_sha,
+                    current_sha=head_sha,
+                    diff_excerpt=reconciliation_history(
+                        repo, original_sha, head_sha, str(finding.get("file") or "")
+                    ),
                 ),
             ],
             cwd=repo,
