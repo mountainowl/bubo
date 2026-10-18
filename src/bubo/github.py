@@ -325,7 +325,7 @@ query($owner:String!,$name:String!,$number:Int!,$cursor:String){
           comments(first:100){
             pageInfo{ hasNextPage endCursor }
             nodes{
-              databaseId id author{__typename login} body path line createdAt
+              databaseId id author{__typename login} authorAssociation body path line createdAt
               replyTo{ id } isMinimized
             }
           }
@@ -343,7 +343,7 @@ query($threadId:ID!,$cursor:String){
       comments(first:100,after:$cursor){
         pageInfo{ hasNextPage endCursor }
         nodes{
-          databaseId id author{__typename login} body path line createdAt
+          databaseId id author{__typename login} authorAssociation body path line createdAt
           replyTo{ id } isMinimized
         }
       }
@@ -359,6 +359,7 @@ def _normalize_review_comment(item: JsonObject) -> JsonObject:
         "node_id": item.get("id"),
         "login": (item.get("author") or {}).get("login") or "",
         "actor_type": (item.get("author") or {}).get("__typename") or "",
+        "author_association": item.get("authorAssociation") or "",
         "body": item.get("body") or "",
         "path": item.get("path") or "",
         "line": item.get("line"),
@@ -540,6 +541,22 @@ def _reply_actor_and_time(reply: JsonObject) -> tuple[str, str]:
     )
     timestamp = str(reply.get("created_at") or reply.get("createdAt") or "unknown")
     return actor, timestamp
+
+
+_MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+
+def reply_author(reply: JsonObject) -> JsonObject:
+    """Who wrote a reply and whether they maintain the repository (#184).
+
+    ``maintainer`` is ``None`` when GitHub did not report the association.
+    """
+    actor, _ = _reply_actor_and_time(reply)
+    association = str(reply.get("author_association") or "").upper()
+    return {
+        "login": actor,
+        "maintainer": (association in _MAINTAINER_ASSOCIATIONS) if association else None,
+    }
 
 
 def is_human_reply(reply: JsonObject) -> bool:
@@ -738,6 +755,7 @@ def classify_graphql_thread_outcome(
         # by record_finding_outcome). Bot's finding + the developer replies.
         "_finding_text": str((bot_comment or {}).get("body") or ""),
         "_reply_text": "\n\n".join(str(c.get("body") or "") for c in replies),
+        "_reply_authors": [reply_author(cast(JsonObject, c)) for c in replies],
     }
 
 
@@ -808,4 +826,5 @@ def classify_review_thread_outcome(
         # by record_finding_outcome). Bot's finding + the developer replies.
         "_finding_text": str(comment.get("body") or ""),
         "_reply_text": "\n\n".join(str(r.get("body") or "") for r in developer_replies),
+        "_reply_authors": [reply_author(r) for r in developer_replies],
     }

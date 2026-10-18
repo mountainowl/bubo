@@ -328,4 +328,10 @@ def classify_discussion_outcome(
         # by record_finding_outcome). Bot's finding + the developer replies.
         "_finding_text": str(bot_notes[0].get("body") or "") if bot_notes else "",
         "_reply_text": "\n\n".join(str(note.get("body") or "") for note in reply_notes),
+        # Who replied; GitLab notes carry no project role, so maintainer
+        # status is unknown here.
+        "_reply_authors": [
+            {"login": str((note.get("author") or {}).get("username") or ""), "maintainer": None}
+            for note in reply_notes
+        ],
     }

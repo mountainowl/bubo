@@ -235,6 +235,32 @@ def init_db() -> None:
             "reply_false_positive": "integer not null default 0",
         }.items():
             ensure_column(db, "finding_outcomes", name, definition)
+        # One row per distinct developer reply on a posted finding (#184): the
+        # reply text, who wrote it, and the verdict drawn from it, so the reason
+        # behind an outcome survives and a later reply adds a new row.
+        db.execute(
+            """
+            create table if not exists finding_feedback (
+              finding_id text not null,
+              reply_hash text not null,
+              project text not null,
+              iid integer not null,
+              sha text not null,
+              fingerprint text not null,
+              reply_text text not null,
+              responders text not null default '[]',
+              verdict text not null default '',
+              false_positive integer not null default 0,
+              source text not null default 'unknown',
+              first_seen_at text not null,
+              updated_at text not null,
+              primary key (finding_id, reply_hash)
+            )
+            """
+        )
+        db.execute(
+            "create index if not exists idx_finding_feedback_project on finding_feedback(project)"
+        )
         db.execute(
             """
             create table if not exists finding_reconciliations (
@@ -1140,6 +1166,154 @@ def record_finding_outcome(
         )
 
 
+FEEDBACK_TEXT_LIMIT = 8000
+_REJECTING_VERDICTS = ("rejected", "disagrees", "false_positive")
+
+
+def record_finding_feedback(
+    *,
+    project: str,
+    iid: int,
+    sha: str,
+    fingerprint: str,
+    reply_text: str,
+    reply_hash: str,
+    responders: list[JsonObject],
+    verdict: str,
+    false_positive: bool,
+    source: str,
+) -> None:
+    """Keep the developer reply behind a finding's outcome (#184).
+
+    Rows are keyed by finding and reply hash: re-observing the same reply
+    refreshes its verdict, a new or edited reply adds a row, so the history of
+    what the team said about a finding stays reviewable.
+    """
+    finding_id = f"{project}:{iid}:{sha}:{fingerprint}"
+    stamp = now()
+    with connect_db() as db:
+        db.execute(
+            """
+            insert into finding_feedback(
+              finding_id,reply_hash,project,iid,sha,fingerprint,reply_text,responders,
+              verdict,false_positive,source,first_seen_at,updated_at)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            on conflict(finding_id,reply_hash) do update set
+              responders=excluded.responders,
+              verdict=case when excluded.verdict='' then finding_feedback.verdict
+                else excluded.verdict end,
+              false_positive=case when excluded.verdict='' then finding_feedback.false_positive
+                else excluded.false_positive end,
+              source=case when excluded.verdict='' then finding_feedback.source
+                else excluded.source end,
+              updated_at=excluded.updated_at
+            """,
+            (
+                finding_id,
+                reply_hash,
+                project,
+                iid,
+                sha,
+                fingerprint,
+                reply_text[:FEEDBACK_TEXT_LIMIT],
+                json.dumps(responders, sort_keys=True),
+                verdict,
+                int(false_positive),
+                source,
+                stamp,
+                stamp,
+            ),
+        )
+
+
+def _has_table(db: sqlite3.Connection, name: str) -> bool:
+    row = db.execute(
+        "select 1 from sqlite_master where type='table' and name=?", (name,)
+    ).fetchone()
+    return row is not None
+
+
+def _rejected_findings(db: sqlite3.Connection, project: str) -> list[JsonObject]:
+    """Every disputed finding of ``project`` with its latest stored reason.
+
+    A finding counts when its outcome is disputed or a false positive (the same
+    signal :func:`disputed_finding_classes` aggregates). The reason is the
+    newest rejecting reply in ``finding_feedback``; findings disputed before
+    feedback was kept carry ``reason=None``.
+    """
+    feedback = _has_table(db, "finding_feedback")
+    reason_sql = (
+        """(select json_array(ff.reply_text, ff.responders, ff.verdict)
+             from finding_feedback ff
+             where ff.finding_id = fo.finding_id
+               and (ff.verdict in ('rejected','disagrees','false_positive')
+                    or ff.false_positive = 1)
+             order by ff.updated_at desc limit 1)"""
+        if feedback
+        else "null"
+    )
+    rows = db.execute(
+        f"""
+        select lower(trim(rf.category)), rf.file, rf.line, rf.iid, rf.sha, {reason_sql}
+        from finding_outcomes fo
+        join review_findings rf
+          on rf.project || ':' || rf.iid || ':' || rf.sha || ':' || rf.fingerprint
+             = fo.finding_id
+        where rf.project = ?
+          and (fo.disputed = 1 or fo.false_positive = 1)
+          and rf.category is not null and trim(rf.category) != ''
+        order by fo.last_checked_at desc
+        """,
+        (project,),
+    ).fetchall()
+    out: list[JsonObject] = []
+    for category, file, line, iid, sha, reason in rows:
+        entry: JsonObject = {
+            "category": str(category),
+            "file": str(file or ""),
+            "line": line,
+            "iid": int(iid),
+            "sha": str(sha),
+            "scope": dispute_scope(str(file or "")),
+            "reason": None,
+            "responders": [],
+            "verdict": None,
+        }
+        if reason:
+            text, responders, verdict = json.loads(reason)
+            entry["reason"] = str(text)
+            entry["responders"] = json.loads(responders or "[]")
+            entry["verdict"] = str(verdict)
+        out.append(entry)
+    return out
+
+
+def dispute_scope(file: str) -> str:
+    """The area a rejection applies to: the file's directory, or the file itself
+    when it sits at the repository root (so one root file never silences a whole
+    repository)."""
+    path = file.strip().lstrip("/")
+    parent = path.rsplit("/", 1)[0] if "/" in path else ""
+    return parent or path
+
+
+def disputed_class_scopes(project: str, categories: set[str]) -> dict[str, list[JsonObject]]:
+    """Where each suppressed category was rejected, with the reason (#184).
+
+    Dispute suppression applies only inside these scopes, so a category the
+    team rejected in one area keeps being reviewed everywhere else.
+    """
+    if not categories:
+        return {}
+    with connect_db() as db:
+        rejected = _rejected_findings(db, project)
+    scopes: dict[str, list[JsonObject]] = {}
+    for entry in rejected:
+        if entry["category"] in categories:
+            scopes.setdefault(entry["category"], []).append(entry)
+    return scopes
+
+
 def record_finding_outcome_sync_attempt(
     *,
     project: str,
@@ -1517,6 +1691,10 @@ def disputed_finding_classes(
     }
 
 
+DISPUTE_FEEDBACK_SAMPLES = 5
+_FEEDBACK_KEYS = ("file", "line", "iid", "scope", "reason", "responders")
+
+
 def disputed_class_stats(project: str, *, min_samples: int) -> list[JsonObject]:
     """Return raw per-category dispute stats for ``project`` (read-only).
 
@@ -1539,6 +1717,7 @@ def disputed_class_stats(project: str, *, min_samples: int) -> list[JsonObject]:
     """
     with connect_db(readonly=True) as db:
         rows = _dispute_class_rows(db, project)
+        rejections = _rejected_findings(db, project)
     # Sort the raw triples (rate desc, category asc) BEFORE building dicts so the
     # sort key is concretely typed (mypy can't see into a dict[str, Any] value).
     ranked = sorted(
@@ -1549,10 +1728,16 @@ def disputed_class_stats(project: str, *, min_samples: int) -> list[JsonObject]:
         {
             "category": category,
             "total": total,
-            "rejected": rejected,
-            "dispute_rate": rejected / total,
+            "rejected": rejected_count,
+            "dispute_rate": rejected_count / total,
+            # Why the team rejected this category, and where (#184).
+            "feedback": [
+                {key: entry[key] for key in _FEEDBACK_KEYS}
+                for entry in rejections
+                if entry["category"] == category
+            ][:DISPUTE_FEEDBACK_SAMPLES],
         }
-        for category, total, rejected in ranked
+        for category, total, rejected_count in ranked
     ]
     return stats
 

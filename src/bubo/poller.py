@@ -58,6 +58,7 @@ from bubo.db import (
     claim_finding_reconciliation,
     connect_db,
     count_inflight_workers,
+    disputed_class_scopes,
     disputed_class_stats,
     disputed_finding_classes,
     finding_seen,
@@ -71,6 +72,7 @@ from bubo.db import (
     prior_posted_findings_for_reconciliation,
     prior_verification,
     prompt_version,
+    record_finding_feedback,
     record_finding_outcome,
     record_finding_outcome_sync_attempt,
     record_finding_reconciliation,
@@ -90,6 +92,7 @@ from bubo.findings import (
     ReviewResult,
     calibrated_category_floors,
     count_added_lines,
+    dispute_match,
     dispute_stats_by_canonical,
     filter_findings_by_policy,
     finding_body,
@@ -1510,6 +1513,7 @@ def post_or_plan_findings(
     # rejected, using the accept/dispute signal in finding_outcomes. The set
     # is empty (and the DB never queried) unless the operator enabled it.
     suppressed_categories: tuple[str, ...] = ()
+    suppressed_scopes: dict[str, list[JsonObject]] = {}
     if cfg.suppress_disputed_classes:
         suppressed_categories = tuple(
             disputed_finding_classes(
@@ -1518,6 +1522,8 @@ def post_or_plan_findings(
                 threshold=cfg.dispute_suppress_threshold,
             )
         )
+        # Suppress only where the team rejected the category, citing why (#184).
+        suppressed_scopes = disputed_class_scopes(project, set(suppressed_categories))
     # Per-category confidence floors (the calibrated-confidence lever, off by
     # default). Manual operator overrides always apply; when calibration is on,
     # derive additional floors from this repo's dispute history aggregated onto
@@ -1542,8 +1548,14 @@ def post_or_plan_findings(
         category_floors=category_floors or None,
         surface_predicate=surface_predicate_for_mode(cfg.mode),
         suppressed_categories=suppressed_categories,
+        suppressed_scopes=suppressed_scopes,
     )
     for finding, reason in dropped:
+        rejection = (
+            dispute_match(finding, suppressed_scopes)
+            if reason == "disputed_class_suppressed"
+            else None
+        )
         log(
             "finding_filtered",
             project=project,
@@ -1556,6 +1568,15 @@ def post_or_plan_findings(
             category=finding.get("category"),
             category_canonical=finding.get("category_canonical"),
             type=finding.get("type"),
+            **(
+                {
+                    "dispute_scope": rejection["scope"],
+                    "dispute_finding": f"{rejection['file']}:{rejection['line']}",
+                    "dispute_reason": (rejection["reason"] or "")[:500] or None,
+                }
+                if rejection
+                else {}
+            ),
         )
     if not findings:
         return (0, 0, 0)
@@ -2575,6 +2596,32 @@ def _apply_reply_verdict(outcome: JsonObject, verdict: JsonObject, reply_hash: s
     outcome["reply_false_positive"] = false_positive
 
 
+def _record_reply_feedback(
+    finding: JsonObject, outcome: JsonObject, reply_text: str, reply_hash: str
+) -> None:
+    """Keep what the developer said and the verdict drawn from it (#184)."""
+    disposition = str(outcome.get("developer_disposition") or "unknown")
+    if outcome.get("reply_hash") == reply_hash:
+        verdict, source = str(outcome.get("reply_verdict") or ""), "reply_classifier"
+    elif disposition != "unknown" or outcome.get("disputed"):
+        verdict = disposition if disposition != "unknown" else "disagrees"
+        source = "explicit_marker"
+    else:
+        verdict, source = "", "pending"
+    record_finding_feedback(
+        project=finding["project"],
+        iid=int(finding["iid"]),
+        sha=finding["sha"],
+        fingerprint=finding["fingerprint"],
+        reply_text=reply_text.strip(),
+        reply_hash=reply_hash,
+        responders=list(outcome.get("_reply_authors") or []),
+        verdict=verdict,
+        false_positive=bool(outcome.get("false_positive")),
+        source=source,
+    )
+
+
 def sync_outcomes(limit: int = 200) -> int:
     """Refresh provider-side outcomes for up to ``limit`` posted findings.
 
@@ -2665,6 +2712,8 @@ def sync_outcomes(limit: int = 200) -> int:
                 # Over this run's classifier budget: keep the previous verdict
                 # until a later sync classifies the new reply text.
                 _apply_reply_verdict(outcome, stored, str(stored["hash"]))
+            if outcome.get("developer_replied") and reply_hash:
+                _record_reply_feedback(finding, outcome, reply_text, reply_hash)
             record_finding_outcome(
                 project=project,
                 iid=iid,
