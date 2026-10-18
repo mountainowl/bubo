@@ -122,8 +122,11 @@ Return exactly one JSON object without fences or transcripts. Example shape:
  "unreviewed":[],
  "limitations":[]},
  "omitted_findings_count":0}
-Use complete only if scope was reviewed and no essential evidence is missing. Questions,
-unreviewed scope, or limitations require incomplete; an unusable review is failed. Never imply
+Use complete when every changed line could be judged. Use incomplete only when missing
+evidence kept part of the change from being judged: name that part in unreviewed or limitations,
+or ask in questions for the answer the judgment needs. Every review is read-only, executes
+nothing, and cannot see code outside this repository; these are not limitations, so do not list
+them, and note any effect on a finding in its evidence. An unusable review is failed. Never imply
 clean code from empty findings. Preserve supported findings during incomplete coverage. Rank by
 impact and record any omitted findings.
 Each finding requires title, file, positive integer line, type (issue|suggestion), severity
