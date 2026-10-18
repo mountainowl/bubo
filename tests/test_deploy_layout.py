@@ -10,6 +10,7 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
         "bin/bubo",
         "config/env.example.toml",
         "deploy/templates/codex-config.toml",
+        "deploy/templates/codex-bubo.config.toml",
         "deploy/templates/claude-settings.json",
         "prompts/00-meta.md",
         "skills/code-reviewer/SKILL.md",
@@ -27,15 +28,16 @@ def test_deployable_tree_contains_all_runtime_assets() -> None:
     assert "uv run --project" in dispatcher
     assert "bubo-poller" in dispatcher
     assert "bubo-mcp" in dispatcher
-    assert 'service)' in dispatcher
-    assert 'poll)' not in dispatcher
+    assert "service)" in dispatcher
+    assert "poll)" not in dispatcher
     assert "mcp-upstream" not in dispatcher
 
 
 def test_public_container_wrapper_and_bug_template_use_service_foreground() -> None:
-    assert 'CMD ["bubo-poller", "service", "start", "--foreground"]' in (
-        ROOT / "Dockerfile"
-    ).read_text()
+    assert (
+        'CMD ["bubo-poller", "service", "start", "--foreground"]'
+        in (ROOT / "Dockerfile").read_text()
+    )
     issue = (ROOT / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").read_text()
     assert "uv run bubo-poller service start --foreground" in issue
 
@@ -54,19 +56,27 @@ def test_github_action_surface_uses_synchronous_ci_path() -> None:
     assert (ROOT / "docs" / "pages" / "github-action.mdx").is_file()
 
 
-def test_codex_config_carries_bubo_profile() -> None:
-    config = (ROOT / "deploy" / "templates" / "codex-config.toml").read_text()
-    # The default reviewer_command invokes `codex --profile bubo`; without
-    # a [profiles.bubo] block in the main config, Codex aborts with
-    # "config profile bubo not found" and every review fails.
-    assert "[profiles.bubo]" in config
-    # Sanity-check the keys the wrapper depends on actually exist under
-    # that profile (loose check — full validity is exercised when Codex
-    # loads the profile at review time).
+def test_codex_profile_ships_as_its_own_file() -> None:
+    templates = ROOT / "deploy" / "templates"
+    config = (templates / "codex-config.toml").read_text()
+    profile = (templates / "codex-bubo.config.toml").read_text()
+    # The default reviewer_command invokes `codex --profile bubo`. Codex
+    # >= 0.134.0 reads that profile from ~/.codex/bubo.config.toml and aborts
+    # ("--profile `bubo` cannot be used while config.toml contains legacy
+    # [profiles.bubo]") if the main config still carries the table.
+    assert not any(line.lstrip().startswith("[profiles") for line in config.splitlines())
+    assert not any(line.lstrip().startswith("[") for line in profile.splitlines())
+    # Sanity-check the keys the wrapper depends on are top-level profile keys
+    # (full validity is exercised when Codex loads the profile at review time).
     for key in ("model", "approval_policy", "sandbox_mode"):
-        assert key in config
+        assert f"\n{key} = " in profile
     # The orphaned sibling file is gone.
-    assert not (ROOT / "deploy" / "templates" / "codex-profile.toml").exists()
+    assert not (templates / "codex-profile.toml").exists()
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    assert (
+        '"deploy/templates/codex-bubo.config.toml" = "bubo/_assets/codex-bubo.config.toml"'
+        in pyproject
+    )
 
 
 def test_deploy_is_not_cron_or_single_host_coupled() -> None:

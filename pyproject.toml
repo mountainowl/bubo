@@ -107,6 +107,7 @@ packages = ["src/bubo"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "deploy/templates/codex-config.toml" = "bubo/_assets/codex-config.toml"
+"deploy/templates/codex-bubo.config.toml" = "bubo/_assets/codex-bubo.config.toml"
 "deploy/templates/claude-settings.json" = "bubo/_assets/claude-settings.json"
 "prompts/00-meta.md" = "bubo/_assets/prompts/00-meta.md"
 "skills/code-reviewer/SKILL.md" = "bubo/_assets/skills/code-reviewer/SKILL.md"
