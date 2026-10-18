@@ -52,11 +52,13 @@ from bubo.paths import CONFIG as ENV_CONFIG
 from bubo.review_config import (
     DEFAULT_PROVIDER,
     SUPPORTED_PROVIDERS,
+    ReviewConfig,
     load_review_config,
 )
 from bubo.review_runner import run_review as run_bounded
 from bubo.scm import get_provider
 from bubo.secrets import redact_secrets
+from bubo.statuses import ReviewStatus
 from bubo.subscription import (
     is_subscription_failure,
     review_gate,
@@ -64,6 +66,8 @@ from bubo.subscription import (
     signal_subscription_failure,
     state_path,
 )
+from bubo.telemetry.agent_output import parse_agent_output
+from bubo.telemetry.usage import record_agent_usage
 from bubo.update_admission import admitted
 
 
@@ -533,6 +537,7 @@ def review_change(
         }
     except ValueError as exc:
         outcome = {"status": "failed", "findings": [], "error": str(exc)}
+    _record_review(cfg, result, outcome, duration)
     return {
         "provider": provider,
         "project": project,
@@ -542,6 +547,53 @@ def review_change(
         **outcome,
         "raw_output": raw,
     }
+
+
+def _record_review(
+    cfg: ReviewConfig, result: Any, outcome: dict[str, Any], duration: float
+) -> None:
+    """Send the MCP review as one ``review_completed`` event (best effort).
+
+    The findings go back to the MCP client and nothing is posted to the
+    change, so the event is a dry run whose findings are all ``planned``.
+    """
+    try:
+        transcript = getattr(result, "diagnostic_stdout", None)
+        output = parse_agent_output(transcript if transcript is not None else result.stdout or "")
+        model = cfg.model_for(cfg.reviewer_command)
+        tokens, cost_usd = record_agent_usage(
+            "review", output, model=model, cfg=cfg.telemetry_config
+        )
+        findings = outcome.get("findings") or []
+        if outcome.get("status") == "failed":
+            status = ReviewStatus.FAILED
+        else:
+            status = ReviewStatus.SUCCESS if findings else ReviewStatus.NO_FINDINGS
+        analytics.record_review_completed(
+            cfg.analytics_config,
+            scm_provider=cfg.provider,
+            agent=analytics.agent_label(cfg.reviewer_command),
+            model=model,
+            status=str(status),
+            dry_run=True,
+            review_mode="diff",
+            tone=cfg.tone,
+            duration_seconds=round(duration, 2),
+            tokens_input=tokens.input,
+            tokens_output=tokens.output,
+            tokens_cached=tokens.cached,
+            tokens_total=tokens.total,
+            cost_usd=cost_usd,
+            findings_posted=0,
+            findings_planned=len(findings),
+            findings_skipped=0,
+            files_changed=None,
+            lines_changed=None,
+        )
+    except Exception as exc:
+        log("mcp_review_analytics_failed", error=type(exc).__name__)
+    finally:
+        analytics.flush()
 
 
 class _BearerAuthASGI:
