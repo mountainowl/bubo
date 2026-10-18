@@ -9,8 +9,6 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def no_external_telemetry(monkeypatch, request):
-    from opentelemetry.exporter.otlp.proto.http import metric_exporter, trace_exporter
-
     from bubo import analytics
     from bubo.analytics_config import AnalyticsConfig
     from bubo.update_reporting import FailureStore
@@ -52,8 +50,6 @@ def no_external_telemetry(monkeypatch, request):
             "sender": blocked,
         },
     )
-    monkeypatch.setattr(trace_exporter, "OTLPSpanExporter", blocked)
-    monkeypatch.setattr(metric_exporter, "OTLPMetricExporter", blocked)
     yield
     from bubo.telemetry import posthog
     from bubo.telemetry.config import TelemetryConfig
