@@ -1,5 +1,6 @@
 import React from 'react'
-import { DocsThemeConfig } from 'nextra-theme-docs'
+import { DocsThemeConfig, useConfig } from 'nextra-theme-docs'
+import { useRouter } from 'next/router'
 import { SiteFooter } from './components/SiteFooter'
 import { asset } from './components/asset'
 
@@ -18,6 +19,11 @@ const softwareApplicationSchema = {
   downloadUrl: 'https://pypi.org/project/bubo/',
   softwareVersion: process.env.NEXT_PUBLIC_BUBO_VERSION,
   isAccessibleForFree: true,
+  offers: {
+    '@type': 'Offer',
+    price: 0,
+    priceCurrency: 'USD',
+  },
   license: 'https://opensource.org/license/mit',
   featureList: [
     'Self-hosted deployment',
@@ -119,7 +125,11 @@ const config: DocsThemeConfig = {
   footer: {
     component: <SiteFooter />,
   },
-  head: (
+  head: function SeoHead() {
+    const { frontMatter, title } = useConfig()
+    const { pathname } = useRouter()
+    const canonical = `https://mountainowl.github.io/bubo${pathname === '/' ? '/' : `${pathname}/`}`
+    return (
     <>
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -128,17 +138,19 @@ const config: DocsThemeConfig = {
         href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
         rel="stylesheet"
       />
-      <meta property="og:title" content="Bubo — docs" />
-      <meta
-        property="og:description"
-        content="Agentic AI code review — with the LLM of your choice."
-      />
+      <meta name="google-site-verification" content="0oRyuvdS1mUYhAwBSbKTs45kM_0SVvLCmgNBVU0jWf8" />
+      <meta name="description" content={frontMatter.description} />
+      <link rel="canonical" href={canonical} />
+      <link rel="describedby" href="/bubo/llms.txt" />
+      <meta property="og:title" content={`${title || 'AI code review'} — Bubo`} />
+      <meta property="og:description" content={frontMatter.description} />
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareApplicationSchema) }}
       />
     </>
-  ),
+    )
+  },
 }
 
 export default config
