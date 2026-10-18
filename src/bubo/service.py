@@ -5,6 +5,7 @@ owns a poll schedule and the subscription-monitor thread while it is alive;
 an external supervisor is still needed for boot startup or recovery after a
 machine/process death.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,6 +25,7 @@ from bubo.events import log
 from bubo.findings import extract_findings
 from bubo.review_config import ReviewConfig, load_review_config
 from bubo.secrets import redact_secrets
+from bubo.service_control import publish_stop, stop_path
 from bubo.signals import request_shutdown
 from bubo.subproc import run_bounded
 from bubo.subscription import (
@@ -39,6 +41,7 @@ from bubo.subscription import (
     write_state,
 )
 from bubo.telemetry import ReviewTelemetry
+from bubo.update_admission import MaintenanceInProgress, activity
 
 _PROBE_PROMPT = "Subscription availability probe. Reply with exactly []."
 _STARTUP_TIMEOUT_SECONDS = 10.0
@@ -52,8 +55,8 @@ def _service_lock_path() -> Path:
     return paths.SERVICE_PID.with_suffix(".lock")
 
 
-def _stop_path() -> Path:
-    return paths.SERVICE_PID.with_suffix(".stop")
+def _stop_path(token: str) -> Path:
+    return stop_path(paths.SERVICE_PID, token)
 
 
 def _ready_path(token: str) -> Path:
@@ -79,7 +82,7 @@ def _read_startup_result(token: str) -> tuple[str, str] | None:
         if not secrets.compare_digest(str(value["token"]), token):
             return None
         return str(value["status"]), str(value.get("error") or "")
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except OSError, KeyError, TypeError, ValueError, json.JSONDecodeError:
         return None
 
 
@@ -92,7 +95,7 @@ def _read_identity() -> tuple[int, str, float] | None:
     try:
         raw = json.loads(_pid_path().read_text(encoding="utf-8"))
         return int(raw["pid"]), str(raw["token"]), float(raw.get("heartbeat_at", 0))
-    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+    except OSError, TypeError, ValueError, KeyError, json.JSONDecodeError:
         return None
 
 
@@ -118,7 +121,7 @@ def _identity_matches(pid: int, token: str) -> bool:
     try:
         result = subprocess.run(command, text=True, capture_output=True, timeout=2, check=False)
         return token in result.stdout
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return False
 
 
@@ -144,7 +147,7 @@ def stop_service() -> bool:
     if os.name == "nt":  # pragma: no cover - Windows only
         if time.time() - heartbeat > 5:
             return False
-        _stop_path().write_text(token, encoding="utf-8")
+        publish_stop(paths.SERVICE_PID, token)
         return True
     if not _identity_matches(pid, token):
         return False
@@ -237,7 +240,7 @@ def _probe(cfg: ReviewConfig) -> bool:
             return extract_findings(output) == []
         except ValueError:
             return False
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return False
 
 
@@ -288,9 +291,7 @@ def _advance_deadline(deadline: float, interval: float, current: float) -> float
     return deadline + missed * interval
 
 
-def _next_due_task(
-    *, current: float, poll_deadline: float, outcome_deadline: float
-) -> str | None:
+def _next_due_task(*, current: float, poll_deadline: float, outcome_deadline: float) -> str | None:
     """Choose the earliest due service task; polling wins an exact tie."""
     poll_due = current >= poll_deadline
     outcome_due = current >= outcome_deadline
@@ -302,7 +303,10 @@ def _next_due_task(
 
 
 def monitor_loop(
-    cfg: ReviewConfig, stop: threading.Event, ready: threading.Event | None = None
+    cfg: ReviewConfig,
+    stop: threading.Event,
+    ready: threading.Event | None = None,
+    startup_release: threading.Event | None = None,
 ) -> None:
     """Run the sole state writer until ``stop``; a second monitor exits."""
     circuit = cfg.subscription_circuit
@@ -315,68 +319,91 @@ def monitor_loop(
         if not owner:
             log("subscription_monitor_already_running", component="subscription_circuit")
             return
-        while not stop.is_set():
-            current = time.time()
-            transition_event: str | None = None
-            state = read_state(state_file)
-            if state is None:
-                state = CircuitState(status="closed", heartbeat_at=current)
-            opened = consume_failure_signal(signal_file)
-            if opened and state.status != "open":
-                state = CircuitState(
-                    status="open", heartbeat_at=current, opened_at=current,
-                    next_probe_at=current + circuit.probe_interval_seconds,
-                )
-                transition_event = "subscription_circuit_opened"
-            elif opened:
-                # A signal that arrived while already open is acknowledged
-                # only after another durable open heartbeat, never by a
-                # recovery transition in the same tick.
-                state = CircuitState(
-                    status="open",
-                    heartbeat_at=current,
-                    opened_at=state.opened_at or current,
-                    next_probe_at=state.next_probe_at,
-                    probe_attempts=state.probe_attempts,
-                )
-            elif (
-                state.status == "open"
-                and state.next_probe_at is not None
-                and current >= state.next_probe_at
-            ):
-                if _probe(cfg):
-                    state = CircuitState(status="closed", heartbeat_at=current)
-                    transition_event = "subscription_circuit_recovered"
-                else:
-                    attempts = state.probe_attempts + 1
-                    delay = min(
-                        circuit.probe_interval_seconds * (2 ** min(attempts, 16)),
-                        circuit.probe_backoff_max_seconds,
-                    )
-                    state = CircuitState(
-                        status="open", heartbeat_at=current, opened_at=state.opened_at or current,
-                        next_probe_at=current + delay, probe_attempts=attempts,
-                    )
-                    log("subscription_circuit_probe_failed", component="subscription_circuit")
-            else:
-                state = CircuitState(
-                    status=state.status, heartbeat_at=current, opened_at=state.opened_at,
-                    next_probe_at=state.next_probe_at, probe_attempts=state.probe_attempts,
-                )
-            write_state(state_file, state)
-            # The processing signal is acknowledged only after the durable
-            # open-state write. A newly appended .signal remains for the next
-            # tick, keeping readers fail-closed throughout the handoff.
-            if state.status == "open" and opened:
-                acknowledge_failure_signal(signal_file)
+        if startup_release is not None:
             if ready is not None:
                 ready.set()
-            if transition_event is not None:
-                _transition(cfg, telemetry, transition_event)
+            while not startup_release.wait(0.05):
+                if stop.is_set():
+                    return
+        while not stop.is_set():
+            try:
+                with activity(writable=True):
+                    current = time.time()
+                    transition_event: str | None = None
+                    state = read_state(state_file)
+                    if state is None:
+                        state = CircuitState(status="closed", heartbeat_at=current)
+                    opened = consume_failure_signal(signal_file)
+                    if opened and state.status != "open":
+                        state = CircuitState(
+                            status="open",
+                            heartbeat_at=current,
+                            opened_at=current,
+                            next_probe_at=current + circuit.probe_interval_seconds,
+                        )
+                        transition_event = "subscription_circuit_opened"
+                    elif opened:
+                        # A signal that arrived while already open is acknowledged
+                        # only after another durable open heartbeat, never by a
+                        # recovery transition in the same tick.
+                        state = CircuitState(
+                            status="open",
+                            heartbeat_at=current,
+                            opened_at=state.opened_at or current,
+                            next_probe_at=state.next_probe_at,
+                            probe_attempts=state.probe_attempts,
+                        )
+                    elif (
+                        state.status == "open"
+                        and state.next_probe_at is not None
+                        and current >= state.next_probe_at
+                    ):
+                        if _probe(cfg):
+                            state = CircuitState(status="closed", heartbeat_at=current)
+                            transition_event = "subscription_circuit_recovered"
+                        else:
+                            attempts = state.probe_attempts + 1
+                            delay = min(
+                                circuit.probe_interval_seconds * (2 ** min(attempts, 16)),
+                                circuit.probe_backoff_max_seconds,
+                            )
+                            state = CircuitState(
+                                status="open",
+                                heartbeat_at=current,
+                                opened_at=state.opened_at or current,
+                                next_probe_at=current + delay,
+                                probe_attempts=attempts,
+                            )
+                            log(
+                                "subscription_circuit_probe_failed",
+                                component="subscription_circuit",
+                            )
+                    else:
+                        state = CircuitState(
+                            status=state.status,
+                            heartbeat_at=current,
+                            opened_at=state.opened_at,
+                            next_probe_at=state.next_probe_at,
+                            probe_attempts=state.probe_attempts,
+                        )
+                    write_state(state_file, state)
+                    # The processing signal is acknowledged only after the durable
+                    # open-state write. A newly appended .signal remains for the next
+                    # tick, keeping readers fail-closed throughout the handoff.
+                    if state.status == "open" and opened:
+                        acknowledge_failure_signal(signal_file)
+                    if ready is not None:
+                        ready.set()
+                    if transition_event is not None:
+                        _transition(cfg, telemetry, transition_event)
+            except MaintenanceInProgress:
+                pass
             stop.wait(circuit.monitor_interval_seconds)
 
 
 def run_foreground(service_token: str | None = None) -> int:
+    from bubo.update_admission import resident_restart, restart_process
+
     token = service_token or secrets.token_urlsafe(24)
     try:
         cfg = load_review_config(paths.CONFIG, log_event=log)
@@ -388,11 +415,21 @@ def run_foreground(service_token: str | None = None) -> int:
             log("service_already_running")
             _write_startup_result(token, "error", "service already running")
             return 1
-        _write_pid(token)
-        return _run_service_loop(cfg, token)
+        from bubo.update_readiness import ResidentStartup, StartupRejected
+
+        try:
+            startup = ResidentStartup.from_environment("service")
+            _write_pid(token)
+            with resident_restart(restart_process):
+                if startup is not None:
+                    return _run_service_loop(cfg, token, startup=startup)
+                return _run_service_loop(cfg, token)
+        except StartupRejected:
+            log("service_update_startup_rejected")
+            return 75
 
 
-def _run_service_loop(cfg: ReviewConfig, token: str) -> int:
+def _run_service_loop(cfg: ReviewConfig, token: str, *, startup=None) -> int:
     stop = threading.Event()
     heartbeat_stop = threading.Event()
     heartbeat: threading.Thread | None = None
@@ -415,7 +452,11 @@ def _run_service_loop(cfg: ReviewConfig, token: str) -> int:
         )
         windows_stop_watcher.start()
     ready = threading.Event()
-    monitor = threading.Thread(target=monitor_loop, args=(cfg, stop, ready), daemon=True)
+    startup_release = threading.Event() if startup is not None else None
+    monitor_args = (
+        (cfg, stop, ready, startup_release) if startup is not None else (cfg, stop, ready)
+    )
+    monitor = threading.Thread(target=monitor_loop, args=monitor_args, daemon=True)
     monitor.start()
     if cfg.subscription_circuit.enabled and not ready.wait(
         timeout=max(2, cfg.subscription_circuit.heartbeat_ttl_seconds)
@@ -435,9 +476,13 @@ def _run_service_loop(cfg: ReviewConfig, token: str) -> int:
     outcome_interval = cfg.service_outcome_sync_interval_seconds
     next_poll = time.monotonic()
     next_outcome_sync = next_poll
-    log("service_started", subscription_monitor=cfg.subscription_circuit.enabled)
-    _write_startup_result(token, "ready")
     try:
+        if startup is not None:
+            startup.signal_ready()
+            startup.wait(cancelled=stop.is_set)
+            startup_release.set()
+        log("service_started", subscription_monitor=cfg.subscription_circuit.enabled)
+        _write_startup_result(token, "ready")
         while not stop.is_set():
             current = time.monotonic()
             task = _next_due_task(
@@ -471,11 +516,13 @@ def _run_service_loop(cfg: ReviewConfig, token: str) -> int:
 
 def _consume_stop_request(token: str) -> bool:
     try:
-        requested = _stop_path().read_text(encoding="utf-8")
+        requested = _stop_path(token).read_text(encoding="utf-8")
     except FileNotFoundError:
         return False
+    # A stale service or stop caller cannot consume or overwrite another
+    # generation's request. Duplicate requests for this token are harmless.
     with suppress(FileNotFoundError):
-        _stop_path().unlink()
+        _stop_path(token).unlink()
     return secrets.compare_digest(requested, token)
 
 
@@ -498,8 +545,14 @@ def start_detached() -> int:
     try:
         child = subprocess.Popen(
             [
-                sys.executable, "-m", "bubo.poller", "service", "start", "--foreground",
-                "--service-token", token,
+                sys.executable,
+                "-m",
+                "bubo.poller",
+                "service",
+                "start",
+                "--foreground",
+                "--service-token",
+                token,
             ],
             **kwargs,
         )

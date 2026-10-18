@@ -163,8 +163,7 @@ class ReviewConfig:
         Parsed :class:`~bubo.analytics_config.AnalyticsConfig` block — the
         anonymous, **on-by-default** usage analytics ("help improve Bubo").
         Sends numbers only (no code, paths, repo names, or text); opt out via
-        ``[analytics] enabled = false``, ``BUBO_ANALYTICS=0``, or
-        ``DO_NOT_TRACK=1``. See :mod:`bubo.analytics`.
+        ``[analytics] enabled = false``. See :mod:`bubo.analytics`.
     governance_config:
         Parsed :class:`~bubo.governance_config.GovernanceConfig` block —
         the opt-in, off-by-default AI-provenance / governance surface. In its
@@ -314,6 +313,7 @@ class ReviewConfig:
     post_summary: bool = False
     telemetry_config: TelemetryConfig = field(default_factory=TelemetryConfig)
     analytics_config: AnalyticsConfig = field(default_factory=AnalyticsConfig)
+    auto_update: bool = True
     governance_config: GovernanceConfig = field(default_factory=GovernanceConfig)
     projects: list[str] = field(default_factory=list)
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
@@ -384,9 +384,7 @@ def load_review_config(
     return review_config_from_dict(raw, log_event=log_event)
 
 
-def _agent_model_effort(
-    agent: dict[str, Any], log_event: Callable[..., None] | None
-) -> str | None:
+def _agent_model_effort(agent: dict[str, Any], log_event: Callable[..., None] | None) -> str | None:
     """Read ``[agents].llm_model_effort``, falling back to the deprecated
     ``reasoning_effort`` key. Emits a ``config_key_deprecated`` event when the
     old key is the one in use so operators get a nudge to rename it.
@@ -438,7 +436,7 @@ def review_config_from_dict(
     try:
         telemetry_config = telemetry_config_from_dict(raw)
     except (TypeError, ValueError) as exc:
-        telemetry_config = TelemetryConfig(enabled=False)
+        telemetry_config = TelemetryConfig(analytics=AnalyticsConfig(enabled=False))
         if log_event is not None:
             log_event("telemetry_config_disabled", error=str(exc))
 
@@ -468,6 +466,7 @@ def review_config_from_dict(
         llm_base_url=str(agent["llm_base_url"]) if agent.get("llm_base_url") else None,
         telemetry_config=telemetry_config,
         analytics_config=analytics_config_from_dict(raw),
+        auto_update=bool_value(raw.get("auto_update"), "auto_update", default=True),
         governance_config=governance_config_from_dict(raw),
         projects=[
             item["path"]
@@ -559,9 +558,7 @@ def review_config_from_dict(
         reconcile_lease_seconds=positive_int(
             review.get("reconcile_lease_seconds", 300), "reconcile_lease_seconds"
         ),
-        reconcile_command=string_list(
-            review.get("reconcile_command"), "reconcile_command"
-        ),
+        reconcile_command=string_list(review.get("reconcile_command"), "reconcile_command"),
         subscription_circuit=CircuitConfig(
             enabled=bool_value(
                 circuit.get("enabled"), "subscription_circuit.enabled", default=False

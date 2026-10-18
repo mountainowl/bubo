@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-import json
 import re
-import sys
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, suppress
 from typing import Any
 
 from opentelemetry import metrics, trace
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span
 
+from bubo.analytics import installed_version
 from bubo.telemetry.config import TelemetryConfig
 from bubo.telemetry.cost import TokenUsage
 
@@ -24,6 +16,9 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
     {
         "repo",
         "model",
+        "llm_provider",
+        "language",
+        "languages",
         "prompt_version",
         "review_mode",
         "status",
@@ -67,6 +62,7 @@ def metric_attrs(**attrs: object) -> dict[str, str | bool | int | float]:
             out[key] = value
         elif isinstance(value, str):
             out[key] = _safe_label_value(key, value)
+    out["bubo_version"] = installed_version()
     return out
 
 
@@ -82,11 +78,11 @@ def _safe_label_value(key: str, value: str) -> str:
 
 
 class ReviewTelemetry:
-    def __init__(self, config: TelemetryConfig):
+    def __init__(self, config: TelemetryConfig, *, providers=None):
         self.config = config
         self.enabled = config.enabled
-        self.tracer = trace.get_tracer("bubo")
-        self.meter = metrics.get_meter("bubo")
+        self.tracer = providers[0] if providers else trace.NoOpTracerProvider().get_tracer("bubo")
+        self.meter = providers[1] if providers else metrics.NoOpMeterProvider().get_meter("bubo")
         self._runs = _safe_instrument(self.meter.create_counter, "llm_review.runs")
         self._findings = _safe_instrument(self.meter.create_counter, "llm_review.findings")
         self._tokens = _safe_instrument(self.meter.create_counter, "llm_review.tokens")
@@ -115,8 +111,9 @@ class ReviewTelemetry:
 
     @classmethod
     def from_config(cls, config: TelemetryConfig) -> ReviewTelemetry:
-        configure_otel(config)
-        return cls(config)
+        providers = configure_otel(config)
+        instance = cls(config, providers=providers)
+        return instance
 
     @contextmanager
     def span(self, name: str, **attrs: object) -> Iterator[Span | None]:
@@ -166,7 +163,24 @@ class ReviewTelemetry:
         cost_usd: float,
         tone: str | None = None,
         lines_reviewed: int = 0,
+        llm_provider: str | None = None,
+        agent: str | None = None,
+        scm_provider: str | None = None,
+        language: str | None = None,
+        languages: Sequence[str] = (),
     ) -> None:
+        from bubo.telemetry.posthog import safe_context
+
+        context = safe_context(
+            dict(
+                model=model,
+                llm_provider=llm_provider,
+                language=language,
+                languages=languages,
+                agent=agent,
+                scm_provider=scm_provider,
+            )
+        )
         attrs = metric_attrs(
             repo=repo,
             model=model,
@@ -175,6 +189,7 @@ class ReviewTelemetry:
             dry_run=dry_run,
             tone=tone,
         )
+        attrs.update(context)
         self._add(self._runs, 1, attrs)
         self._record(self._review_duration, duration_seconds, attrs)
         self._record(self._lines_reviewed, lines_reviewed, attrs)
@@ -268,67 +283,14 @@ class ReviewTelemetry:
             return
 
 
-def configure_otel(config: TelemetryConfig) -> None:
-    """Initialize the OTel SDK exactly once per process.
+def configure_otel(config: TelemetryConfig):
+    """Use Bubo-owned OTel providers with the shared PostHog consent/transport."""
+    from bubo.telemetry.posthog import configure_otel as configure
 
-    Idempotent — subsequent calls after a successful setup are no-ops.
-    Equally important: subsequent calls after a FAILED setup retry the
-    initialization rather than silently sticking to no-op state. This is a
-    deliberate change from earlier behavior that set ``_CONFIGURED = True``
-    in the except branch and caused a misconfigured endpoint to silently
-    disable telemetry for the process lifetime with no log.
-
-    Failures emit a single ``otel_init_failed`` JSON line to stderr (rather
-    than to ``poller.log``, which would create a circular dependency) and
-    leave ``_CONFIGURED = False`` so the next call can retry — useful when,
-    for example, the OTLP collector starts up a few seconds after the
-    poller.
-    """
-    global _CONFIGURED
-    if _CONFIGURED or not config.enabled:
-        return
     try:
-        from bubo.analytics import install_id
-
-        identity = install_id()
-        if identity is None:
-            return
-        resource = Resource.create(
-            {
-                "service.name": config.service_name,
-                "deployment.environment.name": config.environment,
-                "service.instance.id": identity,
-                "install_id": identity,
-                "distinct_id": identity,
-            }
-        )
-        if config.otlp_endpoint:
-            tracer_provider = TracerProvider(resource=resource)
-            tracer_provider.add_span_processor(
-                BatchSpanProcessor(OTLPSpanExporter(endpoint=config.otlp_endpoint, timeout=5))
-            )
-            trace.set_tracer_provider(tracer_provider)
-            exporter = OTLPMetricExporter(endpoint=config.otlp_endpoint, timeout=5)
-            reader = PeriodicExportingMetricReader(
-                exporter,
-                export_interval_millis=config.export_interval_seconds * 1000,
-            )
-            metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[reader]))
-        else:
-            trace.set_tracer_provider(TracerProvider(resource=resource))
-        _CONFIGURED = True
-    except Exception as exc:
-        print(
-            json.dumps(
-                {
-                    "event": "otel_init_failed",
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                }
-            ),
-            file=sys.stderr,
-            flush=True,
-        )
+        return configure(config)
+    except Exception:
+        return None
 
 
 def _safe_instrument(factory: Any, *args: object) -> Any:
@@ -343,4 +305,5 @@ def span_attrs(attrs: dict[str, object]) -> dict[str, SpanAttribute]:
     for key, value in attrs.items():
         if isinstance(value, str | bool | int | float):
             out[key] = value
+    out["bubo_version"] = installed_version()
     return out

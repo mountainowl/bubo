@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import bubo.analytics as analytics
+from bubo.analytics_config import AnalyticsConfig
 from bubo.telemetry.config import ModelPricing, TelemetryConfig
 from bubo.telemetry.cost import TokenUsage, estimate_cost_usd, parse_codex_token_usage
 from bubo.telemetry.metrics import METRIC_ATTRIBUTE_KEYS, ReviewTelemetry, metric_attrs
@@ -17,6 +19,8 @@ def test_metric_attrs_exclude_high_cardinality_fields() -> None:
         discussion_id="disc",
     )
 
+    version = attrs.pop("bubo_version")
+    assert version == analytics.installed_version()
     assert attrs == {"repo": "example/enabled-repo", "status": "success"}
     assert "mr_iid" not in METRIC_ATTRIBUTE_KEYS
     assert "file" not in METRIC_ATTRIBUTE_KEYS
@@ -31,6 +35,8 @@ def test_metric_attrs_coerce_untrusted_label_values() -> None:
         status="posted",
     )
 
+    version = attrs.pop("bubo_version")
+    assert version == analytics.installed_version()
     assert attrs == {
         "finding_type": "unknown",
         "severity": "unknown",
@@ -93,7 +99,7 @@ def test_disabled_review_telemetry_is_noop() -> None:
 
 
 def test_telemetry_span_does_not_swallow_body_exceptions() -> None:
-    telemetry = ReviewTelemetry(TelemetryConfig(enabled=True))
+    telemetry = ReviewTelemetry(TelemetryConfig(analytics=AnalyticsConfig(enabled=True)))
 
     try:
         with telemetry.span("llm_review.run", repo="r"):
@@ -104,16 +110,17 @@ def test_telemetry_span_does_not_swallow_body_exceptions() -> None:
         raise AssertionError("telemetry span swallowed the review exception")
 
 
-def test_review_stage_spans_nest_under_run_with_attributes() -> None:
+def test_review_stage_spans_nest_under_run_with_attributes(monkeypatch) -> None:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+    # This test collects only into its explicitly supplied in-memory exporter.
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
-    telemetry = ReviewTelemetry(TelemetryConfig(enabled=True))
+    telemetry = ReviewTelemetry(TelemetryConfig(analytics=AnalyticsConfig(enabled=True)))
     telemetry.tracer = provider.get_tracer("bubo-test")  # bypass the global provider
 
     with telemetry.span("llm_review.run", repo="r"):
@@ -132,14 +139,19 @@ def test_review_stage_spans_nest_under_run_with_attributes() -> None:
 
 def test_configure_otel_can_retry_after_init_failure(monkeypatch) -> None:
     from bubo.telemetry import metrics as metrics_module
+    from bubo.telemetry import posthog
 
-    metrics_module._CONFIGURED = False
-
-    def fail_create(*_: object, **__: object):
+    def fail_create(*args, **kwargs):
         raise RuntimeError("bad otel")
 
-    monkeypatch.setattr(metrics_module.Resource, "create", fail_create)
-
-    metrics_module.configure_otel(TelemetryConfig(enabled=True, otlp_endpoint="http://otel:4317"))
-
-    assert metrics_module._CONFIGURED is False
+    monkeypatch.setattr(posthog, "configure_otel", fail_create)
+    assert (
+        metrics_module.configure_otel(TelemetryConfig(analytics=AnalyticsConfig(enabled=True)))
+        is None
+    )
+    expected = (object(), object())
+    monkeypatch.setattr(posthog, "configure_otel", lambda config: expected)
+    assert (
+        metrics_module.configure_otel(TelemetryConfig(analytics=AnalyticsConfig(enabled=True)))
+        == expected
+    )

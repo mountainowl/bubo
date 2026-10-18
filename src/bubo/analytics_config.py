@@ -8,11 +8,7 @@ sent for public or private projects; repository names require verified public
 visibility and a recognized open-source license. Code, paths, personal account
 names, review text and credentials are excluded (see :mod:`bubo.analytics`).
 
-Three independent ways to opt out, checked in :func:`bubo.analytics`:
-
-* ``[analytics] enabled = false`` in ``config/env.toml`` (this block);
-* ``BUBO_ANALYTICS=0`` (or ``false``/``no``/``off``) in the environment;
-* the cross-tool ``DO_NOT_TRACK=1`` convention (https://consoledonottrack.com).
+Set ``[analytics] enabled = false`` in ``config/env.toml`` to disable delivery.
 
 The destination is a PostHog project ingestion key. PostHog ``phc_`` keys
 are *public write-only* keys designed to be embedded in client software —
@@ -40,9 +36,6 @@ class AnalyticsConfig:
     """Parsed ``[analytics]`` block — anonymous usage analytics settings.
 
     ``enabled`` defaults to ``True``: the signal is opt-out, not opt-in.
-    The environment kill-switches (``BUBO_ANALYTICS`` / ``DO_NOT_TRACK``)
-    are applied on top of this in :func:`bubo.analytics.analytics_enabled`,
-    so a Docker/CI operator who cannot edit ``env.toml`` can still opt out.
     """
 
     enabled: bool = True

@@ -57,6 +57,7 @@ export function statusTone(status) {
 // Derive the dominant outcome label for a finding's embedded outcome row.
 export function outcomeLabel(outcome) {
   if (!outcome) return "no outcome yet";
+  if (outcome.deleted) return "deleted";
   if (outcome.false_positive) return "false positive";
   if (outcome.disputed) return "disputed";
   if (outcome.duplicate) return "duplicate";
@@ -67,7 +68,7 @@ export function outcomeLabel(outcome) {
 }
 
 export function outcomeTone(outcome) {
-  if (!outcome) return "muted";
+  if (!outcome || outcome.deleted) return "muted";
   if (outcome.false_positive || outcome.disputed) return "danger";
   if (outcome.resolved) return "ok";
   if (outcome.duplicate || outcome.merged_unresolved) return "warn";

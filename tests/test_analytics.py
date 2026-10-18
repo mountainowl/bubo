@@ -12,17 +12,12 @@ from bubo.analytics_config import AnalyticsConfig
 
 
 @pytest.fixture(autouse=True)
-def _reset_analytics_singletons(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, disable_product_analytics
-) -> None:
-    """Each test starts with a clean module state and no env opt-outs."""
+def _reset_analytics_singletons(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Each test starts with isolated analytics state."""
     monkeypatch.setattr(analytics, "_pending_events", [])
     monkeypatch.setattr(analytics, "_install_id", None)
     monkeypatch.setattr(analytics, "_install_path", None)
-    monkeypatch.setattr(analytics, "_install_node", None)
     monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
-    monkeypatch.delenv("BUBO_ANALYTICS", raising=False)
-    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +90,7 @@ def test_clean_drops_none_and_rejects_multiword_or_long_strings() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Opt-out precedence: DO_NOT_TRACK > BUBO_ANALYTICS > config; blank dest = off.
+# Configuration consent; blank destination disables delivery.
 # ---------------------------------------------------------------------------
 
 
@@ -105,22 +100,6 @@ def test_enabled_by_default() -> None:
 
 def test_config_opt_out() -> None:
     assert analytics.analytics_enabled(AnalyticsConfig(enabled=False)) is False
-
-
-def test_do_not_track_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DO_NOT_TRACK", "1")
-    monkeypatch.setenv("BUBO_ANALYTICS", "1")  # would enable, but DNT wins
-    assert analytics.analytics_enabled(AnalyticsConfig()) is False
-
-
-def test_bubo_analytics_env_disables(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BUBO_ANALYTICS", "0")
-    assert analytics.analytics_enabled(AnalyticsConfig()) is False
-
-
-def test_bubo_analytics_env_enables_over_config_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BUBO_ANALYTICS", "true")
-    assert analytics.analytics_enabled(AnalyticsConfig(enabled=False)) is True
 
 
 def test_blank_destination_disables() -> None:
@@ -153,8 +132,10 @@ def test_install_id_is_stable_and_persisted(
     assert (tmp_path / "state" / "install_id").read_text().strip() == seed
 
 
-def test_install_id_disables_events_when_unwritable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(analytics.paths, "DB", Path("/proc/nonexistent/reviewer.sqlite"))
+def test_install_id_disables_events_when_unwritable(monkeypatch, tmp_path) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("fixture")
+    monkeypatch.setattr(analytics.paths, "DB", blocker / "reviewer.sqlite")
     assert analytics.install_id() is None
     analytics.record_session_start(AnalyticsConfig(), scm_provider="github", projects_count=1)
     assert analytics._pending_events == []

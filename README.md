@@ -19,6 +19,8 @@
 
 ## Just facts • No noise • Always learning • Compliant • Auditable • Proven ROI
 
+<img src="assets/bubo-dashboard-teaser.png" width="960" alt="Bubo dashboard, review activity, and reports shown as layered interface previews">
+
 **[See metrics & ROI →](https://mountainowl.github.io/bubo/operate/#governance-report) · [Install Bubo →](#install)**
 
 ## Install
@@ -31,22 +33,23 @@ bubo-poller service start # start the review service (polling + outcome sync)
 ```
 
 Prefer a container? `docker pull ghcr.io/mountainowl/bubo` (multi-arch; the
-review-agent CLI is BYO). Continue with the
-[recipes and quickstart](https://mountainowl.github.io/bubo/recipes/).
+review-agent CLI is BYO).
+
+### [Go To Quickstart & Recipes for your use cases →](https://mountainowl.github.io/bubo/recipes/)
 
 ## Documentation
 
 Everything lives on the docs site — this README is just the front door.
 
-| | |
-|---|---|
-| [Recipes](https://mountainowl.github.io/bubo/recipes/) | Copy-paste GitLab / GitHub / in-house-model setups. |
-| [Features](https://mountainowl.github.io/bubo/features/) | The full capability list. |
-| [Configuration](https://mountainowl.github.io/bubo/configuration/) | Every setting, per section, plus a quick-start config. |
-| [GitHub Action](https://mountainowl.github.io/bubo/github-action/) | Run one synchronous PR review in GitHub Actions. |
-| [Operate](https://mountainowl.github.io/bubo/operate/) | Deploy, run the review service, grade outcomes, governance report. |
-| [Troubleshooting](https://mountainowl.github.io/bubo/troubleshooting/) | Host / infra fixes (sandbox, AppArmor). |
-| [Metrics & telemetry](https://mountainowl.github.io/bubo/telemetry/) | Emitted `llm_review.*` metrics and dashboards. |
+|                                                                        |                                                                                                       |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| [Recipes](https://mountainowl.github.io/bubo/recipes/)                 | Copy-paste GitLab / GitHub / in-house-model setups.                                                   |
+| [Features](https://mountainowl.github.io/bubo/features/)               | The full capability list.                                                                             |
+| [Configuration](https://mountainowl.github.io/bubo/configuration/)     | Every setting, per section, plus a quick-start config.                                                |
+| [Operate](https://mountainowl.github.io/bubo/operate/)                 | Deploy, run the review service, grade outcomes, governance report.                                    |
+| [Troubleshooting](https://mountainowl.github.io/bubo/troubleshooting/) | Host / infra fixes (sandbox, AppArmor).                                                               |
+| [Updates & recovery](docs/pages/auto-update.mdx)                       | Automatic/manual updates, safe deferrals and issue-ready failure reports; platform acceptance status. |
+| [Metrics & telemetry](https://mountainowl.github.io/bubo/telemetry/)   | Emitted `llm_review.*` metrics and dashboards.                                                        |
 
 ## Status
 

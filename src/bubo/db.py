@@ -468,9 +468,7 @@ def provenance_for(run_id: str) -> JsonObject | None:
     }
 
 
-def _governance_decision_row(
-    project: str, iid: int, sha: str, row: tuple[Any, ...]
-) -> JsonObject:
+def _governance_decision_row(project: str, iid: int, sha: str, row: tuple[Any, ...]) -> JsonObject:
     """Shape a ``governance_decisions`` row tuple into the public JSON dict."""
     return {
         "run_id": row[0],
@@ -551,9 +549,7 @@ def governance_decision_for(run_id: str) -> JsonObject | None:
     return _governance_decision_row(str(meta[0]), int(meta[1]), str(meta[2]), row)
 
 
-def governance_decisions_for(
-    project: str, iid: int, sha: str | None = None
-) -> list[JsonObject]:
+def governance_decisions_for(project: str, iid: int, sha: str | None = None) -> list[JsonObject]:
     """Return governance decisions for an MR/PR (keyed like findings_for/outcomes_for).
 
     When ``sha`` is ``None`` the most-recent reviewed SHA is resolved via
@@ -740,7 +736,7 @@ def record_finding(
     confidence = finding.get("confidence")
     try:
         confidence = float(confidence) if confidence is not None else None
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         confidence = None
     verified_int = None if verified is None else int(verified)
     with connect_db() as db:
@@ -1011,17 +1007,31 @@ def prior_posted_findings_for_reconciliation(
         identity = str(row[2]) if row[2] else f"native-legacy:{row[0]}:{row[1]}"
         findings.append(
             {
-                "sha": str(row[0]), "fingerprint": str(row[1]), "finding_identity": identity,
-                "discussion_id": str(row[3]), "file": str(row[4]), "line": row[5],
-                "body": str(row[6]), "type": row[7], "severity": row[8], "category": row[9],
+                "sha": str(row[0]),
+                "fingerprint": str(row[1]),
+                "finding_identity": identity,
+                "discussion_id": str(row[3]),
+                "file": str(row[4]),
+                "line": row[5],
+                "body": str(row[6]),
+                "type": row[7],
+                "severity": row[8],
+                "category": row[9],
             }
         )
     return findings
 
 
 def claim_finding_reconciliation(
-    *, project: str, iid: int, prior_sha: str, fingerprint: str, head_sha: str,
-    discussion_id: str, reply_marker: str, lease_seconds: int,
+    *,
+    project: str,
+    iid: int,
+    prior_sha: str,
+    fingerprint: str,
+    head_sha: str,
+    discussion_id: str,
+    reply_marker: str,
+    lease_seconds: int,
 ) -> bool:
     """Atomically lease one head-specific action to prevent duplicate replies."""
     stamp = now()
@@ -1043,17 +1053,35 @@ def claim_finding_reconciliation(
                on conflict(project,iid,prior_sha,fingerprint,head_sha) do update set
                  claim_until=excluded.claim_until, updated_at=excluded.updated_at""",
             (
-                project, iid, prior_sha, fingerprint, head_sha, discussion_id,
-                "claimed", reply_marker, until, stamp,
+                project,
+                iid,
+                prior_sha,
+                fingerprint,
+                head_sha,
+                discussion_id,
+                "claimed",
+                reply_marker,
+                until,
+                stamp,
             ),
         )
     return True
 
 
 def record_finding_reconciliation(
-    *, project: str, iid: int, prior_sha: str, fingerprint: str, head_sha: str,
-    discussion_id: str, state: str, reply_marker: str, reply_id: str | None = None,
-    verdict: str | None = None, evidence: str | None = None, causal_commit: str | None = None,
+    *,
+    project: str,
+    iid: int,
+    prior_sha: str,
+    fingerprint: str,
+    head_sha: str,
+    discussion_id: str,
+    state: str,
+    reply_marker: str,
+    reply_id: str | None = None,
+    verdict: str | None = None,
+    evidence: str | None = None,
+    causal_commit: str | None = None,
 ) -> None:
     """Durably upsert a retryable reconciliation action."""
     with connect_db() as db:
@@ -1073,8 +1101,21 @@ def record_finding_reconciliation(
               causal_commit=coalesce(excluded.causal_commit,finding_reconciliations.causal_commit),
               updated_at=excluded.updated_at
             """,
-            (project, iid, prior_sha, fingerprint, head_sha, discussion_id, state, reply_marker,
-             reply_id, verdict, evidence, causal_commit, now()),
+            (
+                project,
+                iid,
+                prior_sha,
+                fingerprint,
+                head_sha,
+                discussion_id,
+                state,
+                reply_marker,
+                reply_id,
+                verdict,
+                evidence,
+                causal_commit,
+                now(),
+            ),
         )
 
 
@@ -1234,11 +1275,7 @@ def disputed_class_stats(project: str, *, min_samples: int) -> list[JsonObject]:
     # Sort the raw triples (rate desc, category asc) BEFORE building dicts so the
     # sort key is concretely typed (mypy can't see into a dict[str, Any] value).
     ranked = sorted(
-        (
-            (category, total, rejected)
-            for category, total, rejected in rows
-            if total >= min_samples
-        ),
+        ((category, total, rejected) for category, total, rejected in rows if total >= min_samples),
         key=lambda r: (-(r[2] / r[1]), r[0]),
     )
     stats: list[JsonObject] = [
@@ -1445,13 +1482,13 @@ def outcomes_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
             "resolved_at": row[8],
             "merged_unresolved": bool(row[9]),
             "reply_classified": bool(row[10]),
-                "resolution_source": _resolution_source(row[11]),
-                "resolution_evidence": _outcome_evidence(row[12]),
-                "developer_disposition": _developer_disposition(row[13], {}),
-                "disposition_evidence": _outcome_evidence(row[14]),
-                "last_checked_at": row[15],
-                "severity": _normalized_severity(row[16]),
-            }
+            "resolution_source": _resolution_source(row[11]),
+            "resolution_evidence": _outcome_evidence(row[12]),
+            "developer_disposition": _developer_disposition(row[13], {}),
+            "disposition_evidence": _outcome_evidence(row[14]),
+            "last_checked_at": row[15],
+            "severity": _normalized_severity(row[16]),
+        }
         for row in rows
     ]
 
@@ -1603,9 +1640,9 @@ def provenance_summary(
     where = "started_at >= ? and started_at <= ? and (? is null or project = ?)"
     args = (start, end, project, project)
     with connect_db(readonly=True) as db:
-        runs_total = db.execute(
-            f"select count(*) from review_runs where {where}", args
-        ).fetchone()[0]
+        runs_total = db.execute(f"select count(*) from review_runs where {where}", args).fetchone()[
+            0
+        ]
         band_rows = db.execute(
             f"select provenance_band, count(*) from review_runs "
             f"where {where} and provenance_band is not null group by provenance_band "
@@ -1691,16 +1728,25 @@ def outcomes_summary(
         ).fetchall()
     by_severity: dict[str, JsonObject] = {
         severity: {
-            "total": 0, "resolved": 0, "bubo_auto": 0, "agrees": 0,
-            "disagrees": 0, "false_positive": 0, "unknown_disposition": 0,
+            "total": 0,
+            "resolved": 0,
+            "bubo_auto": 0,
+            "agrees": 0,
+            "disagrees": 0,
+            "false_positive": 0,
+            "unknown_disposition": 0,
         }
         for severity in ("blocking", "non_blocking", "unknown")
     }
     for severity, total, resolved, auto, agrees, disagrees, fp, unknown in severity_rows:
         by_severity[str(severity)] = {
-            "total": int(total), "resolved": int(resolved), "bubo_auto": int(auto),
-            "agrees": int(agrees), "disagrees": int(disagrees),
-            "false_positive": int(fp), "unknown_disposition": int(unknown),
+            "total": int(total),
+            "resolved": int(resolved),
+            "bubo_auto": int(auto),
+            "agrees": int(agrees),
+            "disagrees": int(disagrees),
+            "false_positive": int(fp),
+            "unknown_disposition": int(unknown),
         }
     return {
         "total": int(row[0]),
@@ -1865,12 +1911,8 @@ def audit_rows(
         args = (*args, int(limit))
     with connect_db(readonly=True) as db:
         has_gov = _table_exists(db, "governance_decisions")
-        gov_select = (
-            "g.action, g.mode" if has_gov else "null as action, null as mode"
-        )
-        gov_join = (
-            "left join governance_decisions g on g.run_id = r.run_id" if has_gov else ""
-        )
+        gov_select = "g.action, g.mode" if has_gov else "null as action, null as mode"
+        gov_join = "left join governance_decisions g on g.run_id = r.run_id" if has_gov else ""
         rows = db.execute(
             f"""
             select r.run_id, r.project, r.iid, r.sha, r.started_at, r.finished_at,
@@ -1921,6 +1963,7 @@ def audit_rows(
                 "sensitive_paths_count": len(sensitive),
                 "tokens_total": int(r[14]) if r[14] is not None else 0,
                 "cost_usd": float(r[15]) if r[15] is not None else 0.0,
+                "cost_recorded": r[15] is not None,
                 "findings_total": int(r[16]),
                 "findings_posted": int(r[17]),
                 "outcomes_resolved": int(r[18]),
@@ -1978,9 +2021,7 @@ def latency_summary(
             f"select started_at, finished_at from review_runs where {where}", args
         ).fetchall()
     durations = sorted(
-        (
-            datetime.fromisoformat(finished_at) - datetime.fromisoformat(started_at)
-        ).total_seconds()
+        (datetime.fromisoformat(finished_at) - datetime.fromisoformat(started_at)).total_seconds()
         for started_at, finished_at in rows
     )
     if not durations:
