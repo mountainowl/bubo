@@ -17,6 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from review_output import review_output
 
 from bubo import db, github, paths, poller
 from bubo.config_values import ConfigError
@@ -220,7 +221,7 @@ def _run_worker(monkeypatch, fake: FakeGitHub, stdout: str, *, push_to: str | No
     monkeypatch.setattr("bubo.scm.github.GitHubProvider.checkout", checkout)
     prompts: list[str] = []
 
-    def agent(argv, *, cwd, timeout, env):
+    def agent(argv, *, cwd, timeout, env, **_kw):
         prompts.append(argv[-1])
         if push_to:
             fake.head = push_to
@@ -235,7 +236,7 @@ def _run_worker(monkeypatch, fake: FakeGitHub, stdout: str, *, push_to: str | No
 
 def test_push_during_review_marks_superseded_and_posts_nothing(monkeypatch, fake) -> None:
     use_config(monkeypatch)
-    raw = json.dumps([finding(7)])
+    raw = review_output([finding(7)])
 
     assert _run_worker(monkeypatch, fake, raw, push_to=S2) == 0
 
@@ -249,14 +250,14 @@ def test_push_during_review_marks_superseded_and_posts_nothing(monkeypatch, fake
 
 def test_push_during_clean_review_posts_no_acknowledgement(monkeypatch, fake) -> None:
     use_config(monkeypatch)
-    assert _run_worker(monkeypatch, fake, "[]", push_to=S2) == 0
+    assert _run_worker(monkeypatch, fake, review_output([]), push_to=S2) == 0
     assert status_of(S1) == ReviewStatus.SUPERSEDED
     assert fake.issue_comments == []
 
 
 def test_superseded_head_is_reviewed_by_next_poll(monkeypatch, fake, forked) -> None:
     use_config(monkeypatch)
-    _run_worker(monkeypatch, fake, json.dumps([finding(7)]), push_to=S2)
+    _run_worker(monkeypatch, fake, review_output([finding(7)]), push_to=S2)
     poller.poll()
     assert forked == [S2]
 
@@ -270,14 +271,14 @@ def test_never_posts_old_line_numbers_on_a_new_head(monkeypatch, fake) -> None:
             token="t",
             project=PROJECT,
             mr={"number": 1, "head": {"sha": S1}},
-            raw_review=json.dumps([finding(7)]),
+            raw_review=review_output([finding(7)]),
         )
     assert fake.comments == []
 
 
 def test_unchanged_head_still_posts(monkeypatch, fake) -> None:
     use_config(monkeypatch)
-    assert _run_worker(monkeypatch, fake, json.dumps([finding(7)])) == 0
+    assert _run_worker(monkeypatch, fake, review_output([finding(7)])) == 0
     assert status_of(S1) == ReviewStatus.SUCCESS
     assert [(c["commit_id"], c["line"]) for c in fake.comments] == [(S1, 7)]
 
@@ -301,7 +302,7 @@ def test_reworded_finding_with_same_identity_is_not_posted_again(monkeypatch, fa
             token="t",
             project=PROJECT,
             mr={"number": 1, "head": {"sha": sha}},
-            raw_review=json.dumps([item]),
+            raw_review=review_output([item]),
         )
 
     assert post(S1, finding(7, "Heads up: xs[i+1] reads past the end.")) == (1, 0, 0)
@@ -325,7 +326,7 @@ def test_distinct_finding_on_new_head_still_posts(monkeypatch, fake) -> None:
             token="t",
             project=PROJECT,
             mr={"number": 1, "head": {"sha": sha}},
-            raw_review=json.dumps([item]),
+            raw_review=review_output([item]),
         )
     assert len(fake.comments) == 2
 
@@ -443,7 +444,7 @@ def _incremental_worker(monkeypatch, fake: FakeGitHub, stdout: str) -> tuple[lis
     prompts: list[str] = []
     reconciled: list[ReviewConfig] = []
 
-    def agent(argv, *, cwd, timeout, env):
+    def agent(argv, *, cwd, timeout, env, **_kw):
         prompts.append(argv[-1])
         return SimpleNamespace(stdout=stdout, returncode=0)
 
@@ -466,7 +467,7 @@ def test_incremental_reviews_only_new_commits_and_reconciles(monkeypatch, fake, 
     fake.patches[head] = _patch_for([*first_lines, "added11", "added12"])
     use_config(monkeypatch, rereview="incremental")
     # Line 7 is in the PR diff but unchanged since `prior`; line 12 is new.
-    raw = json.dumps([finding(7), finding(12, title="New bug in added code")])
+    raw = review_output([finding(7), finding(12, title="New bug in added code")])
 
     prompts, reconciled = _incremental_worker(monkeypatch, fake, raw)
 
@@ -485,7 +486,7 @@ def test_incremental_falls_back_to_full_review_after_force_push(monkeypatch, fak
     fake.head = head
     fake.patches[head] = _patch_for([*first_lines, "added11", "added12"])
     use_config(monkeypatch, rereview="incremental")
-    raw = json.dumps([finding(7), finding(12, title="New bug in added code")])
+    raw = review_output([finding(7), finding(12, title="New bug in added code")])
 
     prompts, _ = _incremental_worker(monkeypatch, fake, raw)
 
@@ -501,6 +502,6 @@ def test_full_rereview_does_not_force_reconciliation(monkeypatch, fake, repo) ->
     fake.patches[head] = _patch_for(["a", "b"])
     cfg = use_config(monkeypatch)
     assert cfg.rereview == "full"
-    prompts, reconciled = _incremental_worker(monkeypatch, fake, "[]")
+    prompts, reconciled = _incremental_worker(monkeypatch, fake, review_output([]))
     assert prior not in prompts[0]
     assert [c.reconcile_fixed_findings for c in reconciled] == [False]

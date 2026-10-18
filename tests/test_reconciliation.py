@@ -10,6 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from review_output import review_output
+
 from bubo import db, paths, poller
 from bubo.reconciliation import ReconciliationOutcome, ReconciliationStatus, finding_identity
 from bubo.review_config import ReviewConfig
@@ -311,6 +313,8 @@ def _run_worker_case(
     *,
     cfg: ReviewConfig,
     returncode: int = 0,
+    review_status: str = "complete",
+    analytics_results: list | None = None,
     post_result: tuple[int, int, int] = (0, 0, 0),
     pending: bool = False,
     events: list[str] | None = None,
@@ -338,6 +342,7 @@ def _run_worker_case(
     no_findings = MagicMock(return_value=("disabled", "test"))
 
     def post(**kwargs: object) -> tuple[int, int, int]:
+        kwargs["review_results"].append(poller.parse_review_result(review_output(status=review_status, limitations=["missing dependency"] if review_status == "incomplete" else [])))
         if pending:
             external = kwargs["pending_external_ids"]
             assert isinstance(external, list)
@@ -352,14 +357,14 @@ def _run_worker_case(
         patch("bubo.poller.write_rendered_meta_prompt", return_value=tmp / "prompt"),
         patch("bubo.poller.capture_provenance", return_value=None),
         patch("bubo.poller.count_added_lines", return_value=0),
-        patch("bubo.poller.run", return_value=SimpleNamespace(stdout="", returncode=returncode)),
+        patch("bubo.poller.run", return_value=SimpleNamespace(stdout=review_output(), returncode=returncode)),
         patch("bubo.poller.post_or_plan_findings", side_effect=post),
         patch("bubo.poller.record_review_run_finish", finish),
         patch("bubo.poller.reconcile_prior_findings", reconciler),
         patch("bubo.poller.post_no_findings_comment", no_findings),
         patch("bubo.poller.cleanup_worktree"),
         patch("bubo.poller.analytics.flush"),
-        patch("bubo.poller.analytics.record_review_completed"),
+        patch("bubo.poller.analytics.record_review_completed", side_effect=lambda *a, **kw: analytics_results.append(kw) if analytics_results is not None else None),
     ):
         result = poller.worker(job)
     return provider, reconciler, finish, no_findings, result
@@ -451,3 +456,17 @@ def test_reply_marker_retry_does_not_duplicate_reply() -> None:
         assert _run(provider) is ReconciliationStatus.RESOLVED
         provider.reply_to_finding_thread.assert_not_called()
         provider.resolve_finding_thread.assert_called_once()
+
+
+def test_incomplete_review_preserves_posted_counts_without_clean_ack(tmp_path):
+    analytics_results = []
+    with _temp_db():
+        _, reconciler, finish, ack, result = _run_worker_case(
+            tmp_path, cfg=ReviewConfig(dry_run=False, reconcile_fixed_findings=True),
+            review_status="incomplete", post_result=(1, 0, 0), analytics_results=analytics_results,
+        )
+    assert result == 1
+    assert finish.call_args.kwargs["status"].value == "failed"
+    assert analytics_results[-1]["findings_posted"] == 1
+    reconciler.assert_not_called()
+    ack.assert_not_called()

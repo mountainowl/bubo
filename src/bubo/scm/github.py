@@ -17,6 +17,7 @@ Key differences from GitLab, all encapsulated here:
 from __future__ import annotations
 
 import os
+from html import escape
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -308,9 +309,7 @@ class GitHubProvider:
         root_id = root.get("database_id")
         if root_id is None:
             raise RuntimeError("GitHub Bubo root comment has no REST database id")
-        created = github.reply_to_pr_review_comment(
-            cfg, token, project, number, str(root_id), body
-        )
+        created = github.reply_to_pr_review_comment(cfg, token, project, number, str(root_id), body)
         reply_id = str(created.get("id") or "")
         if not reply_id:
             raise RuntimeError("GitHub did not return an id for Bubo reconciliation reply")
@@ -341,9 +340,7 @@ class GitHubProvider:
         threads = github.get_pr_review_threads(cfg, token, project, number)
         thread = github.find_thread_for_comment(threads, thread_id)
         if thread is None:
-            snapshot = self.finding_thread(
-                cfg, token, project, number, thread_id, bot_username, ""
-            )
+            snapshot = self.finding_thread(cfg, token, project, number, thread_id, bot_username, "")
             return FindingThreadResolution(snapshot.state, applied_by_bubo=False)
         if github.bubo_owned_root(thread, thread_id, bot_username) is None:
             return FindingThreadResolution(FindingThreadState.FOREIGN, applied_by_bubo=False)
@@ -358,9 +355,7 @@ class GitHubProvider:
         final_threads = github.get_pr_review_threads(cfg, token, project, number)
         final_thread = github.find_thread_for_comment(final_threads, thread_id)
         if final_thread is None:
-            final = self.finding_thread(
-                cfg, token, project, number, thread_id, bot_username, ""
-            )
+            final = self.finding_thread(cfg, token, project, number, thread_id, bot_username, "")
             if final.state is FindingThreadState.DELETED:
                 return FindingThreadResolution(final.state, applied_by_bubo=False)
             raise RuntimeError("GitHub review thread was not resolved after mutation")
@@ -377,15 +372,18 @@ class GitHubProvider:
         self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
     ) -> str:
         contract = build_review_contract(cfg)
-        head = change.get("head") or {}
-        base = change.get("base") or {}
         suffix = f"\n\n{extra_directive}" if extra_directive else ""
-        return f"""Review GitHub PR {change.get("html_url")}
-Project: {project}
-PR number: {change.get("number")}
-Title: {change.get("title")}
-source branch: {head.get("ref")}
-target branch: {base.get("ref")}
-head SHA: {self.head_sha(change)}
-
-{contract}{suffix}"""
+        metadata = {
+            "project": project,
+            "number": change.get("number") or change.get("iid"),
+            "title": change.get("title"),
+            "source_branch": (change.get("head") or {}).get("ref") or change.get("source_branch"),
+            "target_branch": (change.get("base") or {}).get("ref") or change.get("target_branch"),
+            "head_sha": self.head_sha(change),
+            "base_sha": (change.get("base") or {}).get("sha")
+            or (change.get("diff_refs") or {}).get("base_sha"),
+            "url": change.get("html_url") or change.get("web_url"),
+        }
+        evidence = "\n".join(f"{key}: {escape(str(value))}" for key, value in metadata.items())
+        return (f"{contract}{suffix}\nReview GitHub PR evidence:\n"
+                f"<change_metadata>\n{evidence}\n</change_metadata>")

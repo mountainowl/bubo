@@ -1,0 +1,32 @@
+# Review result contract and execution policy
+
+Live review commands must emit exactly one schema-version-1 JSON object. Bare arrays, prose acknowledgements, error objects, duplicate keys, fences, and mixed transcripts are rejected. The offline `extract_findings` adapter and subscription health probe retain their separate compatibility contract; they cannot establish live review completion. Codex `exec` uses `--output-last-message` so tool transcripts are never parsed as results. Only the supported Codex and Claude command forms are accepted; arbitrary wrappers are rejected.
+
+```json
+{"schema_version":1,"mode":"diff","status":"complete","findings":[],"questions":[],"coverage":{"reviewed":["specified paths at pinned revision"],"unreviewed":[],"limitations":[]},"omitted_findings_count":0}
+```
+
+`complete` requires a nonempty reviewed scope and no unresolved questions, unreviewed scope, or limitations. `incomplete` retains supported findings and describes missing evidence. `failed` publishes no findings. Diff publishers reject audit results and stale heads. Findings require title, file, positive line, issue/suggestion type, blocking/non-blocking severity, numeric confidence from 0 to 1, category, impact, evidence, and fix. Questions are separate from defect confidence. Output limits preserve omission counts; no clean acknowledgement is emitted when candidates were merely filtered or omitted.
+
+Incomplete worker runs use the existing failed/backoff state and preserve publication counts and the full result in their report. They never reconcile old comments or acknowledge a clean change. MCP clients receive explicit status and coverage. A verifier confirms or refutes only with a decisive evidence quorum; unavailable context, split votes, and exhausted budgets remain undecided and retryable. Only decisive votes for the exact revision/finding and unchanged verification policy are reused.
+
+## Read-only execution
+
+All reviewer, verifier, and reconciliation subprocesses enter a filesystem sandbox. macOS requires `sandbox-exec`; Linux requires `bubblewrap` (`bwrap`) and permitted namespaces. Unsupported or denied sandbox setup fails closed. Provision and verify the sandbox before upgrading service, container, or GitHub Action deployments; custom launchers do not bypass this requirement. CI requires real outer Linux filesystem isolation and credential-free native Codex nesting tests. On Ubuntu 22.04 with Codex 0.154.0, an outer-only scratch write succeeds while standalone and nested native sandboxes deny the same write and permit reads. This verifies composition for that runner and CLI, not authenticated Linux reviews or network isolation. Validate the deployment host before upgrading.
+
+The source checkout and host filesystem are read-only to the child. A disposable home/cache/temp directory is writable. Selected provider authentication files are copied with private permissions so session writes do not modify the originals; refreshes are not persisted back, and subscription/provider authentication should be smoke-tested before rollout. SCM credentials are removed from the child environment. Explicitly configured custom-provider credentials remain allowed. MCP prepares a target checkout and passes its cwd instead of reviewing the server's directory.
+
+This is a filesystem boundary, not a network firewall: model-provider network access remains enabled. The supported command policy disables ambient tools and configuration, restricts Claude to read tools, and requires Codex native read-only sandboxing. Those layers must work together; the outer filesystem test alone does not establish restrictions on remote side effects. Strict external read-only deployments must also constrain service credentials and network permissions. Do not claim XML delimiters or the outer filesystem sandbox enforce HTTP-level read-only semantics.
+
+## Migration and evaluation
+
+Deploy prompt and runtime versions together. Provider wrappers embed the trusted packaged contract; they no longer depend on ambient global skill discovery. Requirements and escaped XML metadata remain evidence, never execution authorization. Older supported reviewers must emit the new object; arbitrary custom launchers are not supported. Check the installed CLI version and feature help before deployment: Codex must support `--ignore-user-config`, `--ignore-rules`, `--output-last-message`, and read-only sandboxing; Claude must support the enforced safe/restricted mode and tool/MCP flags. No numeric minimum version is asserted. Unsupported CLI flags fail explicitly. Enterprise pass-through adapters can continue reading `findings` through the compatibility extractor, while transformed live output must preserve the envelope. The Marketplace Action installs the selected Bubo package: keep its pinned package/runtime compatible and pre-provision the OS sandbox before releasing this branch. No independent mirror repository is changed automatically.
+
+See `benchmarks/README.md` for the held-out evaluation protocol. The default benchmark matcher now requires exact normalized summaries as well as location, so location-only coincidences receive no quality credit. Exact string matching is conservative, not a substitute for independent semantic adjudication.
+
+The mandatory Linux filesystem test runs on Ubuntu 22.04; the ordinary test suite
+continues on ubuntu-latest. The current ubuntu-latest CI host rejected Bubblewrap
+UID mapping. Installing Bubblewrap alone is insufficient: deployment-host namespace
+policy must permit the unchanged sandbox command. Bubo does not relax that policy
+or fall back to an unsandboxed review. The separate pinned native-sandbox test establishes filesystem nesting on that
+runner; other hosts and authenticated Linux reviews still require validation.

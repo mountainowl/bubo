@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 
 from bubo.config_values import positive_int
 from bubo.errors import describe
@@ -415,6 +416,94 @@ def calibrated_category_floors(
     return floors
 
 
+@dataclass(frozen=True)
+class ReviewResult:
+    """Validated live review envelope; legacy arrays cannot establish completion."""
+
+    status: str
+    mode: str
+    findings: list[JsonObject]
+    questions: list[str]
+    coverage: dict[str, list[str]]
+    omitted_findings_count: int
+
+
+def load_final_json(raw: str) -> object:
+    """Strict model-output transport: no transcript scraping or duplicate keys."""
+
+    def unique_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"Duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    def invalid_constant(value: str) -> None:
+        raise ValueError(f"Nonfinite JSON value: {value}")
+
+    try:
+        return json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            "Expected exactly one final JSON result, without transcripts or fences"
+        ) from exc
+
+
+def parse_review_result(raw: str) -> ReviewResult:
+    """Read only the final answer, never salvage nested examples or tool output."""
+    data = load_final_json(raw)
+    if not isinstance(data, dict) or type(data.get("schema_version")) is not int:
+        raise ValueError("Review failed: missing schema_version")
+    if data["schema_version"] != 1:
+        raise ValueError("Review failed: unsupported schema_version")
+    status, mode = data.get("status"), data.get("mode")
+    if status not in ("complete", "incomplete", "failed") or mode not in ("diff", "audit"):
+        raise ValueError("Review failed: invalid status or review mode")
+    findings = data.get("findings")
+    if not isinstance(findings, list) or not all(isinstance(f, dict) for f in findings):
+        raise ValueError("Review failed: findings must be an array of objects")
+    for finding in findings:
+        for key in ("title", "file", "impact", "evidence", "fix", "category"):
+            if not isinstance(finding.get(key), str) or not finding[key].strip():
+                raise ValueError(f"Review failed: finding requires {key}")
+        if finding.get("type") not in ("issue", "suggestion"):
+            raise ValueError("Review failed: put unresolved questions in questions")
+        if finding.get("severity") not in ("blocking", "non-blocking"):
+            raise ValueError("Review failed: invalid finding severity")
+        if type(finding.get("line")) is not int or finding["line"] <= 0:
+            raise ValueError("Review failed: finding requires a positive line")
+        confidence = finding.get("confidence")
+        if type(confidence) not in (int, float) or not 0 <= confidence <= 1:
+            raise ValueError("Review failed: invalid finding confidence")
+    questions = data.get("questions")
+    coverage = data.get("coverage")
+    if not isinstance(questions, list) or not all(
+        isinstance(q, str) and q.strip() for q in questions
+    ):
+        raise ValueError("Review failed: questions must be nonempty strings")
+    if not isinstance(coverage, dict):
+        raise ValueError("Review failed: missing coverage")
+    for key in ("reviewed", "unreviewed", "limitations"):
+        entries = coverage.get(key)
+        if not isinstance(entries, list) or not all(
+            isinstance(entry, str) and entry.strip() for entry in entries
+        ):
+            raise ValueError(f"Review failed: invalid coverage.{key}")
+    omitted = data.get("omitted_findings_count")
+    if type(omitted) is not int or omitted < 0:
+        raise ValueError("Review failed: invalid omitted_findings_count")
+    if status == "complete" and (
+        questions or coverage["unreviewed"] or coverage["limitations"] or not coverage["reviewed"]
+    ):
+        raise ValueError("Review failed: completion conflicts with coverage or blockers")
+    if status != "complete" and not (
+        questions or coverage["unreviewed"] or coverage["limitations"]
+    ):
+        raise ValueError("Review failed: explain incomplete or failed coverage")
+    return ReviewResult(status, mode, findings, questions, coverage, omitted)
+
+
 def extract_findings(raw: str, max_findings: int | None = None) -> list[JsonObject]:
     """Parse the reviewer subprocess's stdout into a list of finding objects.
 
@@ -445,7 +534,9 @@ def extract_findings(raw: str, max_findings: int | None = None) -> list[JsonObje
         finding objects.
     """
     text = raw.strip()
-    if not text or text == "No actionable findings.":
+    if not text:
+        raise ValueError("Review output is empty")
+    if text == "No actionable findings.":
         return []
     if text.startswith("```"):
         text = _FENCE_START.sub("", text)
@@ -495,7 +586,7 @@ def extract_findings(raw: str, max_findings: int | None = None) -> list[JsonObje
                 candidates[0][1],
             )
     if isinstance(data, dict):
-        data = data.get("findings", [])
+        data = data.get("findings")
     if not isinstance(data, list):
         raise ValueError(
             describe(
@@ -509,7 +600,9 @@ def extract_findings(raw: str, max_findings: int | None = None) -> list[JsonObje
                 ),
             )
         )
-    findings = [item for item in data if isinstance(item, dict)]
+    if not all(isinstance(item, dict) for item in data):
+        raise ValueError("Findings must contain only objects")
+    findings = data
     if max_findings is not None:
         return findings[: positive_int(max_findings, "max_findings")]
     return findings
