@@ -17,11 +17,22 @@
 
 <img src="assets/bubo-readme-features.gif" width="960" alt="Bubo AI code review tone examples">
 
-## Just facts • No noise • Always learning • Compliant • Auditable • Proven ROI
+This wise owl is **Bubo**, an **agentic AI code reviewer** that reviews your GitLab
+MRs and GitHub PRs with the LLM model _of your choice_, and posts only the findings worth
+acting on as inline threads — no chatbot noise, no praise, no summaries.
+
+- **Signal over noise** — evidence-backed inline findings, confidence gates, optional verification, and deduplication.
+- **Your model, your infrastructure** — OpenAI, Anthropic, or another CLI-backed reviewer with your own deployment.
+- **Feedback-driven reviews** — recorded outcomes help tune thresholds and suppress recurring unwanted findings.
+- **Review evidence, in one place** — local dashboards and reports for findings, usage, policy decisions, and outcomes.
+- **Compliance** - cosign-signed releases with SBOMs, auditable on-prem report
+- **Metrics and RoI** — [Read about real world metrics and ROI](https://mountainowl.github.io/bubo/operate/#governance-report)
+
+> Run continuous reviews through [polling](https://mountainowl.github.io/bubo/recipes/),
+> or trigger reviews through [MCP](https://mountainowl.github.io/bubo/mcp/). The experimental
+> [GitHub Action](https://mountainowl.github.io/bubo/github-action/).
 
 <img src="assets/bubo-dashboard-teaser.png" width="960" alt="Bubo dashboard, review activity, and reports shown as layered interface previews">
-
-**[See metrics & ROI →](https://mountainowl.github.io/bubo/operate/#governance-report) · [Install Bubo →](#install)**
 
 ## Install
 
@@ -32,50 +43,22 @@ bubo doctor              # verify before the first poll
 bubo-poller service start # start the review service (polling + outcome sync)
 ```
 
-Prefer a container? `docker pull ghcr.io/mountainowl/bubo` (multi-arch; the
-review-agent CLI is BYO).
-
-### [Go To Quickstart & Recipes for your use cases →](https://mountainowl.github.io/bubo/recipes/)
+Container → `docker pull ghcr.io/mountainowl/bubo` - Bring your own LLM CLI, you can use multiple architectures.
 
 ## Documentation
 
 Everything lives on the docs site — this README is just the front door.
 
-|                                                                        |                                                                                                       |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| [Recipes](https://mountainowl.github.io/bubo/recipes/)                 | Copy-paste GitLab / GitHub / in-house-model setups.                                                   |
-| [Features](https://mountainowl.github.io/bubo/features/)               | The full capability list.                                                                             |
-| [Configuration](https://mountainowl.github.io/bubo/configuration/)     | Every setting, per section, plus a quick-start config.                                                |
-| [Operate](https://mountainowl.github.io/bubo/operate/)                 | Deploy, run the review service, grade outcomes, governance report.                                    |
-| [Troubleshooting](https://mountainowl.github.io/bubo/troubleshooting/) | Host / infra fixes (sandbox, AppArmor).                                                               |
+|                                                                        |                                                        |
+| ---------------------------------------------------------------------- | ------------------------------------------------------ |
+| [Recipes](https://mountainowl.github.io/bubo/recipes/)                 | Copy-paste GitLab / GitHub / in-house-model setups.    |
+| [Features](https://mountainowl.github.io/bubo/features/)               | The full capability list.                              |
+| [Configuration](https://mountainowl.github.io/bubo/configuration/)     | Every setting, per section, plus a quick-start config. |
+| [Operate](https://mountainowl.github.io/bubo/operate/)                 | Deploy, schedule, grade outcomes, governance report.   |
+| [Troubleshooting](https://mountainowl.github.io/bubo/troubleshooting/) | Host / infra fixes (sandbox, AppArmor).                |
+| [Metrics & telemetry](https://mountainowl.github.io/bubo/telemetry/)   | Emitted `llm_review.*` metrics and dashboards.         |
 | [Updates & recovery](docs/pages/auto-update.mdx)                       | Automatic/manual updates, safe deferrals and issue-ready failure reports; platform acceptance status. |
-| [Metrics & telemetry](https://mountainowl.github.io/bubo/telemetry/)   | Emitted `llm_review.*` metrics and dashboards.                                                        |
-
-## Status
-
-- **GitLab & GitHub posting via polling** — production path, at outcome-metric
-  parity. Set `[scm].provider = "github"` (or `BUBO_PROVIDER=github`).
-- **GitHub Marketplace Action** — experimental synchronous review for the PR
-  that triggered a GitHub Actions workflow; start in dry-run mode.
-- **MCP server (`bubo-mcp`)** — read-only metrics + triggered reviews; stdio or HTTP.
-- **Codex or Claude** — Bubo runs the review through a wrapper around your agent
-  CLI; Codex ships pre-wired.
-- **Webhook service** — not yet; long-running deployments use polling, while
-  the GitHub Action can run one review from a `pull_request` workflow.
-
-For continuous operation, run the service beside your pipelines. Use the
-Marketplace Action only when a CI-scoped review is the intended deployment.
-
-## Security
-
-- `config/env.toml` is gitignored and holds tokens. **Do not print or commit real values.**
-- Review-agent stdout is redacted (`GITLAB_TOKEN=`, `OPENAI_API_KEY=`, `glpat-…`,
-  `sk-…`, credentialed Git URLs) before it touches reports, logs, or the database.
-- The reviewer subprocess runs under a strict env allowlist — host secrets aren't
-  handed wholesale to the LLM agent.
-- Releases are cosign-signed via Sigstore keyless OIDC, with an SBOM on every release.
-- Report vulnerabilities per [SECURITY.md](SECURITY.md).
 
 ## Community
 
-[Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) · [Support](SUPPORT.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [License: MIT](LICENSE)
+[Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) · [Release verification](https://mountainowl.github.io/bubo/operate/#verify-a-release) · [Support](SUPPORT.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [License: MIT](LICENSE)
