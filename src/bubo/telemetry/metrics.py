@@ -168,6 +168,7 @@ class ReviewTelemetry:
         scm_provider: str | None = None,
         language: str | None = None,
         languages: Sequence[str] = (),
+        prompt_version: str | None = None,
     ) -> None:
         from bubo.telemetry.posthog import safe_context
 
@@ -188,6 +189,7 @@ class ReviewTelemetry:
             review_mode=review_mode,
             dry_run=dry_run,
             tone=tone,
+            prompt_version=prompt_version,
         )
         attrs.update(context)
         self._add(self._runs, 1, attrs)

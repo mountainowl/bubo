@@ -967,7 +967,7 @@ def _resolution_source(value: object) -> str:
     return value if value in {"developer", "bubo_auto", "unknown"} else "unknown"
 
 
-def _developer_disposition(value: object, outcome: JsonObject) -> str:
+def normalize_disposition(value: object, outcome: JsonObject) -> str:
     """Normalize only explicit agreement, never resolution or code movement."""
     raw = str(value or "").strip().lower()
     if raw in {"agrees", "disagrees", "false_positive", "unknown"}:
@@ -1108,7 +1108,7 @@ def record_finding_outcome(
                 int(bool(outcome.get("reply_classified", False))),
                 source,
                 source_evidence,
-                _developer_disposition(
+                normalize_disposition(
                     developer_disposition or outcome.get("developer_disposition"), outcome
                 ),
                 _outcome_evidence(disposition_evidence or outcome.get("disposition_evidence")),
@@ -1321,6 +1321,25 @@ def record_finding_reconciliation(
         )
 
 
+def run_finding_counts(run_id: str, *, since: str) -> tuple[int, int]:
+    """Return ``(posted, planned)`` findings this run recorded at or after ``since``.
+
+    The worker uses it when a review fails part-way through posting, so the
+    comments already on the change are still counted. ``since`` (the run's
+    own start, :func:`bubo.events.now` format) keeps rows from an earlier
+    attempt at the same head out of the count.
+    """
+    with connect_db() as db:
+        row = db.execute(
+            """
+            select coalesce(sum(status=?),0), coalesce(sum(status=?),0)
+            from review_findings where run_id=? and updated_at>=?
+            """,
+            (FindingStatus.POSTED, FindingStatus.PLANNED, run_id, since),
+        ).fetchone()
+    return int(row[0]), int(row[1])
+
+
 def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     """Return up to ``limit`` posted findings ordered by sync staleness.
 
@@ -1332,7 +1351,10 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     Each row carries ``prior_outcome`` — the currently-stored outcome flags
     (all ``False`` if never synced) — so the caller can detect the
     ``false -> true`` transition of each dimension and emit analytics exactly
-    once per outcome rather than on every re-check.
+    once per outcome rather than on every re-check. ``type``, ``severity``,
+    ``category`` and ``verified`` are the finding's own labels, and ``model``,
+    ``prompt_version`` and ``tone`` come from the run that posted it, for
+    outcome metrics.
     """
     with connect_db() as db:
         rows = db.execute(
@@ -1341,11 +1363,15 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
                    fo.reply_classified,
                    coalesce(fo.resolved,0), coalesce(fo.deleted,0),
                    coalesce(fo.developer_replied,0), coalesce(fo.disputed,0),
-                   coalesce(fo.false_positive,0), coalesce(fo.duplicate,0)
+                   coalesce(fo.false_positive,0), coalesce(fo.duplicate,0),
+                   rf.type, rf.severity, rf.category,
+                   coalesce(fo.developer_disposition,'unknown'),
+                   rf.verified, rr.model, rr.prompt_version, rr.tone
             from review_findings rf
             left join finding_outcomes fo
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
                 rf.fingerprint
+            left join review_runs rr on rr.run_id = rf.run_id
             where rf.status=? and rf.discussion_id is not null and rf.discussion_id != ''
               and coalesce(fo.deleted,0)=0
             order by
@@ -1371,7 +1397,15 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
                 "disputed": bool(row[9]),
                 "false_positive": bool(row[10]),
                 "duplicate": bool(row[11]),
+                "developer_agreed": row[15] == "agrees",
             },
+            "type": row[12],
+            "severity": row[13],
+            "category": row[14],
+            "verified": None if row[16] is None else bool(row[16]),
+            "model": row[17],
+            "prompt_version": row[18],
+            "tone": row[19],
         }
         for row in rows
     ]
@@ -1689,7 +1723,7 @@ def outcomes_for(project: str, iid: int, sha: str | None = None) -> list[JsonObj
             "reply_classified": bool(row[10]),
             "resolution_source": _resolution_source(row[11]),
             "resolution_evidence": _outcome_evidence(row[12]),
-            "developer_disposition": _developer_disposition(row[13], {}),
+            "developer_disposition": normalize_disposition(row[13], {}),
             "disposition_evidence": _outcome_evidence(row[14]),
             "last_checked_at": row[15],
             "severity": _normalized_severity(row[16]),
@@ -2269,6 +2303,7 @@ __all__ = [
     "list_recent_reviews",
     "metrics_summary",
     "noise_trend",
+    "normalize_disposition",
     "open_finding_with_identity",
     "outcomes_for",
     "outcomes_summary",
@@ -2288,5 +2323,6 @@ __all__ = [
     "record_review_run_finish",
     "record_review_run_start",
     "review_run_id",
+    "run_finding_counts",
     "status_age_seconds",
 ]

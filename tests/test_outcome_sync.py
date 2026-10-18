@@ -225,7 +225,7 @@ def test_outcome_sync_emits_analytics_once_per_outcome_transition(monkeypatch) -
     monkeypatch.setattr(
         poller.analytics,
         "record_finding_outcome",
-        lambda cfg, *, scm_provider, outcome: captured.append(outcome),
+        lambda cfg, *, scm_provider, outcome, **_: captured.append(outcome),
     )
     original_db = paths.DB
     try:
@@ -906,5 +906,250 @@ def test_outcome_sync_false_positive_beats_agreement() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             row = _sync_with_agent_reply(tmp, '{"verdict": "agrees", "false_positive": true}')
         assert row == ("false_positive", "reply_classifier", 1, 1, 1)
+    finally:
+        paths.DB = original_db
+
+
+def _otel_finding_points(reader) -> dict[tuple[str, str], int]:
+    """Sum ``llm_review.findings`` points by (status, category) from a real SDK reader."""
+    totals: dict[tuple[str, str], int] = {}
+    data = reader.get_metrics_data()
+    for resource in data.resource_metrics if data else []:
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                if metric.name != "llm_review.findings":
+                    continue
+                for point in metric.data.data_points:
+                    key = (point.attributes.get("status"), point.attributes.get("category"))
+                    totals[key] = totals.get(key, 0) + point.value
+    return totals
+
+
+def test_outcome_sync_otel_counts_each_outcome_once_with_finding_dimensions() -> None:
+    """Re-checking a still-resolved finding must not grow the OTel outcome counter.
+
+    Real ``ReviewTelemetry`` on a real SDK ``MeterProvider`` (cumulative
+    in-memory reader): one finding, resolved + replied once, synced 3 times.
+    """
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+    from opentelemetry.trace import NoOpTracerProvider
+
+    from bubo.telemetry.metrics import ReviewTelemetry
+
+    reader = InMemoryMetricReader()
+    meter = MeterProvider(metric_readers=[reader]).get_meter("bubo")
+    telemetry = ReviewTelemetry(
+        TelemetryConfig(analytics=AnalyticsConfig(enabled=True)),
+        providers=(NoOpTracerProvider().get_tracer("bubo"), meter),
+    )
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            with sqlite3.connect(paths.DB) as conn:
+                conn.execute(
+                    "insert into review_findings(project,iid,sha,fingerprint,file,line,status,"
+                    "discussion_id,body,updated_at,type,severity,category) "
+                    "values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        "group/repo",
+                        1,
+                        "sha",
+                        "fp",
+                        "src/A.py",
+                        1,
+                        "posted",
+                        "disc",
+                        "body",
+                        poller.now(),
+                        "issue",
+                        "blocking",
+                        "correctness",
+                    ),
+                )
+            cfg = ReviewConfig(gitlab_url="https://gitlab.com", telemetry_config=telemetry.config)
+            outcome = {
+                "resolved": True,
+                "deleted": False,
+                "developer_replied": True,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "resolved_at": None,
+                "merged_unresolved": False,
+            }
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeProvider(outcome)):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=telemetry):
+                        with patch("bubo.poller.analytics.analytics_enabled", return_value=False):
+                            for _ in range(3):
+                                assert poller.sync_outcomes(limit=1) == 1
+        assert _otel_finding_points(reader) == {
+            ("resolved", "correctness"): 1,
+            ("developer_replied", "correctness"): 1,
+        }
+    finally:
+        paths.DB = original_db
+
+
+def test_outcome_sync_exports_explicit_agreement_once(monkeypatch) -> None:
+    """An explicit ``[llm-review:agreed]`` reply is the one positive signal; ship it.
+
+    Runs the real analytics path (consent on, network blocked by conftest) and
+    reads Bubo's own outbound queue.
+    """
+    monkeypatch.setattr(poller.analytics, "analytics_enabled", lambda cfg: True)
+    monkeypatch.setattr(poller.analytics, "flush", lambda: None)
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            _seed_posted_finding(paths.DB)
+            fake = _SilentTelemetry()
+            consent = AnalyticsConfig(enabled=True, api_key="phc_test")
+            cfg = ReviewConfig(
+                gitlab_url="https://gitlab.com",
+                telemetry_config=TelemetryConfig(analytics=consent, emit_outcome_sync=False),
+            )
+            outcome = {
+                "resolved": False,
+                "deleted": False,
+                "developer_replied": True,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "developer_agreed": True,
+                "developer_disposition": "agrees",
+                "disposition_evidence": "explicit_marker",
+                "resolved_at": None,
+                "merged_unresolved": False,
+            }
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeProvider(outcome)):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
+                        poller.sync_outcomes(limit=1)
+                        poller.sync_outcomes(limit=1)
+            with sqlite3.connect(paths.DB) as conn:
+                stored = conn.execute("select developer_disposition from finding_outcomes")
+                assert stored.fetchone() == ("agrees",)
+        sent = [
+            event["properties"]["outcome"]
+            for _, _, event in analytics._pending_events
+            if event["event"] == "finding_outcome"
+        ]
+        assert sorted(sent) == ["developer_agreed", "developer_replied"]
+    finally:
+        paths.DB = original_db
+
+
+def test_finding_outcome_event_carries_the_findings_review_dimensions(monkeypatch) -> None:
+    """Outcome rates must be sliceable by model, prompt, category and project."""
+    monkeypatch.setattr(poller.analytics, "analytics_enabled", lambda cfg: True)
+    monkeypatch.setattr(poller.analytics, "flush", lambda: None)
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.DB = Path(tmp) / "reviewer.sqlite"
+            poller.init_db()
+            with sqlite3.connect(paths.DB) as conn:
+                conn.execute(
+                    "insert into review_findings(project,iid,sha,fingerprint,file,line,status,"
+                    "discussion_id,body,updated_at,type,severity,category,run_id,verified) "
+                    "values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        "group/repo",
+                        1,
+                        "sha",
+                        "fp",
+                        "src/A.py",
+                        1,
+                        "posted",
+                        "disc",
+                        "body",
+                        poller.now(),
+                        "issue",
+                        "blocking",
+                        "Race Condition",
+                        "run-1",
+                        1,
+                    ),
+                )
+                conn.execute(
+                    "insert into review_runs(run_id,project,iid,sha,status,model,prompt_version,"
+                    "review_mode,dry_run,started_at,tone) values(?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        "run-1",
+                        "group/repo",
+                        1,
+                        "sha",
+                        "success",
+                        "gpt-5.5",
+                        "3a1ffd24f2fa",
+                        "diff",
+                        0,
+                        poller.now(),
+                        "formal",
+                    ),
+                )
+            consent = AnalyticsConfig(enabled=True, api_key="phc_test")
+            cfg = ReviewConfig(
+                provider="github",
+                telemetry_config=TelemetryConfig(analytics=consent, emit_outcome_sync=False),
+            )
+            outcome = {
+                "resolved": True,
+                "deleted": False,
+                "developer_replied": False,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "resolved_at": None,
+                "merged_unresolved": False,
+            }
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=_FakeProvider(outcome)):
+                    with patch(
+                        "bubo.poller.ReviewTelemetry.from_config", return_value=_SilentTelemetry()
+                    ):
+                        poller.sync_outcomes(limit=1)
+            from bubo.project_analytics import project_id
+
+            expected_project = project_id(
+                analytics.install_id(), "github", cfg.github_api_url, "group/repo"
+            )
+        [props] = [
+            event["properties"]
+            for _, _, event in analytics._pending_events
+            if event["event"] == "finding_outcome"
+        ]
+        assert {
+            key: props.get(key)
+            for key in (
+                "outcome",
+                "finding_type",
+                "severity",
+                "category",
+                "verified",
+                "model",
+                "prompt_version",
+                "tone",
+                "project_id",
+            )
+        } == {
+            "outcome": "resolved",
+            "finding_type": "issue",
+            "severity": "blocking",
+            "category": "concurrency",
+            "verified": True,
+            "model": "gpt-5.5",
+            "prompt_version": "3a1ffd24f2fa",
+            "tone": "formal",
+            "project_id": expected_project,
+        }
+        assert expected_project
+        assert "group/repo" not in repr(props)
     finally:
         paths.DB = original_db

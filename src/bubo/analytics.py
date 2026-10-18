@@ -34,6 +34,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import tempfile
 import threading
 import uuid
@@ -127,6 +128,9 @@ _ALLOWED_ATTRS = frozenset(
         "metric_value",
         "metric_count",
         "surface",
+        # finding_outcome: which review configuration produced the finding
+        "prompt_version",
+        "verified",
     }
 )
 
@@ -155,7 +159,15 @@ _KNOWN_SURFACES = frozenset({"service", "run_once", "github_action", "mcp", "unk
 # poller's outcome sync writes to SQLite; a value outside the set normalizes to
 # "other" so a future column can never leak as an arbitrary string.
 _KNOWN_OUTCOMES = frozenset(
-    {"resolved", "deleted", "developer_replied", "disputed", "false_positive", "duplicate"}
+    {
+        "resolved",
+        "deleted",
+        "developer_replied",
+        "disputed",
+        "false_positive",
+        "duplicate",
+        "developer_agreed",
+    }
 )
 
 # Cap any string attribute (only model survives as a free-ish value) and reject
@@ -247,18 +259,35 @@ def analytics_enabled(cfg: AnalyticsConfig) -> bool:
     return bool(cfg.enabled and cfg.endpoint.strip() and cfg.api_key.strip())
 
 
+def _machine_node() -> int | None:
+    """This machine's hardware address, or ``None`` when it has none.
+
+    When no MAC can be read, :func:`uuid.getnode` returns a *random* node with
+    the multicast bit set, and a different one in every process. Mixing that
+    in would give every worker and poll cycle a new install.
+    """
+    node = uuid.getnode()
+    return None if node & (1 << 40) else node
+
+
+def _derive_install_id(seed: str, node: int | None) -> str:
+    material = seed if node is None else f"{seed}:{node}"
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
 def install_id() -> str | None:
     """Return this install's anonymous id, creating it on first use.
 
     A random UUID seed is persisted next to the state DB. The emitted id is a
     SHA-256 digest of that seed and this machine's node id; the node id itself
-    is never sent. Concurrent workers share a lock and atomic publication.
+    is never sent; a machine without a hardware address uses the seed alone.
+    Concurrent workers share a lock and atomic publication.
     Failure returns None: dropping analytics is preferable to inventing extra
     installs.
     """
     global _install_id, _install_node, _install_path
     path = paths.DB.parent / "install_id"
-    node = uuid.getnode()
+    node = _machine_node()
     with _identity_lock:
         if (
             _install_id is not None
@@ -274,11 +303,7 @@ def install_id() -> str | None:
                 lock_file(lock.fileno(), exclusive=True)
                 if guard_path(path.parent).exists():
                     guarded = guarded_identity(path.parent)
-                    return (
-                        hashlib.sha256(f"{guarded}:{node}".encode()).hexdigest()
-                        if guarded
-                        else None
-                    )
+                    return _derive_install_id(guarded, node) if guarded else None
                 try:
                     existing = path.read_text(encoding="utf-8").strip()
                     parsed = uuid.UUID(existing)
@@ -299,7 +324,7 @@ def install_id() -> str | None:
                     finally:
                         if temporary is not None:
                             Path(temporary).unlink(missing_ok=True)
-                derived = hashlib.sha256(f"{existing}:{node}".encode()).hexdigest()
+                derived = _derive_install_id(existing, node)
                 _install_id, _install_path, _install_node = derived, path, node
                 return derived
         except OSError, ValueError, UnicodeError, TypeError, AttributeError:
@@ -461,6 +486,7 @@ def record_review_completed(
     languages: dict[str, int] | None = None,
     queue_seconds: float | None = None,
     profile: dict[str, Any] | None = None,
+    prompt_version: str | None = None,
 ) -> None:
     """The primary signal: one anonymized event per completed review."""
     context = {
@@ -506,6 +532,7 @@ def record_review_completed(
             "files_changed": files_changed,
             "lines_changed": lines_changed,
             "queue_seconds": queue_seconds,
+            "prompt_version": _prompt_version(prompt_version),
         },
     )
     if context.get("project_id"):
@@ -543,7 +570,51 @@ def record_review_completed(
         )
 
 
-def record_finding_outcome(cfg: AnalyticsConfig, *, scm_provider: str, outcome: str) -> None:
+_FINDING_TYPES = frozenset({"issue", "suggestion", "question"})
+_SEVERITIES = frozenset({"blocking", "non-blocking"})
+_PROMPT_VERSION = re.compile(r"[0-9a-f]{12}")
+
+
+def _prompt_version(value: object) -> str | None:
+    """Only the 12-hex digest :func:`bubo.db.prompt_version` writes."""
+    return value if isinstance(value, str) and _PROMPT_VERSION.fullmatch(value) else None
+
+
+def finding_dimensions(finding: dict[str, Any]) -> dict[str, Any]:
+    """Bounded labels of the finding and the review that posted it.
+
+    Free text never escapes: type and severity are enums, the reviewer's
+    free-form category is folded onto the canonical taxonomy, the prompt
+    version must be the 12-hex digest Bubo itself writes, and tone must be a
+    configured voice. Model names go through the same ``_clean`` chokepoint as
+    on ``review_completed``.
+    """
+    from bubo.findings import normalize_category
+    from bubo.review_config import VALID_TONES
+
+    finding_type = str(finding.get("type") or "").strip().lower()
+    severity = str(finding.get("severity") or "").strip().lower().replace("_", "-")
+    tone = finding.get("tone")
+    verified = finding.get("verified")
+    return {
+        "finding_type": finding_type if finding_type in _FINDING_TYPES else "unknown",
+        "severity": severity if severity in _SEVERITIES else "unknown",
+        "category": normalize_category(finding.get("category")),
+        "verified": verified if isinstance(verified, bool) else None,
+        "model": finding.get("model"),
+        "prompt_version": _prompt_version(finding.get("prompt_version")),
+        "tone": tone if tone in VALID_TONES else None,
+    }
+
+
+def record_finding_outcome(
+    cfg: AnalyticsConfig,
+    *,
+    scm_provider: str,
+    outcome: str,
+    finding: dict[str, Any] | None = None,
+    project_id: str | None = None,
+) -> None:
     """One event per developer-engagement outcome — emitted at sync time.
 
     The caller (``bubo.poller.sync_outcomes``) emits this only on the
@@ -554,11 +625,20 @@ def record_finding_outcome(cfg: AnalyticsConfig, *, scm_provider: str, outcome: 
     every-sync emit would multiply each outcome's count. Emitting once per
     transition makes a PostHog ``count`` of ``outcome=resolved`` match the
     distinct count of resolved findings in SQLite.
+
+    ``finding`` adds :func:`finding_dimensions`; ``project_id`` is the same
+    random per-project id ``review_completed`` carries, so outcomes join to
+    the project profile without sending its name.
     """
     _emit(
         cfg,
         "finding_outcome",
-        {"scm_provider": _provider(scm_provider), "outcome": _outcome(outcome)},
+        {
+            **(finding_dimensions(finding) if finding else {}),
+            "project_id": project_id,
+            "scm_provider": _provider(scm_provider),
+            "outcome": _outcome(outcome),
+        },
     )
 
 

@@ -128,3 +128,50 @@ def test_reload_discards_only_matching_queued_analytics(monkeypatch):
     assert len(posthog.analytics._pending_events) == 1
     assert posthog.analytics._pending_events[0][2].config == other
     posthog.analytics._pending_events.clear()
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "posted",
+        "planned",
+        "skipped",
+        "refuted",
+        "pending_external_id",
+        "resolved",
+        "deleted",
+        "developer_replied",
+        "disputed",
+        "false_positive",
+        "duplicate",
+    ],
+)
+def test_finding_metric_keeps_its_status_dimension(monkeypatch, status):
+    """Without status, every finding lifecycle point merges into one PostHog number."""
+    events = []
+    monkeypatch.setattr(posthog, "analytics_enabled", lambda config: True)
+    monkeypatch.setattr(
+        posthog.analytics, "track", lambda config, event, **props: events.append((event, props))
+    )
+    point = NS(value=1, attributes={"status": status, "category": "correctness"})
+    metric = NS(name="llm_review.findings", data=NS(data_points=[point]))
+    data = NS(resource_metrics=[NS(scope_metrics=[NS(metrics=[metric])])])
+    posthog.PostHogMetricExporter(AnalyticsConfig()).export(data)
+    assert [props.get("status") for _, props in events] == [status]
+
+
+def test_prompt_version_dimension_is_only_bubos_digest(monkeypatch):
+    events = []
+    monkeypatch.setattr(posthog, "analytics_enabled", lambda config: True)
+    monkeypatch.setattr(
+        posthog.analytics, "track", lambda config, event, **props: events.append((event, props))
+    )
+    good = NS(value=1, attributes={"prompt_version": "3a1ffd24f2fa"})
+    bad = NS(value=1, attributes={"prompt_version": "Review acme/payments"})
+    metric = NS(name="llm_review.runs", data=NS(data_points=[good, bad]))
+    data = NS(resource_metrics=[NS(scope_metrics=[NS(metrics=[metric])])])
+    posthog.PostHogMetricExporter(AnalyticsConfig()).export(data)
+    assert sorted(str(props.get("prompt_version")) for _, props in events) == [
+        "3a1ffd24f2fa",
+        "None",
+    ]
