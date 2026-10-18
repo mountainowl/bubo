@@ -43,7 +43,7 @@ def test_invalid_identity_is_repaired(content):
     identity = analytics.install_id()
     seed = path.read_text().strip()
     assert uuid.UUID(seed).version == 4
-    assert identity == hashlib.sha256(f"{seed}:{uuid.getnode()}".encode()).hexdigest()
+    assert identity == analytics._derive_install_id(seed, analytics._machine_node())
 
 
 def test_copied_identity_seed_changes_on_another_machine(monkeypatch):
@@ -52,12 +52,12 @@ def test_copied_identity_seed_changes_on_another_machine(monkeypatch):
     seed = uuid.uuid4().hex
     path.write_text(seed)
 
-    monkeypatch.setattr(analytics.uuid, "getnode", lambda: 0x112233445566)
+    monkeypatch.setattr(analytics.uuid, "getnode", lambda: 0x102233445566)
     first = analytics.install_id()
     monkeypatch.setattr(analytics.uuid, "getnode", lambda: 0xAABBCCDDEEFF)
     second = analytics.install_id()
 
-    assert first == hashlib.sha256(f"{seed}:{0x112233445566}".encode()).hexdigest()
+    assert first == hashlib.sha256(f"{seed}:{0x102233445566}".encode()).hexdigest()
     assert second == hashlib.sha256(f"{seed}:{0xAABBCCDDEEFF}".encode()).hexdigest()
     assert second != first
     assert path.read_text().strip() == seed
@@ -92,7 +92,7 @@ print(json.dumps(identity))
     assert len(set(identities)) == 1
     seed = (tmp_path / "state" / "install_id").read_text().strip()
     assert uuid.UUID(seed).version == 4
-    assert identities[0] == hashlib.sha256(f"{seed}:{uuid.getnode()}".encode()).hexdigest()
+    assert identities[0] == analytics._derive_install_id(seed, analytics._machine_node())
 
 
 def test_identity_cannot_be_overridden():
@@ -186,3 +186,27 @@ def test_otel_posthog_event_uses_same_identity(monkeypatch):
     event = analytics._pending_events[-1][2]
     assert event["properties"]["distinct_id"] == analytics.install_id()
     assert event["properties"]["bubo_version"] == analytics.installed_version()
+
+
+def test_identity_is_stable_when_the_machine_has_no_hardware_address(monkeypatch):
+    """Without a readable MAC, uuid.getnode() returns a new random multicast
+    node in every process (containers, some VMs). Mixing that in gave every
+    process, so every worker and poll cycle, a different install_id."""
+    nodes = iter([0x010000000001, 0x030000000002, 0xFF0000000003])
+    monkeypatch.setattr(analytics.uuid, "getnode", lambda: next(nodes))
+    first = analytics.install_id()
+    monkeypatch.setattr(analytics, "_install_id", None)
+    second = analytics.install_id()
+    monkeypatch.setattr(analytics, "_install_id", None)
+    third = analytics.install_id()
+    seed = (analytics.paths.DB.parent / "install_id").read_text().strip()
+    assert first == second == third == hashlib.sha256(seed.encode()).hexdigest()
+
+
+def test_hardware_address_still_separates_copied_seeds(monkeypatch):
+    path = analytics.paths.DB.parent / "install_id"
+    path.parent.mkdir(parents=True)
+    seed = uuid.uuid4().hex
+    path.write_text(seed)
+    monkeypatch.setattr(analytics.uuid, "getnode", lambda: 0x102233445566)
+    assert analytics.install_id() == hashlib.sha256(f"{seed}:{0x102233445566}".encode()).hexdigest()
