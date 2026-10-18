@@ -64,6 +64,7 @@ AUDIT_COLUMNS = (
     "sensitive_paths_count",
     "tokens_total",
     "cost_usd",
+    "cost_recorded",
     "findings_total",
     "findings_posted",
     "outcomes_resolved",
@@ -209,23 +210,15 @@ def build_report(
     outcomes_raw = db.outcomes_summary(
         since_hours=since_hours, since=since, until=until, project=project
     )
-    noise = db.noise_trend(
-        since_hours=since_hours, since=since, until=until, project=project
-    )
-    roi_raw = db.roi_proxy(
-        since_hours=since_hours, since=since, until=until, project=project
-    )
+    noise = db.noise_trend(since_hours=since_hours, since=since, until=until, project=project)
+    roi_raw = db.roi_proxy(since_hours=since_hours, since=since, until=until, project=project)
     latency_raw = db.latency_summary(
         since_hours=since_hours, since=since, until=until, project=project
     )
     # Per-project only: suppression is a per-repo signal, and the reader takes a
     # required `project: str`. With no project filter there is no meaningful
     # cross-repo dispute set, so the section is empty.
-    dispute_stats = (
-        []
-        if project is None
-        else db.disputed_class_stats(project, min_samples=1)
-    )
+    dispute_stats = [] if project is None else db.disputed_class_stats(project, min_samples=1)
     policy = db.policy_decisions_summary(
         since_hours=since_hours, since=since, until=until, project=project
     )
@@ -290,8 +283,7 @@ def build_report(
         }
         if suppress_threshold is not None and suppress_min_samples is not None:
             row["would_suppress"] = (
-                stat["total"] >= suppress_min_samples
-                and stat["dispute_rate"] >= suppress_threshold
+                stat["total"] >= suppress_min_samples and stat["dispute_rate"] >= suppress_threshold
             )
         dispute_classes_rows.append(row)
 
@@ -331,9 +323,7 @@ def to_json(report: JsonObject) -> str:
     set by :func:`build_report` survives into the output; a trailing newline
     is appended for clean file/stream concatenation.
     """
-    return (
-        json.dumps(report, indent=2, sort_keys=False, ensure_ascii=False) + "\n"
-    )
+    return json.dumps(report, indent=2, sort_keys=False, ensure_ascii=False) + "\n"
 
 
 # Leading characters a spreadsheet (Excel/Sheets) treats as a formula start.

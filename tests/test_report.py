@@ -45,13 +45,32 @@ def _seed() -> None:
                provenance_band,provenance_source,provenance_confidence,
                provenance_signals,sensitive_paths)
                values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("run1", "g/r", 1, "sha1", "success", "gpt-5.5", "diff", 1, when, when,
-             1000, 0.5, "likely_ai", "trailer", "declared",
-             '["Generated-by: GPT-4"]', '["payments/charge.py"]'),
+            (
+                "run1",
+                "g/r",
+                1,
+                "sha1",
+                "success",
+                "gpt-5.5",
+                "diff",
+                1,
+                when,
+                when,
+                1000,
+                0.5,
+                "likely_ai",
+                "trailer",
+                "declared",
+                '["Generated-by: GPT-4"]',
+                '["payments/charge.py"]',
+            ),
         )
         # 3 findings on the SAME run — the audit-row no-double-count case.
-        for i, sev, status in [(0, "blocking", "posted"), (1, "non-blocking", "posted"),
-                               (2, "blocking", "skipped")]:
+        for i, sev, status in [
+            (0, "blocking", "posted"),
+            (1, "non-blocking", "posted"),
+            (2, "blocking", "skipped"),
+        ]:
             con.execute(
                 """insert into review_findings(project,iid,sha,fingerprint,file,line,
                    status,body,updated_at,severity)
@@ -70,8 +89,21 @@ def _seed() -> None:
             """insert into governance_decisions(run_id,project,iid,sha,mode,action,
                triggered,matched_rule,rigor_injected,band,sensitive_paths,reason,created_at)
                values(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("run1", "g/r", 1, "sha1", "soft", "flag", 1, "band+sensitive", 1,
-             "likely_ai", '["payments/charge.py"]', "test", when),
+            (
+                "run1",
+                "g/r",
+                1,
+                "sha1",
+                "soft",
+                "flag",
+                1,
+                "band+sensitive",
+                1,
+                "likely_ai",
+                '["payments/charge.py"]',
+                "test",
+                when,
+            ),
         )
 
 
@@ -162,16 +194,18 @@ def test_readers_do_not_mutate_schema() -> None:
     with _temp_db():
         _seed()
         with sqlite3.connect(paths.DB) as con:
-            before = {r[0] for r in con.execute(
-                "select name from sqlite_master where type='table'"
-            ).fetchall()}
+            before = {
+                r[0]
+                for r in con.execute("select name from sqlite_master where type='table'").fetchall()
+            }
         db.provenance_summary(since_hours=24)
         db.audit_rows(since_hours=24)
         db.policy_decisions_summary(since_hours=24)
         with sqlite3.connect(paths.DB) as con:
-            after = {r[0] for r in con.execute(
-                "select name from sqlite_master where type='table'"
-            ).fetchall()}
+            after = {
+                r[0]
+                for r in con.execute("select name from sqlite_master where type='table'").fetchall()
+            }
     assert before == after
 
 
@@ -188,8 +222,14 @@ def test_build_report_assembles_all_sections_with_derived_rates() -> None:
     assert rep["meta"]["generated_at"] == "fixed"
     assert rep["meta"]["schema_version"] == report.SCHEMA_VERSION
     assert set(rep) >= {
-        "meta", "reviews", "provenance", "outcomes", "noise_trend",
-        "roi", "policy_decisions", "audit",
+        "meta",
+        "reviews",
+        "provenance",
+        "outcomes",
+        "noise_trend",
+        "roi",
+        "policy_decisions",
+        "audit",
     }
     assert rep["provenance"]["by_band"] == {"likely_ai": 1}
     # Derived rate: 2 resolved / 3 outcomes.
@@ -470,6 +510,7 @@ def test_build_report_has_latency_section_rounded_2dp() -> None:
 
 def _seed_dispute_history(project: str = "g/r") -> None:
     """documentation: 3/5 disputed (0.6); security: 2/5 disputed (0.4)."""
+
     def _add(category: str, index: int, *, disputed: bool) -> None:
         fp = f"{category}-{index}"
         db.record_finding(
@@ -557,8 +598,7 @@ def test_dispute_classes_thin_class_not_suppressed_despite_full_rate() -> None:
                 iid=1,
                 sha="sha",
                 fingerprint=f"doc-{i}",
-                finding={"category": "documentation", "file": "f.py", "line": 1,
-                         "confidence": 0.9},
+                finding={"category": "documentation", "file": "f.py", "line": 1, "confidence": 0.9},
                 status=db.FindingStatus.POSTED,
                 body="b",
                 discussion_id=f"d-doc-{i}",
@@ -631,8 +671,7 @@ def test_acknowledgements_zero_for_absent_status() -> None:
     with _temp_db():
         with sqlite3.connect(paths.DB) as con:
             con.execute(
-                "insert into reviewed_mrs(project,iid,sha,status,updated_at)"
-                " values(?,?,?,?,?)",
+                "insert into reviewed_mrs(project,iid,sha,status,updated_at) values(?,?,?,?,?)",
                 ("g/r", 1, "s", "success", "2026-06-16T12:00:00+00:00"),
             )
         rep = report.build_report(
@@ -650,8 +689,16 @@ def test_section_order_is_fixed() -> None:
         _seed()
         rep = report.build_report(since_hours=24, project="g/r", generated_at="fixed")
     assert list(rep) == [
-        "meta", "reviews", "provenance", "outcomes", "noise_trend",
-        "roi", "latency", "dispute_classes", "policy_decisions", "audit",
+        "meta",
+        "reviews",
+        "provenance",
+        "outcomes",
+        "noise_trend",
+        "roi",
+        "latency",
+        "dispute_classes",
+        "policy_decisions",
+        "audit",
     ]
 
 
@@ -660,8 +707,13 @@ def test_to_csv_dispute_classes_section() -> None:
 
     rep = {
         "dispute_classes": [
-            {"category": "documentation", "total": 5, "rejected": 3,
-             "dispute_rate": 0.6, "would_suppress": True},
+            {
+                "category": "documentation",
+                "total": 5,
+                "rejected": 3,
+                "dispute_rate": 0.6,
+                "would_suppress": True,
+            },
             {"category": "security", "total": 5, "rejected": 2, "dispute_rate": 0.4},
         ]
     }
@@ -686,18 +738,40 @@ def test_resolution_provenance_is_grouped_by_normalized_severity() -> None:
                     ("g/r", 1, "sha", fingerprint, "a.py", 1, "posted", "body", severity, when),
                 )
         db.record_finding_outcome(
-            project="g/r", iid=1, sha="sha", fingerprint="block", discussion_id="d1",
-            outcome={"resolved": True, "deleted": False, "developer_replied": True,
-                     "disputed": False, "false_positive": False, "duplicate": False,
-                     "merged_unresolved": False, "resolution_source": "bubo_auto",
-                     "resolution_evidence": "verified fixed at fullsha",
-                     "developer_disposition": "agrees", "disposition_evidence": "reply"},
+            project="g/r",
+            iid=1,
+            sha="sha",
+            fingerprint="block",
+            discussion_id="d1",
+            outcome={
+                "resolved": True,
+                "deleted": False,
+                "developer_replied": True,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "merged_unresolved": False,
+                "resolution_source": "bubo_auto",
+                "resolution_evidence": "verified fixed at fullsha",
+                "developer_disposition": "agrees",
+                "disposition_evidence": "reply",
+            },
         )
         db.record_finding_outcome(
-            project="g/r", iid=1, sha="sha", fingerprint="soft", discussion_id="d2",
-            outcome={"resolved": False, "deleted": False, "developer_replied": False,
-                     "disputed": False, "false_positive": False, "duplicate": False,
-                     "merged_unresolved": False},
+            project="g/r",
+            iid=1,
+            sha="sha",
+            fingerprint="soft",
+            discussion_id="d2",
+            outcome={
+                "resolved": False,
+                "deleted": False,
+                "developer_replied": False,
+                "disputed": False,
+                "false_positive": False,
+                "duplicate": False,
+                "merged_unresolved": False,
+            },
         )
         rep = report.build_report(since_hours=24, project="g/r", generated_at="fixed")
     blocking = rep["outcomes"]["by_severity"]["blocking"]
@@ -708,3 +782,18 @@ def test_resolution_provenance_is_grouped_by_normalized_severity() -> None:
     assert soft["unknown_disposition"] == 1
     assert soft["explicit_agreement_rate"] == 0.0
     assert rep["roi"]["resolution_by_severity"] == rep["outcomes"]["by_severity"]
+
+
+def test_audit_cost_coverage_distinguishes_missing_from_known_zero() -> None:
+    with _temp_db():
+        _seed()
+        with sqlite3.connect(paths.DB) as con:
+            con.execute("UPDATE review_runs SET cost_usd=NULL WHERE run_id='run1'")
+        missing = db.audit_rows(since_hours=24)[0]
+        assert missing["cost_recorded"] is False
+        with sqlite3.connect(paths.DB) as con:
+            con.execute("UPDATE review_runs SET cost_usd=0 WHERE run_id='run1'")
+        zero = db.audit_rows(since_hours=24)[0]
+        assert zero["cost_recorded"] is True
+        assert zero["cost_usd"] == 0
+        assert zero["dry_run"] is True

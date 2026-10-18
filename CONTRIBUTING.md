@@ -26,6 +26,11 @@ uv run python -m compileall -q src tests
 
 Local secrets live in ignored `config/env.toml`.
 
+Tests disable product analytics and OpenTelemetry by default, including child
+processes. The shared test fixture blocks external telemetry transports; telemetry
+unit tests must explicitly use fake or in-memory transports. These test settings
+do not change installed Bubo's default-on product analytics or its manual opt-out.
+
 ## Commit messages — Conventional Commits
 
 Commit messages MUST follow [Conventional Commits 1.0][cc]. The format is
