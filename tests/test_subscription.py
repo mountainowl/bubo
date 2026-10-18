@@ -243,6 +243,7 @@ def test_shared_shutdown_interrupts_a_multi_change_poll(monkeypatch) -> None:
     monkeypatch.setattr(poller, "get_provider", lambda _cfg: provider)
     monkeypatch.setattr(poller, "count_inflight_workers", lambda: 0)
     monkeypatch.setattr(poller, "already_seen", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(poller, "review_blocker", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(poller, "sha_for", lambda change: change["sha"])
     recorded: list[int] = []
     monkeypatch.setattr(poller, "record", lambda _project, number, *_args: recorded.append(number))
@@ -277,6 +278,7 @@ def test_inline_poll_waits_for_worker_and_does_not_fork(monkeypatch) -> None:
     monkeypatch.setattr(poller, "get_provider", lambda _cfg: provider)
     monkeypatch.setattr(poller, "count_inflight_workers", lambda: 0)
     monkeypatch.setattr(poller, "already_seen", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(poller, "review_blocker", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(poller, "sha_for", lambda _change: "head")
     monkeypatch.setattr(poller, "record", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(poller, "write_job", lambda *_args: Path("job.json"))
@@ -308,6 +310,7 @@ def test_inline_poll_fails_when_worker_fails(monkeypatch) -> None:
     monkeypatch.setattr(poller, "get_provider", lambda _cfg: provider)
     monkeypatch.setattr(poller, "count_inflight_workers", lambda: 0)
     monkeypatch.setattr(poller, "already_seen", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(poller, "review_blocker", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(poller, "sha_for", lambda _change: "head")
     monkeypatch.setattr(poller, "record", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(poller, "write_job", lambda *_args: Path("job.json"))

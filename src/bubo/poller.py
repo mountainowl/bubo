@@ -49,6 +49,7 @@ from typing import Any, Literal, cast
 from bubo import analytics, github, gitlab, paths
 from bubo.config_values import ConfigError
 from bubo.db import (
+    active_review_sha,
     already_seen,
     claim_finding_reconciliation,
     connect_db,
@@ -168,6 +169,31 @@ def log_subscription_gate(reason: str, **fields: object) -> None:
 
 class SubscriptionUnavailable(RuntimeError):
     pass
+
+
+class ReviewSuperseded(RuntimeError):
+    """The change's head moved past the reviewed SHA before posting.
+
+    Findings carry line numbers from the reviewed checkout; anchoring them on
+    a newer head would point at unrelated code, so the run posts nothing.
+    """
+
+    def __init__(self, reviewed_sha: str, current_sha: str) -> None:
+        super().__init__(f"head moved from {reviewed_sha[:12]} to {current_sha[:12]}")
+        self.reviewed_sha = reviewed_sha
+        self.current_sha = current_sha
+
+
+def superseded_head(change: JsonObject, reviewed_sha: str) -> str | None:
+    """Return the re-fetched change's head if it is no longer ``reviewed_sha``.
+
+    Uses the same provider-neutral :func:`sha_for` that produced the reviewed
+    SHA. A payload without a head SHA is not treated as superseded.
+    """
+    current = sha_for(change)
+    if isinstance(current, str) and current and reviewed_sha and current != reviewed_sha:
+        return current
+    return None
 
 
 class CircuitPaused(RuntimeError):
@@ -852,6 +878,22 @@ def fork_worker(job: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
+def review_blocker(cfg: ReviewConfig, project: str, number: int, sha: str) -> JsonObject | None:
+    """Decide whether an unseen head may start a review now.
+
+    Returns ``None`` to start it, or log fields explaining why not. A blocked
+    head is left unseen (no row is written for it), so a later poll
+    re-evaluates it:
+
+    * another head of the same change is queued/running (one review per
+      change at a time; the newest head wins when it finishes).
+    """
+    active = active_review_sha(project, number, sha, ttl_seconds=cfg.timeout_seconds * 2)
+    if active:
+        return {"reason": "active_review", "active_sha": active}
+    return None
+
+
 @admitted(writable=True)
 def poll(*, worker_mode: str = "detached") -> int:
     """Run one poll cycle: scan projects, queue eligible changes, fork workers.
@@ -934,6 +976,17 @@ def poll(*, worker_mode: str = "detached") -> int:
                 queued_ttl_seconds=cfg.timeout_seconds * 2,
                 failed_ttl_seconds=cfg.timeout_seconds,
             ):
+                continue
+            blocker = review_blocker(cfg, project, number, sha)
+            if blocker is not None:
+                log(
+                    "review_not_started",
+                    poll_run_id=poll_run_id,
+                    project=project,
+                    iid=number,
+                    sha=sha,
+                    **blocker,
+                )
                 continue
             record(project, number, sha, ReviewStatus.QUEUED)
             job = write_job(project, change)
@@ -1258,6 +1311,9 @@ def post_or_plan_findings(
     ``mr`` is the change payload (kept named ``mr`` for call-site
     compatibility). ``repo`` is the checked-out worktree path the verifier
     subprocess runs in (``cwd``); only used when verification is enabled.
+
+    Raises :class:`ReviewSuperseded` (before posting anything) when the
+    re-fetched change's head is no longer the reviewed SHA.
     """
     provider = provider or get_provider(cfg)
     number = provider.change_number(mr)
@@ -1328,6 +1384,10 @@ def post_or_plan_findings(
         return (0, 0, 0)
     change = provider.get_change(cfg, token, project, number)
     changed = provider.changed_lines(cfg, token, project, number)
+    # Never anchor this checkout's line numbers on a newer head.
+    current_head = superseded_head(change, sha)
+    if current_head:
+        raise ReviewSuperseded(sha, current_head)
     posted = planned = skipped = 0
     # Verification accounting (opt-in; counts logged at the end — no silent
     # caps). ``verified_attempts`` is the count of findings the cap has let
@@ -1747,6 +1807,11 @@ def worker(job: Path) -> int:
                     reason, scope="posting", project=project, iid=iid, run_id=run_id
                 )
                 return 0
+            # Newest commit wins: if the change moved on while the agent ran,
+            # post nothing for this SHA (no findings, no acknowledgement).
+            current_head = superseded_head(provider.get_change(cfg, token, project, iid), sha)
+            if current_head:
+                raise ReviewSuperseded(sha, current_head)
             with telemetry.span("llm_review.post", repo=project, dry_run=cfg.dry_run) as post_span:
                 pending_external_ids: list[bool] = []
                 posted, planned, skipped = post_or_plan_findings(
@@ -1885,6 +1950,27 @@ def worker(job: Path) -> int:
     except CircuitPaused:
         defer_review_run()
         log_subscription_gate("paused_during_write", scope="posting", project=project, iid=iid)
+        return 0
+    except ReviewSuperseded as exc:
+        record(project, iid, sha, ReviewStatus.SUPERSEDED, str(report))
+        if cfg is not None and review_run_started:
+            record_review_run_finish(
+                run_id=run_id,
+                status=ReviewStatus.SUPERSEDED,
+                tokens=tokens,
+                cost_usd=cost_usd,
+                error=None,
+                lines_reviewed=lines_reviewed,
+            )
+        log(
+            "review_superseded",
+            project=project,
+            iid=iid,
+            sha=sha,
+            current_sha=exc.current_sha,
+            seconds=round(time.monotonic() - started, 2),
+            run_id=run_id,
+        )
         return 0
     except Exception as exc:
         error = redact_secrets(str(exc))
@@ -2536,6 +2622,7 @@ def main() -> int:
 # here documents the intent and tells the linter the re-exports are
 # deliberate, not dead imports.
 __all__ = [
+    "ReviewSuperseded",
     # re-exports (canonical home in sibling modules)
     "already_seen",
     "backfill_gitlab_bot_comments",

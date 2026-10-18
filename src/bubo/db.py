@@ -632,7 +632,35 @@ def already_seen(
         return (
             failed_ttl_seconds is not None and status_age_seconds(updated_at) <= failed_ttl_seconds
         )
-    return status in {ReviewStatus.RUNNING, ReviewStatus.SUCCESS, ReviewStatus.NO_FINDINGS}
+    return status in {
+        ReviewStatus.RUNNING,
+        ReviewStatus.SUCCESS,
+        ReviewStatus.NO_FINDINGS,
+        ReviewStatus.SUPERSEDED,
+    }
+
+
+def active_review_sha(project: str, iid: int, sha: str, ttl_seconds: int) -> str | None:
+    """Return another SHA of this change that is queued or running, if any.
+
+    Enforces "one review per change at a time": the poller leaves a newer
+    head unseen while an older one is in flight. Rows older than
+    ``ttl_seconds`` are ignored so a worker that died without recording a
+    terminal status cannot block the change forever (the worker itself is
+    killed at ``timeout_seconds``).
+    """
+    with connect_db() as db:
+        rows = db.execute(
+            """
+            select sha,updated_at from reviewed_mrs
+            where project=? and iid=? and sha != ? and status in (?, ?)
+            """,
+            (project, iid, sha, ReviewStatus.QUEUED, ReviewStatus.RUNNING),
+        ).fetchall()
+    for other, updated_at in rows:
+        if status_age_seconds(updated_at) <= ttl_seconds:
+            return str(other)
+    return None
 
 
 def status_age_seconds(updated_at: object) -> float:
@@ -2042,6 +2070,7 @@ def latency_summary(
 
 
 __all__ = [
+    "active_review_sha",
     "already_seen",
     "audit_rows",
     "connect_db",
