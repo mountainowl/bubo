@@ -34,8 +34,6 @@ acting on as inline threads — no chatbot noise, no praise, no summaries.
 
 <img src="assets/bubo-dashboard-teaser.png" width="960" alt="Bubo dashboard, review activity, and reports shown as layered interface previews">
 
-**[See metrics & ROI →](https://mountainowl.github.io/bubo/operate/#governance-report) · [Install Bubo →](#install)**
-
 ## Install
 
 ```sh
