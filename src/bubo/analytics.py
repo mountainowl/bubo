@@ -231,18 +231,35 @@ def analytics_enabled(cfg: AnalyticsConfig) -> bool:
     return bool(cfg.enabled and cfg.endpoint.strip() and cfg.api_key.strip())
 
 
+def _machine_node() -> int | None:
+    """This machine's hardware address, or ``None`` when it has none.
+
+    When no MAC can be read, :func:`uuid.getnode` returns a *random* node with
+    the multicast bit set, and a different one in every process. Mixing that
+    in would give every worker and poll cycle a new install.
+    """
+    node = uuid.getnode()
+    return None if node & (1 << 40) else node
+
+
+def _derive_install_id(seed: str, node: int | None) -> str:
+    material = seed if node is None else f"{seed}:{node}"
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
 def install_id() -> str | None:
     """Return this install's anonymous id, creating it on first use.
 
     A random UUID seed is persisted next to the state DB. The emitted id is a
     SHA-256 digest of that seed and this machine's node id; the node id itself
-    is never sent. Concurrent workers share a lock and atomic publication.
+    is never sent; a machine without a hardware address uses the seed alone.
+    Concurrent workers share a lock and atomic publication.
     Failure returns None: dropping analytics is preferable to inventing extra
     installs.
     """
     global _install_id, _install_node, _install_path
     path = paths.DB.parent / "install_id"
-    node = uuid.getnode()
+    node = _machine_node()
     with _identity_lock:
         if (
             _install_id is not None
@@ -258,11 +275,7 @@ def install_id() -> str | None:
                 lock_file(lock.fileno(), exclusive=True)
                 if guard_path(path.parent).exists():
                     guarded = guarded_identity(path.parent)
-                    return (
-                        hashlib.sha256(f"{guarded}:{node}".encode()).hexdigest()
-                        if guarded
-                        else None
-                    )
+                    return _derive_install_id(guarded, node) if guarded else None
                 try:
                     existing = path.read_text(encoding="utf-8").strip()
                     parsed = uuid.UUID(existing)
@@ -283,7 +296,7 @@ def install_id() -> str | None:
                     finally:
                         if temporary is not None:
                             Path(temporary).unlink(missing_ok=True)
-                derived = hashlib.sha256(f"{existing}:{node}".encode()).hexdigest()
+                derived = _derive_install_id(existing, node)
                 _install_id, _install_path, _install_node = derived, path, node
                 return derived
         except OSError, ValueError, UnicodeError, TypeError, AttributeError:

@@ -116,13 +116,13 @@ def test_install_id_is_stable_and_persisted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
-    monkeypatch.setattr(analytics.uuid, "getnode", lambda: 0x112233445566)
+    monkeypatch.setattr(analytics.uuid, "getnode", lambda: 0x102233445566)
     first = analytics.install_id()
     assert first
     assert len(first) == 64
     assert set(first) <= set("0123456789abcdef")
     seed = (tmp_path / "state" / "install_id").read_text().strip()
-    assert first == hashlib.sha256(f"{seed}:{0x112233445566}".encode()).hexdigest()
+    assert first == hashlib.sha256(f"{seed}:{0x102233445566}".encode()).hexdigest()
     assert analytics.uuid.UUID(seed).version == 4
     # cached within the process
     assert analytics.install_id() == first
