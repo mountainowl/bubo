@@ -1321,6 +1321,25 @@ def record_finding_reconciliation(
         )
 
 
+def run_finding_counts(run_id: str, *, since: str) -> tuple[int, int]:
+    """Return ``(posted, planned)`` findings this run recorded at or after ``since``.
+
+    The worker uses it when a review fails part-way through posting, so the
+    comments already on the change are still counted. ``since`` (the run's
+    own start, :func:`bubo.events.now` format) keeps rows from an earlier
+    attempt at the same head out of the count.
+    """
+    with connect_db() as db:
+        row = db.execute(
+            """
+            select coalesce(sum(status=?),0), coalesce(sum(status=?),0)
+            from review_findings where run_id=? and updated_at>=?
+            """,
+            (FindingStatus.POSTED, FindingStatus.PLANNED, run_id, since),
+        ).fetchone()
+    return int(row[0]), int(row[1])
+
+
 def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     """Return up to ``limit`` posted findings ordered by sync staleness.
 
@@ -2304,5 +2323,6 @@ __all__ = [
     "record_review_run_finish",
     "record_review_run_start",
     "review_run_id",
+    "run_finding_counts",
     "status_age_seconds",
 ]

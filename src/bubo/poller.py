@@ -43,6 +43,7 @@ import sys
 import time
 import urllib.error
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -78,6 +79,7 @@ from bubo.db import (
     record_review_run_finish,
     record_review_run_start,
     review_run_id,
+    run_finding_counts,
     status_age_seconds,
 )
 from bubo.db import record as _db_record
@@ -1969,6 +1971,7 @@ def worker(job: Path) -> int:
     report = paths.REPORTS / slug(project) / str(iid) / sha[:12] / "review.md"
     report.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
+    started_at = now()
     tokens = TokenUsage()
     cost_usd = 0.0
     # Every agent call this review makes (review, verify, reconcile) adds to it.
@@ -2358,6 +2361,11 @@ def worker(job: Path) -> int:
         else:
             report.with_suffix(report.suffix + ".error").write_text(error, encoding="utf-8")
         record(project, iid, sha, ReviewStatus.FAILED, str(report), error)
+        # A failure part-way through posting leaves comments on the change
+        # that post_or_plan_findings never got to return; count them anyway.
+        with suppress(Exception):
+            stored_posted, stored_planned = run_finding_counts(run_id, since=started_at)
+            posted, planned = max(posted, stored_posted), max(planned, stored_planned)
         if cfg is not None:
             record_review_run_finish(
                 run_id=run_id,
