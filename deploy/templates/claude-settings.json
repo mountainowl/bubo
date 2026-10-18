@@ -1,16 +1,5 @@
 {
   "model": "{{LLM_MODEL}}",
-  "extraKnownMarketplaces": {
-    "llm-code-review": {
-      "source": {
-        "source": "directory",
-        "path": "{{ROOT}}"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "superpowers@llm-code-review": true
-  },
   "permissions": {
     "allow": [
       "mcp__git__git_status",

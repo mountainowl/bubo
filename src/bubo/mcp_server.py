@@ -46,6 +46,7 @@ from bubo.config_values import ConfigError
 from bubo.errors import describe
 from bubo.events import log
 from bubo.paths import CONFIG as ENV_CONFIG
+from bubo.prompt import rendered_meta_prompt
 from bubo.review_config import (
     DEFAULT_PROVIDER,
     SUPPORTED_PROVIDERS,
@@ -499,7 +500,8 @@ def review_change(
     scm = get_provider(cfg)
     token = scm.token()
     change = scm.get_change(cfg, token, project, number)
-    prompt = scm.review_prompt(project, change, cfg)
+    meta = rendered_meta_prompt(cfg.max_findings_per_merge_request)
+    prompt = scm.review_prompt(project, change, cfg, meta_prompt=meta.read_text(encoding="utf-8"))
     timeout = int(timeout_seconds) if timeout_seconds is not None else cfg.timeout_seconds
     started = time.monotonic()
     result = run_bounded([*cfg.reviewer_command, prompt], timeout=timeout)

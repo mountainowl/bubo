@@ -505,7 +505,31 @@ def test_provider_review_prompt_mentions_github_pr() -> None:
     prompt = provider.review_prompt("o/r", change, ReviewConfig(provider="github"))
     assert "GitHub PR" in prompt
     assert "PR number: 5" in prompt
-    assert "Use the `code-reviewer` skill" in prompt
+    # The agent gets no skill or plugin to look the rules up in.
+    assert "Superpowers" not in prompt
+    assert "skill" not in prompt
+
+
+def test_provider_review_prompt_inlines_meta_prompt_before_contract() -> None:
+    provider = GitHubProvider()
+    change = {
+        "html_url": "https://github.com/o/r/pull/5",
+        "number": 5,
+        "title": "Fix bug",
+        "head": {"ref": "feature", "sha": "abc"},
+        "base": {"ref": "main"},
+    }
+    cfg = ReviewConfig(provider="github")
+    plain = provider.review_prompt("o/r", change, cfg)
+    prompt = provider.review_prompt(
+        "o/r", change, cfg, meta_prompt="<code_review_prompt>RULES</code_review_prompt>\n"
+    )
+
+    header, rest = prompt.split("<code_review_prompt>", 1)
+    assert "PR number: 5" in header
+    assert rest.index("RULES") < rest.index("Return a JSON array only.")
+    # Without rules the prompt is unchanged apart from the inlined block.
+    assert prompt.replace("<code_review_prompt>RULES</code_review_prompt>\n\n", "") == plain
 
 
 def _open_bubo_thread(*, marker: str = "") -> dict:

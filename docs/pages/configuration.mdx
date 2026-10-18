@@ -240,9 +240,9 @@ One block per repository.
 | `$BUBO_BASE_DIR/work/` | Per-change worktrees. |
 | `$BUBO_BASE_DIR/reports/` | Agent transcripts. |
 | `$BUBO_BASE_DIR/log/` | JSON-line logs. |
-| `$BUBO_BASE_DIR/rendered-prompts/` | Rendered prompt files. |
+| `$BUBO_BASE_DIR/rendered-prompts/` | Rendered review rules, inlined into every review prompt. |
 | `$BUBO_ROOT/prompts/00-meta.md` | Default prompt template. |
-| `$BUBO_ROOT/skills/code-reviewer/` | Bundled review skill. |
+| `$BUBO_ROOT/skills/code-reviewer/` | Review skill for interactive Codex use; automated reviews do not need it. |
 | `~/.codex/config.toml` | Codex client config written by `bubo init`, unless skipped. |
 | `~/.claude/settings.json` | Claude settings written by `bubo init`, unless skipped. |
 

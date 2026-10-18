@@ -68,19 +68,18 @@ different release.
 | `min-confidence` | *(Bubo default)* | Discard findings below this value. |
 | `max-findings` | *(Bubo default)* | Maximum findings for this PR. |
 | `bubo-version` | *(matching Action tag)* | Explicit PyPI version override. Non-semver Action refs use latest. |
-| `install-agent` | `false` | Best-effort Codex and Superpowers installation. |
+| `install-agent` | `false` | Best-effort Codex installation. |
 
 ## Self-hosted runners
 
-Pre-provision the agent CLI, authentication, the `code-reviewer` skill, `uv`,
-and `git`, then leave `install-agent: false`. Repository data and the review
+Pre-provision the agent CLI, authentication, `uv`, and `git`, then leave `install-agent: false`. Repository data and the review
 process remain on the runner; the configured model endpoint still receives the
 model request.
 
 ## Execution flow
 
 1. Resolve the compatible Bubo version and install it from PyPI.
-2. Optionally install Codex and Superpowers on a hosted runner.
+2. Optionally install Codex on a hosted runner.
 3. Initialize an ephemeral Bubo root below `${{ runner.temp }}`.
 4. Write a configuration containing one GitHub repository and the triggering
    PR number as `target_merge_request_iid`.

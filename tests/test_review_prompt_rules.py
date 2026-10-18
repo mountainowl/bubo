@@ -1,0 +1,75 @@
+"""The reviewer agent receives Bubo's review rules inline, rendered for this run.
+
+Earlier prompts only said "Use the `code-reviewer` skill through Superpowers";
+neither the plugin nor (on Claude) the skill ever loaded, so the rules in
+``prompts/00-meta.md`` never reached the agent.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from bubo import db, paths, poller
+from bubo.analytics_config import AnalyticsConfig
+from bubo.review_config import ReviewConfig
+from bubo.scm.github import GitHubProvider
+from bubo.telemetry import TelemetryConfig
+
+META_PROMPT = Path(__file__).resolve().parents[1] / "prompts" / "00-meta.md"
+
+
+def test_worker_passes_rendered_meta_prompt_to_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BUBO_PROMPT_SOURCE", str(META_PROMPT))
+    db.init_dirs()
+    db.init_db()
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps({"project": "o/r", "mr": {"iid": 1, "sha": "b" * 40}}))
+    change = {
+        "html_url": "https://github.com/o/r/pull/1",
+        "number": 1,
+        "title": "t",
+        "head": {"ref": "f", "sha": "b" * 40},
+        "base": {"ref": "main"},
+    }
+    provider = MagicMock()
+    provider.token.return_value = "token"
+    provider.get_change.return_value = change
+    provider.changed_lines.return_value = {}
+    provider.review_prompt.side_effect = GitHubProvider().review_prompt
+    telemetry = MagicMock()
+    telemetry.span.return_value.__enter__.return_value = MagicMock()
+    agent = MagicMock(return_value=SimpleNamespace(stdout="[]", returncode=0))
+    cfg = ReviewConfig(
+        provider="github",
+        max_findings_per_merge_request=7,
+        telemetry_config=TelemetryConfig(analytics=AnalyticsConfig(enabled=False)),
+    )
+
+    with (
+        patch("bubo.poller.read_config", return_value=cfg),
+        patch("bubo.poller.get_provider", return_value=provider),
+        patch("bubo.poller.ReviewTelemetry.from_config", return_value=telemetry),
+        patch("bubo.poller.capture_provenance", return_value=None),
+        patch("bubo.poller.run", agent),
+        patch("bubo.poller.post_no_findings_comment", return_value=("disabled", "test")),
+        patch("bubo.poller.cleanup_worktree"),
+        patch("bubo.poller.analytics.flush"),
+    ):
+        assert poller.worker(job) == 0
+
+    prompt = agent.call_args.args[0][-1]
+    assert "Superpowers" not in prompt
+    assert "<code_review_prompt" in prompt
+    assert "Maximum 7 findings total for the packet." in prompt
+    assert "{{MAX_FINDINGS_PER_REVIEW}}" not in prompt
+    # Rules first, then the output contract the parser relies on.
+    assert prompt.index("<code_review_prompt") < prompt.index("Return a JSON array only.")
+    rendered = paths.RENDERED_PROMPTS / "00-meta.max-7.md"
+    assert rendered.read_text(encoding="utf-8").strip() in prompt

@@ -11,7 +11,7 @@ Two subcommands so far:
   (with the load-bearing ``[profiles.bubo]`` block),
   ``~/.claude/settings.json``, and the per-host workspace under
   ``$BUBO_ROOT`` (config seed, var/ tree, SQLite schema,
-  copies of the bundled prompts/skills/plugins). Idempotent on re-run;
+  copies of the bundled prompts/skills). Idempotent on re-run;
   ``--dry-run`` lists every action it would take without touching disk;
   ``--force`` overwrites operator-edited files; ``--no-agent-config``
   skips the ``~/.codex`` and ``~/.claude`` writes for hosts with
@@ -68,7 +68,6 @@ _EDITABLE_FALLBACKS: dict[tuple[str, ...], str] = {
     ("env.example.toml",): "config/env.example.toml",
     ("prompts",): "prompts",
     ("skills",): "skills",
-    ("plugins",): "plugins",
     # Built operator-UI SPA assets. Force-included into the wheel under
     # bubo/_assets/ui/ (see pyproject.toml); the editable/source install reads
     # the committed Vite build output at ui/dist/ instead.
@@ -181,9 +180,9 @@ def _plan_env_seed(root: Path, force: bool) -> list[Action]:
 
 
 def _plan_packaged_runtime_copies(root: Path) -> list[Action]:
-    """Place prompts, skills, plugins on disk under ``$ROOT/``.
+    """Place prompts and skills on disk under ``$ROOT/``.
 
-    These need to be on a real filesystem because Codex's plugin loader
+    These need to be on a real filesystem because Codex's skill loader
     and the meta-prompt renderer expect a directory tree, not an
     importlib resource handle. Re-copied every run so packaged updates
     win over stale on-disk copies (the alternative — only-on-first-init
@@ -200,12 +199,6 @@ def _plan_packaged_runtime_copies(root: Path) -> list[Action]:
             kind="copy_tree",
             target=root / "skills",
             source=("skills",),
-            note="overwrite on every init",
-        ),
-        Action(
-            kind="copy_tree",
-            target=root / "plugins",
-            source=("plugins",),
             note="overwrite on every init",
         ),
     ]
@@ -265,7 +258,7 @@ def _plan_agent_config(home: Path, root: Path, force: bool) -> list[Action]:
             kind="symlink",
             target=skills_link,
             source=str(root / "skills" / "code-reviewer"),
-            note="Codex resolves /using-superpowers + $code-reviewer skills via this link",
+            note="interactive $code-reviewer skill for Codex (reviews inline the rules)",
         )
     )
     return actions

@@ -6,7 +6,7 @@ Covers:
   agent-config actions for both fresh and existing roots.
 * ``cmd_init --dry-run`` exits 0 without touching the filesystem.
 * A real ``cmd_init`` against an empty tmpdir writes env.toml, copies
-  prompts/skills/plugins, initializes the SQLite DB, and is idempotent
+  prompts/skills, initializes the SQLite DB, and is idempotent
   on re-run.
 * ``cmd_doctor`` returns 0 on a successful install and non-zero on
   missing env.toml / missing DB / missing Codex profile.
@@ -57,7 +57,7 @@ def test_plan_init_includes_workspace_env_runtime_and_db(tmp_path: Path) -> None
     assert any(a.target.name == "env.toml" and a.kind == "write_file" for a in actions)
     # The three runtime copies.
     copy_targets = {a.target.name for a in actions if a.kind == "copy_tree"}
-    assert copy_targets == {"prompts", "skills", "plugins"}
+    assert copy_targets == {"prompts", "skills"}
     # DB init runs last.
     assert actions[-1].kind == "init_db"
 
@@ -139,7 +139,7 @@ def test_cmd_init_real_run_creates_full_workspace(isolated_root: Path) -> None:
     assert (isolated_root / "var" / "state" / "reviewer.sqlite").is_file()
     assert (isolated_root / "prompts" / "00-meta.md").is_file()
     assert (isolated_root / "skills" / "code-reviewer" / "SKILL.md").is_file()
-    assert (isolated_root / "plugins" / "superpowers").is_dir()
+    assert not (isolated_root / "plugins").exists()
 
 
 def test_cmd_init_does_not_materialize_legacy_scheduler_templates(

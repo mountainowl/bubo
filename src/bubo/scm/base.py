@@ -65,9 +65,11 @@ class FindingThreadResolution:
 
 # The finding-output contract shared by every provider's review prompt. Only
 # the change-specific header differs per provider; the JSON shape the agent
-# must return is identical. ``{max_findings}`` is filled in per review.
-REVIEW_CONTRACT = """Use the `code-reviewer` skill through Superpowers for the review contract.
-Review the diff only. Do not post comments yourself.
+# must return is identical. ``{max_findings}`` is filled in per review. The
+# review rules themselves (the rendered ``prompts/00-meta.md``) are inlined
+# ahead of it by ``build_review_contract``: the agent gets no skill or plugin
+# to fetch them from.
+REVIEW_CONTRACT = """Review the diff only. Do not post comments yourself.
 Return a JSON array only. Do not wrap it in markdown.
 Return at most {max_findings} findings.
 Each finding object must have:
@@ -161,16 +163,20 @@ def comment_voice_directive(tone: str) -> str:
     return COMMENT_VOICES.get(tone, "")
 
 
-def build_review_contract(cfg: ReviewConfig) -> str:
+def build_review_contract(cfg: ReviewConfig, meta_prompt: str = "") -> str:
     """Build the finding-output contract for a review.
 
     Fills the per-review ``max_findings`` cap and, when a non-default
-    ``[review].tone`` is set, appends that tone's voice directive. Shared by
-    both providers so their prompts cannot drift on the contract.
+    ``[review].tone`` is set, appends that tone's voice directive. A non-empty
+    ``meta_prompt`` (the rendered review rules) goes first. Shared by both
+    providers so their prompts cannot drift on the contract.
     """
     contract = REVIEW_CONTRACT.format(max_findings=cfg.max_findings_per_merge_request)
     voice = comment_voice_directive(cfg.tone)
-    return f"{contract}\n\n{voice}" if voice else contract
+    if voice:
+        contract = f"{contract}\n\n{voice}"
+    meta = meta_prompt.strip()
+    return f"{meta}\n\n{contract}" if meta else contract
 
 
 def _git_auth_args(token: str, username: str) -> list[str]:
@@ -387,7 +393,13 @@ class ScmProvider(Protocol):
         ...
 
     def review_prompt(
-        self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
+        self,
+        project: str,
+        change: JsonObject,
+        cfg: ReviewConfig,
+        *,
+        extra_directive: str = "",
+        meta_prompt: str = "",
     ) -> str:
         """Build the per-change review task prompt.
 
@@ -395,5 +407,7 @@ class ScmProvider(Protocol):
         heightened-scrutiny notice for an escalated change) appended after the
         review contract. Empty (the default) leaves the prompt unchanged, so
         existing callers and the provenance-off path are byte-identical.
+        ``meta_prompt`` is the rendered review rules, inlined before the
+        output contract (see :func:`build_review_contract`).
         """
         ...

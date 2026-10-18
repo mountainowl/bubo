@@ -58,7 +58,7 @@ inputs:
     required: false
     default: ""
   install-agent:
-    description: "Best-effort Codex and Superpowers install. Leave false on pre-provisioned runners."
+    description: "Best-effort Codex install. Leave false on pre-provisioned runners."
     required: false
     default: "false"
 
@@ -101,8 +101,6 @@ runs:
       run: |
         npm install -g @openai/codex \
           || echo "::warning::Codex install failed; ensure the agent CLI is on PATH."
-        npx -y @obra/superpowers install 2>/dev/null \
-          || echo "::warning::Superpowers install skipped; ensure the code-reviewer skill is configured."
 
     - name: Initialize Bubo workspace
       shell: bash

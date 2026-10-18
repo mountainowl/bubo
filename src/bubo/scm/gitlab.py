@@ -300,9 +300,15 @@ class GitLabProvider:
         return FindingThreadResolution(FindingThreadState.RESOLVED, resolved_by == bot_username)
 
     def review_prompt(
-        self, project: str, change: JsonObject, cfg: ReviewConfig, *, extra_directive: str = ""
+        self,
+        project: str,
+        change: JsonObject,
+        cfg: ReviewConfig,
+        *,
+        extra_directive: str = "",
+        meta_prompt: str = "",
     ) -> str:
-        contract = build_review_contract(cfg)
+        contract = build_review_contract(cfg, meta_prompt)
         suffix = f"\n\n{extra_directive}" if extra_directive else ""
         return f"""Review GitLab MR {change.get("web_url")}
 Project: {project}
