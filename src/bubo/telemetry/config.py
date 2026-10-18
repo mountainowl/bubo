@@ -31,6 +31,9 @@ class TelemetryConfig:
     emit_finding_events: bool = True
     emit_outcome_sync: bool = True
     pricing: dict[str, ModelPricing] = field(default_factory=lambda: {"default": ModelPricing()})
+    # Price Codex runs from LiteLLM's live price list (see bubo.telemetry.pricing);
+    # the ``*_per_1m`` values then only cover models that list does not know.
+    live_pricing: bool = True
 
     @property
     def enabled(self) -> bool:
@@ -81,6 +84,7 @@ def telemetry_config_from_dict(data: dict[str, Any]) -> TelemetryConfig:
             raw.get("emit_outcome_sync"), "telemetry.emit_outcome_sync", default=True
         ),
         pricing=pricing,
+        live_pricing=bool_value(raw.get("live_pricing"), "telemetry.live_pricing", default=True),
     )
 
 

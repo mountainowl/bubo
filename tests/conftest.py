@@ -53,6 +53,13 @@ def no_external_telemetry(monkeypatch, request):
         },
     )
     monkeypatch.setattr(trace_exporter, "OTLPSpanExporter", blocked)
+    # Tests run offline: the live model price list falls back to configured prices.
+    from bubo.telemetry import pricing
+
+    def offline():
+        raise OSError("offline in tests")
+
+    monkeypatch.setattr(pricing, "_fetch", offline)
     monkeypatch.setattr(metric_exporter, "OTLPMetricExporter", blocked)
     yield
     from bubo.telemetry import posthog

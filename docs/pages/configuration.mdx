@@ -180,9 +180,10 @@ for the local HTML dashboard and preferences.
 | `export_interval_seconds` | integer | `30` | Metric export interval. |
 | `emit_finding_events` | boolean | `true` | Emit per-finding lifecycle metrics. |
 | `emit_outcome_sync` | boolean | `true` | Emit outcome-sync metrics. |
-| `input_per_1m` | number | `0.0` | Estimated input-token price per 1M tokens. |
-| `output_per_1m` | number | `0.0` | Estimated output-token price per 1M tokens. |
-| `cached_input_per_1m` | number | `0.0` | Estimated cached-input price per 1M tokens. |
+| `live_pricing` | boolean | `true` | Price Codex runs from LiteLLM's public price list, fetched at most once a day. Claude runs always record the cost Claude reports. |
+| `input_per_1m` | number | `0.0` | Input-token price per 1M tokens, for models the live list lacks, or for all models when `live_pricing = false`. |
+| `output_per_1m` | number | `0.0` | Output-token price per 1M tokens, used the same way. |
+| `cached_input_per_1m` | number | `0.0` | Cached-input price per 1M tokens, used the same way. |
 
 ## `[analytics]`
 
@@ -338,6 +339,7 @@ no_findings_comment_body   = "Automated review ran — no issues found."
 export_interval_seconds = 30
 emit_finding_events     = true
 emit_outcome_sync       = true
+live_pricing            = true
 input_per_1m            = 0.0
 output_per_1m           = 0.0
 cached_input_per_1m     = 0.0

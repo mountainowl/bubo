@@ -197,3 +197,9 @@ def test_shipping_example_has_one_enabled_consent():
     assert "enabled" not in data["telemetry"]
     assert analytics_config_from_dict(data).enabled is True
     assert telemetry_config_from_dict(data).enabled is True
+
+
+def test_telemetry_config_live_pricing_defaults_on_and_can_be_turned_off() -> None:
+    assert telemetry_config_from_dict({}).live_pricing is True
+    cfg = telemetry_config_from_dict({"telemetry": {"live_pricing": False}})
+    assert cfg.live_pricing is False

@@ -131,7 +131,9 @@ from bubo.telemetry import (
     ReviewTelemetry,
     TokenUsage,
     estimate_cost_usd,
-    parse_codex_token_usage,
+    model_pricing,
+    parse_agent_output,
+    structured_output_command,
 )
 from bubo.types import JsonObject
 from bubo.update_admission import MaintenanceInProgress, activity, admitted, handoff_fds
@@ -1698,7 +1700,7 @@ def worker(job: Path) -> int:
             with telemetry.span("llm_review.agent", repo=project, model=model) as agent_span:
                 result = run(
                     [
-                        *cfg.reviewer_command,
+                        *structured_output_command(cfg.reviewer_command),
                         provider.review_prompt(project, mr, cfg, extra_directive=extra_directive),
                     ],
                     cwd=repo,
@@ -1711,8 +1713,13 @@ def worker(job: Path) -> int:
                     safe_stdout, cfg.subscription_circuit.error_patterns, terminal_only=True
                 ):
                     raise SubscriptionUnavailable()
-                tokens = parse_codex_token_usage(result.stdout)
-                cost_usd = estimate_cost_usd(tokens, cfg.telemetry_config.price_for(model))
+                agent_output = parse_agent_output(result.stdout)
+                tokens = agent_output.usage
+                # Claude reports what the run cost; Codex reports tokens only.
+                if agent_output.cost_usd is not None:
+                    cost_usd = agent_output.cost_usd
+                else:
+                    cost_usd = estimate_cost_usd(tokens, model_pricing(model, cfg.telemetry_config))
                 telemetry.set_span_attrs(
                     agent_span,
                     tokens_input=tokens.input,
@@ -1747,7 +1754,7 @@ def worker(job: Path) -> int:
                     token=token,
                     project=project,
                     mr=mr,
-                    raw_review=safe_stdout,
+                    raw_review=redact_secrets(agent_output.review),
                     run_id=run_id,
                     telemetry=telemetry,
                     provider=provider,
