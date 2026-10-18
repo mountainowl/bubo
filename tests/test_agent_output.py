@@ -11,11 +11,15 @@ CODEX_JSONL = "\n".join(
         "Reading additional input from stdin...",
         '{"type":"thread.started","thread_id":"01a14d62"}',
         '{"type":"turn.started"}',
-        '{"type":"item.completed","item":{"id":"item_0","type":"agent_message",'
-        '"text":"I will check."}}',
+        (
+            '{"type":"item.completed","item":{"id":"item_0","type":"agent_message",'
+            '"text":"I will check."}}'
+        ),
         '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"[]"}}',
-        '{"type":"turn.completed","usage":{"input_tokens":71154,"cached_input_tokens":49280,'
-        '"cache_write_input_tokens":0,"output_tokens":220,"reasoning_output_tokens":0}}',
+        (
+            '{"type":"turn.completed","usage":{"input_tokens":71154,"cached_input_tokens":49280,'
+            '"cache_write_input_tokens":0,"output_tokens":220,"reasoning_output_tokens":0}}'
+        ),
     ]
 )
 
@@ -101,8 +105,10 @@ def test_codex_json_quota_error_still_trips_the_subscription_circuit() -> None:
             '{"type":"thread.started","thread_id":"01a14d70"}',
             '{"type":"turn.started"}',
             '{"type":"error","message":"Quota exceeded. Check your plan and billing details."}',
-            '{"type":"turn.failed","error":{"message":"Quota exceeded. Check your plan and '
-            'billing details."}}',
+            (
+                '{"type":"turn.failed","error":{"message":"Quota exceeded. Check your plan and '
+                'billing details."}}'
+            ),
         ]
     )
     assert is_subscription_failure(out, terminal_only=True)
