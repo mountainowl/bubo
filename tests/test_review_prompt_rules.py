@@ -82,3 +82,13 @@ def test_reviewer_skill_no_findings_instruction_matches_the_contract() -> None:
     assert "return exactly" not in text
     assert "a schema-version-1 result with explicit status and coverage" not in text
     assert "empty `findings` array" in text
+def test_contract_does_not_turn_standing_review_conditions_into_incomplete() -> None:
+    """Every review is read-only and executes nothing. When the contract let models list
+    that as a limitation, live Haiku/Sonnet/Opus runs marked 26 of 45 reviews incomplete
+    (or "complete" with limitations, which fails parsing), and the worker records both as
+    FAILED."""
+    change = {"number": 1, "head": {"ref": "f", "sha": "b" * 40}, "base": {"ref": "main"}}
+    prompt = GitHubProvider().review_prompt("o/r", change, ReviewConfig(provider="github"))
+    assert "these are not limitations" in prompt
+    assert "they are not limitations" in prompt
+    assert "Questions,\nunreviewed scope, or limitations require incomplete" not in prompt
