@@ -132,8 +132,11 @@ ONE_CALL = 0.0015
 def test_each_verification_lens_is_metered_and_still_parsed(tmp_path, temp_db, live_prices):
     from bubo.telemetry import start_metering, stop_metering
 
-    verdict = json.dumps({"real": True, "confidence": 0.9, "reason": "r"})
-    agent = MagicMock(return_value=_runner_result(verdict, _codex_jsonl(verdict)))
+    # Split votes, so verification cannot stop early and every lens runs.
+    votes = [
+        json.dumps({"real": real, "confidence": 0.9, "reason": "r"}) for real in (True, False, True)
+    ]
+    agent = MagicMock(side_effect=[_runner_result(v, _codex_jsonl(v)) for v in votes])
     cfg = ReviewConfig(model="m", verify_lenses=["correctness", "in_diff", "reproduce"])
     meter, token = start_metering()
     try:
@@ -142,7 +145,7 @@ def test_each_verification_lens_is_metered_and_still_parsed(tmp_path, temp_db, l
     finally:
         stop_metering(token)
 
-    assert [v.ok and v.real for v in verdicts] == [True, True, True]
+    assert [(v.ok, v.real) for v in verdicts] == [(True, True), (True, False), (True, True)]
     assert meter.tokens == TokenUsage(input=3000, output=150, cached=1200, total=3150)
     assert meter.cost_usd == pytest.approx(3 * ONE_CALL)
 

@@ -166,6 +166,7 @@ from bubo.verification import (
     build_reconciliation_prompt,
     build_verification_prompt,
     decide,
+    outcome_settled,
     parse_reconciliation_result,
     parse_verdict,
     votes_summary,
@@ -277,7 +278,9 @@ def run_verification(
     (``cfg.verify_command`` falling back to ``cfg.reviewer_command``) with
     ``cwd=repo`` and the secret-stripped :func:`reviewer_env`, so the
     verifier can inspect the checked-out code. Each check gets its own
-    ``cfg.verify_timeout_seconds`` budget.
+    ``cfg.verify_timeout_seconds`` budget. Lenses stop early once the
+    remaining ones cannot change the verified/refuted/unresolved outcome
+    (:func:`bubo.verification.outcome_settled`).
 
     A check that fails to run — spawn error, timeout, non-zero exit, or
     unparseable output — yields a verdict with ``ok=False`` rather than a
@@ -291,7 +294,15 @@ def run_verification(
     if not command:
         return verdicts
     env = reviewer_env(os.environ, cfg)
-    for lens in cfg.verify_lenses:
+    for index, lens in enumerate(cfg.verify_lenses):
+        if outcome_settled(
+            verdicts,
+            remaining=len(cfg.verify_lenses) - index,
+            min_votes=cfg.verify_min_votes,
+            confidence_floor=cfg.verify_confidence_floor,
+        ):
+            log("verify_lenses_skipped", skipped=cfg.verify_lenses[index:])
+            break
         prompt = build_verification_prompt(
             finding,
             lens=lens,
