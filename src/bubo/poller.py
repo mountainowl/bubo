@@ -66,6 +66,7 @@ from bubo.db import (
     open_finding_with_identity,
     posted_findings_for_outcome_sync,
     prior_posted_findings_for_reconciliation,
+    prior_verification,
     prompt_version,
     record_finding_outcome,
     record_finding_outcome_sync_attempt,
@@ -82,18 +83,20 @@ from bubo.db import record_finding as _db_record_finding
 from bubo.errors import describe
 from bubo.events import log, now
 from bubo.findings import (
+    ReviewResult,
     calibrated_category_floors,
     count_added_lines,
     dispute_stats_by_canonical,
-    extract_findings,
     filter_findings_by_policy,
     finding_body,
     finding_comment_body,
     finding_fingerprint,
     normalize_finding_categories,
+    parse_review_result,
     resolve_finding_line,
     surface_predicate_for_mode,
 )
+from bubo.findings import extract_findings as extract_findings
 from bubo.governance_policy import (
     POLICY_OFF,
     evaluate_policy,
@@ -114,6 +117,9 @@ from bubo.reconciliation import (
     verified_fixed_reply,
 )
 from bubo.review_config import ReviewConfig, load_review_config, review_config_from_dict
+from bubo.review_environment import REVIEWER_ENV_ALLOWLIST
+from bubo.review_environment import reviewer_env as _reviewer_env
+from bubo.review_runner import run_review as run
 from bubo.scm import ScmProvider, get_provider
 from bubo.scm.base import (
     FindingThreadState,
@@ -132,8 +138,7 @@ from bubo.signals import (
     shutdown_requested as _shutdown_requested,
 )
 from bubo.statuses import FindingStatus, ReviewMode, ReviewStatus
-from bubo.subproc import kill_process_group
-from bubo.subproc import run_bounded as run
+from bubo.subproc import kill_process_group, run_bounded
 from bubo.subscription import (
     is_subscription_failure,
     review_gate,
@@ -226,65 +231,25 @@ _NOTE_HEADER = re.compile(
 )
 _NOTE_CONFIDENCE = re.compile(r"\*\*Confidence:\*\*\s*([0-9.]+)", re.IGNORECASE)
 
-# Allowlist of env-var names forwarded into the agent subprocess. Anything
-# not on this list (including every credential the wrapper exported into
-# our own environment) is stripped. This is the primary defense against
-# prompt-injection exfiltration of secrets.
-REVIEWER_ENV_ALLOWLIST = {
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "SHELL",
-    "TMPDIR",
-    "TEMP",
-    "TMP",
-    "LANG",
-    "LC_ALL",
-    "SYSTEMROOT",
-    "SystemRoot",
-    "WINDIR",
-    "SSL_CERT_FILE",
-    "REQUESTS_CA_BUNDLE",
-    "CODEX_HOME",
-    "CLAUDE_CONFIG_DIR",
-    "XDG_CONFIG_HOME",
-}
-
-
 # ---------------------------------------------------------------------------
 # Subprocess env + config glue
 # ---------------------------------------------------------------------------
 
 
 def reviewer_env(source: Mapping[str, str], cfg: ReviewConfig | None = None) -> dict[str, str]:
-    """Build the env dict for the agent subprocess.
-
-    Filters ``source`` through :data:`REVIEWER_ENV_ALLOWLIST` — dropping
-    every credential the wrapper exported into our own environment (the
-    primary anti-exfiltration defense) — and injects ``BUBO_ROOT`` so any
-    MCP server the agent spawns via ``bin/bubo`` resolves the install
-    root. The review prompt (with its contract + findings cap) is passed to
-    the agent as a command argument, not via the environment.
-
-    **base_url exception:** a custom OpenAI-compatible endpoint
-    (``cfg.llm_base_url``) reads the API key from the environment at request
-    time — there is no login flow to stash it in ``auth.json``. So, and *only*
-    when a base URL is configured, exactly ``LLM_API_KEY`` and ``LLM_BASE_URL``
-    are let through the allowlist. This deliberately re-exposes one credential
-    to the agent, which is why it is gated on the operator opting into a base
-    URL rather than widening the static allowlist for everyone.
-    """
-    env = {key: value for key, value in source.items() if key in REVIEWER_ENV_ALLOWLIST}
-    env["BUBO_ROOT"] = str(ROOT)
-    if cfg is not None and cfg.llm_base_url:
-        for name in ("LLM_API_KEY", "LLM_BASE_URL"):
-            if source.get(name):
-                env[name] = source[name]
-    return env
+    """Compatibility entrypoint preserving the poller's patchable ROOT binding."""
+    return _reviewer_env(source, cfg, root=ROOT)
 
 
-def run_verification(finding: JsonObject, repo: Path | None, cfg: ReviewConfig) -> list[Verdict]:
+def run_verification(
+    finding: JsonObject,
+    repo: Path | None,
+    cfg: ReviewConfig,
+    *,
+    base_sha: str | None = None,
+    head_sha: str | None = None,
+    diff_excerpt: str | None = None,
+) -> list[Verdict]:
     """Run the opt-in verification lenses for one finding (the IO seam).
 
     For each lens in ``cfg.verify_lenses`` this spawns one verifier exec
@@ -306,12 +271,19 @@ def run_verification(finding: JsonObject, repo: Path | None, cfg: ReviewConfig) 
         return verdicts
     env = reviewer_env(os.environ, cfg)
     for lens in cfg.verify_lenses:
-        prompt = build_verification_prompt(finding, lens=lens)
+        prompt = build_verification_prompt(
+            finding,
+            lens=lens,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            diff_excerpt=diff_excerpt or "",
+        )
         try:
             result = run(
                 [*command, prompt],
                 cwd=repo,
                 env=env,
+                review_config=cfg,
                 timeout=cfg.verify_timeout_seconds,
             )
         except Exception as exc:  # spawn / timeout / OS error — failed to run
@@ -348,6 +320,7 @@ def run_reconciliation_verification(
             ],
             cwd=repo,
             env=reviewer_env(os.environ, cfg),
+            review_config=cfg,
             timeout=cfg.reconcile_timeout_seconds,
         )
     except Exception as exc:
@@ -1423,6 +1396,8 @@ def post_or_plan_findings(
     provider: ScmProvider | None = None,
     repo: Path | None = None,
     pending_external_ids: list[bool] | None = None,
+    review_results: list[ReviewResult] | None = None,
+    verification_blockers: list[str] | None = None,
     allowed_lines: dict[str, JsonObject] | None = None,
 ) -> tuple[int, int, int]:
     """Parse, filter, and post (or plan) findings for one change.
@@ -1460,7 +1435,13 @@ def post_or_plan_findings(
     provider = provider or get_provider(cfg)
     number = provider.change_number(mr)
     sha = sha_for(mr)
-    findings = extract_findings(raw_review, max_findings=cfg.max_findings_per_merge_request)
+    outcome = parse_review_result(raw_review)
+    if review_results is not None:
+        review_results.append(outcome)
+    if outcome.status == "failed" or outcome.mode != "diff":
+        raise ValueError("Review failed: publisher requires a nonfailed diff review")
+    findings = sorted(outcome.findings, key=lambda f: f["severity"] != "blocking")
+    findings = findings[: cfg.max_findings_per_merge_request]
     if not findings:
         return (0, 0, 0)
     # Map each free-form `category` onto the canonical taxonomy, stored in a
@@ -1535,6 +1516,16 @@ def post_or_plan_findings(
     # caps). ``verified_attempts`` is the count of findings the cap has let
     # through to a verification pass so far.
     verified_count = refuted_count = capped_count = verified_attempts = 0
+    verification_policy = json.dumps(
+        {
+            "version": 1,
+            "min_votes": cfg.verify_min_votes,
+            "confidence_floor": cfg.verify_confidence_floor,
+            "command": cfg.verify_command,
+            "lenses": cfg.verify_lenses,
+        },
+        sort_keys=True,
+    )
     for finding in findings:
         fp = finding_fingerprint(project, number, sha, finding)
         identity = finding_identity(project, number, finding)
@@ -1643,12 +1634,22 @@ def post_or_plan_findings(
         # non-duplicate survivor we are otherwise about to post/plan. Runs N
         # independent refute-it lenses and drops a finding a majority refute.
         # Verdict columns default to None so a verify-off run records nothing.
+        verification_unresolved = False
         verified_flag: bool | None = None
         verify_votes_json: str | None = None
         if cfg.verify_findings:
+            cached = prior_verification(
+                project, number, sha, fp, expected_policy=verification_policy
+            )
+            if cached is False or (cached is True and cfg.dry_run):
+                skipped += 1
+                continue
             if verified_attempts >= cfg.verify_max_findings:
-                # Cap reached: post unverified-but-logged (never silently drop).
+                # Preserve the candidate for retry; do not publish an undecided verdict.
                 capped_count += 1
+                verification_unresolved = True
+                if verification_blockers is not None:
+                    verification_blockers.append("Verification budget exhausted")
                 log(
                     "finding_verify_capped",
                     project=project,
@@ -1659,7 +1660,52 @@ def post_or_plan_findings(
                 )
             else:
                 verified_attempts += 1
-                verdicts = run_verification(finding, repo, cfg)
+                refs = change.get("diff_refs") or {}
+                base_sha = refs.get("base_sha") or (change.get("base") or {}).get("sha")
+                evidence = ""
+                if repo is not None and base_sha:
+                    try:
+                        diff_result = run_bounded(
+                            [
+                                "git",
+                                "--no-pager",
+                                "diff",
+                                "--no-ext-diff",
+                                "--no-textconv",
+                                "--end-of-options",
+                                str(base_sha),
+                                sha,
+                                "--",
+                                str(finding.get("file", "")),
+                            ],
+                            cwd=repo,
+                            timeout=30,
+                            env=reviewer_env(os.environ, cfg),
+                        )
+                        if diff_result.returncode == 0:
+                            evidence = diff_result.stdout[:32768]
+                            if len(diff_result.stdout) > 32768:
+                                evidence += (
+                                    "\n[Diff truncated; inspect the pinned checkout "
+                                    "for remaining evidence.]"
+                                )
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        # The verifier can inspect the pinned checkout directly.
+                        # Missing diff text is not evidence confirming/refuting a finding.
+                        log(
+                            "verification_diff_unavailable",
+                            project=project,
+                            iid=number,
+                            error=type(exc).__name__,
+                        )
+                verdicts = run_verification(
+                    finding,
+                    repo,
+                    cfg,
+                    base_sha=base_sha,
+                    head_sha=sha,
+                    diff_excerpt=evidence,
+                )
                 outcome = decide(
                     verdicts,
                     min_votes=cfg.verify_min_votes,
@@ -1672,7 +1718,11 @@ def post_or_plan_findings(
                 # refutation, so we must NOT drop the finding (partial-outage
                 # safety — mirrors the total-outage case below).
                 ran_count = sum(1 for verdict in verdicts if verdict.ok)
-                verify_votes_json = votes_summary(verdicts)
+                vote_records = json.loads(votes_summary(verdicts))
+                for vote in vote_records:
+                    vote["contract_version"] = 1
+                    vote["policy"] = verification_policy
+                verify_votes_json = json.dumps(vote_records, ensure_ascii=False)
                 if outcome.survives:
                     # A majority confirmed it (survives implies ran_count >=
                     # min_votes) — post as verified.
@@ -1688,9 +1738,8 @@ def post_or_plan_findings(
                         line=_position_line(position),
                         votes=f"{outcome.real_votes}/{outcome.total}",
                     )
-                elif ran_count >= cfg.verify_min_votes:
-                    # Enough lenses ran and a majority did NOT affirm — a
-                    # genuine refutation. Drop + record for audit.
+                elif outcome.refuted:
+                    # An explicit refutation quorum supplied counterevidence.
                     refuted_count += 1
                     record_finding(
                         project=project,
@@ -1725,10 +1774,13 @@ def post_or_plan_findings(
                     skipped += 1
                     continue
                 else:
-                    # Too few lenses ran to decide (verifier outage, partial
-                    # or total): post unverified-but-logged, never dropped.
+                    # No decisive quorum: preserve the candidate and mark the run incomplete.
                     capped_count += 1
-                    verify_votes_json = None
+                    verification_unresolved = True
+                    if verification_blockers is not None:
+                        verification_blockers.append(
+                            f"Insufficient verification evidence: {finding.get('title', 'finding')}"
+                        )
                     log(
                         "finding_verify_unavailable",
                         project=project,
@@ -1738,6 +1790,21 @@ def post_or_plan_findings(
                         ran=ran_count,
                         min_votes=cfg.verify_min_votes,
                     )
+        if verification_unresolved:
+            record_finding(
+                project=project,
+                iid=number,
+                sha=sha,
+                fingerprint=fp,
+                finding=finding,
+                status=FindingStatus.VERIFY_CAPPED,
+                run_id=run_id,
+                verified=None,
+                verify_votes=verify_votes_json,
+                finding_identity=identity,
+            )
+            skipped += 1
+            continue
         # Posted body honors [review].tone; the DB/fingerprint stay canonical.
         body = finding_comment_body(finding, cfg.tone)
         if cfg.dry_run:
@@ -1877,6 +1944,7 @@ def worker(job: Path) -> int:
     queued_seconds: float | None = None
     project_profile: dict[str, Any] = {}
     review_run_started = False
+    posted = planned = skipped = 0
 
     def defer_review_run() -> None:
         record(project, iid, sha, ReviewStatus.DEFERRED, str(report))
@@ -2003,6 +2071,7 @@ def worker(job: Path) -> int:
                     cwd=repo,
                     timeout=cfg.timeout_seconds,
                     env=env,
+                    review_config=cfg,
                 )
                 safe_stdout = redact_secrets(result.stdout)
                 report.write_text(safe_stdout, encoding="utf-8")
@@ -2010,7 +2079,9 @@ def worker(job: Path) -> int:
                     safe_stdout, cfg.subscription_circuit.error_patterns, terminal_only=True
                 ):
                     raise SubscriptionUnavailable()
-                tokens = parse_codex_token_usage(result.stdout)
+                tokens = parse_codex_token_usage(
+                    getattr(result, "diagnostic_stdout", result.stdout)
+                )
                 cost_usd = estimate_cost_usd(tokens, cfg.telemetry_config.price_for(model))
                 telemetry.set_span_attrs(
                     agent_span,
@@ -2032,6 +2103,7 @@ def worker(job: Path) -> int:
                             ),
                         )
                     )
+            review_result = parse_review_result(safe_stdout)
             allowed, reason = subscription_gate(cfg)
             if not allowed:
                 defer_review_run()
@@ -2046,6 +2118,8 @@ def worker(job: Path) -> int:
                 raise ReviewSuperseded(sha, current_head)
             with telemetry.span("llm_review.post", repo=project, dry_run=cfg.dry_run) as post_span:
                 pending_external_ids: list[bool] = []
+                verification_blockers: list[str] = []
+                review_results: list[ReviewResult] = []
                 posted, planned, skipped = post_or_plan_findings(
                     cfg=cfg,
                     token=token,
@@ -2057,6 +2131,8 @@ def worker(job: Path) -> int:
                     provider=provider,
                     repo=repo,
                     pending_external_ids=pending_external_ids,
+                    review_results=review_results,
+                    verification_blockers=verification_blockers,
                     allowed_lines=incremental[1] if incremental is not None else None,
                 )
                 telemetry.set_span_attrs(
@@ -2065,9 +2141,17 @@ def worker(job: Path) -> int:
                     findings_planned=planned,
                     findings_skipped=skipped,
                 )
+            review_result = review_results[-1] if review_results else review_result
+            if review_result.status != "complete" or verification_blockers:
+                detail = "; ".join(verification_blockers) or "; ".join(
+                    review_result.questions
+                    + review_result.coverage["unreviewed"]
+                    + review_result.coverage["limitations"]
+                )
+                raise ValueError(f"Review incomplete: {detail}")
             status = (
                 ReviewStatus.NO_FINDINGS
-                if (posted, planned, skipped) == (0, 0, 0)
+                if not review_result.findings and review_result.omitted_findings_count == 0
                 else ReviewStatus.SUCCESS
             )
             record(project, iid, sha, status, str(report))
@@ -2266,9 +2350,9 @@ def worker(job: Path) -> int:
                 tokens_cached=tokens.cached,
                 tokens_total=tokens.total,
                 cost_usd=cost_usd,
-                findings_posted=0,
-                findings_planned=0,
-                findings_skipped=0,
+                findings_posted=posted,
+                findings_planned=planned,
+                findings_skipped=skipped,
                 files_changed=files_changed,
                 lines_changed=lines_changed,
                 languages=languages,
@@ -2885,6 +2969,7 @@ def main() -> int:
 # here documents the intent and tells the linter the re-exports are
 # deliberate, not dead imports.
 __all__ = [
+    "REVIEWER_ENV_ALLOWLIST",
     "ReviewSuperseded",
     # re-exports (canonical home in sibling modules)
     "already_seen",
@@ -2897,6 +2982,7 @@ __all__ = [
     "connect_db",
     "count_inflight_workers",
     "emit_finding_metric",
+    "extract_findings",
     "finding_seen",
     "fork_worker",
     # config glue

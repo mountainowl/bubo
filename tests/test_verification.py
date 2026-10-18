@@ -43,11 +43,11 @@ def test_prompt_includes_finding_lens_and_json_contract() -> None:
     # The lens angle is present.
     assert "CORRECTNESS" in prompt
     # The strict JSON contract is spelled out.
-    assert '"real"' in prompt
+    assert '"verdict"' in prompt
     assert '"confidence"' in prompt
     assert '"reason"' in prompt
     # It asks the verifier to refute and to be conservative.
-    assert "REFUTE" in prompt
+    assert "attempt to refute" in prompt
     assert "NOT real" in prompt
 
 
@@ -58,14 +58,14 @@ def test_prompt_each_lens_carries_its_own_angle() -> None:
         assert marker in prompt
 
 
-def test_prompt_unknown_lens_falls_back_to_correctness() -> None:
+def test_prompt_unknown_lens_is_preserved() -> None:
     prompt = build_verification_prompt(_FINDING, lens="nonsense")
-    assert "CORRECTNESS" in prompt
+    assert "Lens: nonsense" in prompt
 
 
 def test_prompt_includes_optional_diff_excerpt() -> None:
     prompt = build_verification_prompt(_FINDING, lens="in_diff", diff_excerpt="+ added line here")
-    assert "RELEVANT DIFF:" in prompt
+    assert '<diff truncated="false">' in prompt
     assert "+ added line here" in prompt
 
 
@@ -73,7 +73,7 @@ def test_prompt_includes_optional_diff_excerpt() -> None:
 
 
 def test_parse_plain_object() -> None:
-    verdict = parse_verdict('{"real": true, "confidence": 0.9, "reason": "confirmed"}', lens="x")
+    verdict = parse_verdict('{"verdict": "confirmed", "confidence": 0.9, "reason": "confirmed"}', lens="x")
     assert verdict is not None
     assert verdict.real is True
     assert verdict.confidence == 0.9
@@ -85,12 +85,10 @@ def test_parse_plain_object() -> None:
 def test_parse_last_object_wins_amid_transcript() -> None:
     raw = (
         'thinking... {"real": false, "confidence": 0.2, "reason": "maybe"}\n'
-        'final:\n{"real": true, "confidence": 0.8, "reason": "yes"}\n'
+        'final:\n{"real": true, "reason": "evidence", "confidence": 0.8, "reason": "yes"}\n'
     )
     verdict = parse_verdict(raw)
-    assert verdict is not None
-    assert verdict.real is True
-    assert verdict.confidence == 0.8
+    assert verdict is None
 
 
 def test_parse_garbage_returns_none() -> None:
@@ -104,16 +102,16 @@ def test_parse_missing_real_key_returns_none() -> None:
 
 def test_parse_conservative_real_coercion() -> None:
     # Only literal JSON true counts as real; truthy strings/ints do not.
-    assert parse_verdict('{"real": "true", "confidence": 0.9}').real is False
-    assert parse_verdict('{"real": 1, "confidence": 0.9}').real is False
+    assert parse_verdict('{"real": "true", "confidence": 0.9}') is None
+    assert parse_verdict('{"real": 1, "confidence": 0.9}') is None
 
 
 def test_parse_missing_or_bad_confidence_is_zero() -> None:
     # "real, no confidence" cannot slip past the floor.
-    assert parse_verdict('{"real": true}').confidence == 0.0
-    assert parse_verdict('{"real": true, "confidence": "high"}').confidence == 0.0
-    assert parse_verdict('{"real": true, "confidence": 1.5}').confidence == 0.0
-    assert parse_verdict('{"real": true, "confidence": -0.1}').confidence == 0.0
+    assert parse_verdict('{"real": true, "reason": "evidence"}').confidence == 0.0
+    assert parse_verdict('{"real": true, "reason": "evidence", "confidence": "high"}').confidence == 0.0
+    assert parse_verdict('{"real": true, "reason": "evidence", "confidence": 1.5}').confidence == 0.0
+    assert parse_verdict('{"real": true, "reason": "evidence", "confidence": -0.1}').confidence == 0.0
 
 
 # --- decide: majority math ------------------------------------------------
@@ -201,6 +199,19 @@ def test_votes_summary_is_valid_json_with_per_lens_tally() -> None:
     ]
     parsed = json.loads(votes_summary(verdicts))
     assert parsed == [
-        {"lens": "correctness", "real": True, "confidence": 0.9, "ok": True, "reason": "ok"},
-        {"lens": "in_diff", "real": False, "confidence": 0.3, "ok": False, "reason": "no"},
+        {"lens": "correctness", "contract_version": 1, "real": True, "confidence": 0.9, "ok": True, "reason": "ok"},
+        {"lens": "in_diff", "contract_version": 1, "real": False, "confidence": 0.3, "ok": False, "reason": "no"},
     ]
+
+
+def test_insufficient_evidence_and_low_confidence_are_not_refutations():
+    unknown = parse_verdict('{"verdict":"insufficient_evidence","confidence":0.9,"reason":"missing contract"}')
+    assert unknown is not None
+    assert unknown.real is None
+    decision = decide([unknown, unknown, _v(False, 0.2)], min_votes=2, confidence_floor=0.6)
+    assert not decision.survives
+    assert not decision.refuted
+
+
+def test_malformed_new_verdict_cannot_fall_back_to_legacy_refutation():
+    assert parse_verdict('{"verdict":"unknown","real":false,"confidence":1,"reason":"x"}') is None

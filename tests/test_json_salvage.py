@@ -5,6 +5,8 @@ transcript and the three verdict parsers at every ``{``, slicing the rest of
 the string each time, so a large Codex transcript cost quadratic time. Each
 test here compares the real parser against the original forward scan (kept
 below as the oracle) and adds a timing guard on a multi-megabyte transcript.
+The verification and reconciliation parsers now accept only a final JSON
+answer (#245), so only the outcome classifier still salvages.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from bubo import findings, outcome_classifier, verification
+from bubo import findings, outcome_classifier
 from bubo.types import JsonObject
 
 _FUZZ = settings(max_examples=300, deadline=None)
@@ -114,16 +116,6 @@ def test_verdict_parsers_match_original_forward_scan(text: str) -> None:
     assert outcome_classifier.parse_verdict(text) == outcome_classifier.parse_verdict(
         json.dumps(classifier) if classifier is not None else ""
     )
-    real = _forward_last_object(text, "real")
-    assert verification.parse_verdict(text, lens="x") == (
-        verification.parse_verdict(json.dumps(real), lens="x") if real is not None else None
-    )
-    reconcile = _forward_last_object(text, "verdict")
-    assert verification.parse_reconciliation_result(text) == (
-        verification.parse_reconciliation_result(json.dumps(reconcile))
-        if reconcile is not None
-        else None
-    )
 
 
 def test_extract_findings_large_transcript_is_fast_and_unchanged(
@@ -147,18 +139,6 @@ def test_extract_findings_large_transcript_is_fast_and_unchanged(
             '{"verdict": "rejected", "false_positive": true}',
             lambda out: out == {"verdict": "rejected", "false_positive": True},
             id="outcome_classifier",
-        ),
-        pytest.param(
-            lambda s: verification.parse_verdict(s, lens="x"),
-            '{"real": true, "confidence": 0.9}',
-            lambda out: out is not None and out.real is True,
-            id="verification",
-        ),
-        pytest.param(
-            verification.parse_reconciliation_result,
-            '{"verdict": "fixed", "confidence": 0.8}',
-            lambda out: out is not None and out.verdict == "fixed",
-            id="reconciliation",
         ),
     ],
 )
