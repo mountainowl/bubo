@@ -803,3 +803,66 @@ def test_outcomes_for_keeps_legacy_unknown_and_derives_durable_bubo_auto() -> No
             assert row["developer_disposition"] == "unknown"
     finally:
         paths.DB = original_db
+
+
+def _sync_with_agent_reply(tmp: str, agent_stdout: str) -> tuple[object, ...]:
+    """Run real sync_outcomes + real reply classifier against a fake agent CLI.
+
+    Only the SCM provider and the agent binary are faked: the agent is a shell
+    one-liner that prints ``agent_stdout``, so ``classify_developer_reply`` and
+    ``parse_verdict`` run unmodified.
+    """
+    paths.DB = Path(tmp) / "reviewer.sqlite"
+    poller.init_db()
+    _seed_posted_finding(paths.DB)
+    fake = _SilentTelemetry()
+    cfg = ReviewConfig(
+        gitlab_url="https://gitlab.com",
+        telemetry_config=fake.config,
+        reviewer_command=["sh", "-c", 'printf "%s\\n" "$BUBO_FAKE_AGENT_OUT"', "agent"],
+    )
+    outcome = _replied_unresolved_outcome()
+    outcome["_reply_text"] = "Good catch, you're right. Fixed in the next commit."
+    provider = _FakeProvider(outcome=outcome)
+    with patch.dict("os.environ", {"BUBO_FAKE_AGENT_OUT": agent_stdout}):
+        with patch("bubo.outcome_classifier._ENV_ALLOWLIST", {"PATH", "BUBO_FAKE_AGENT_OUT"}):
+            with patch("bubo.poller.read_config", return_value=cfg):
+                with patch("bubo.poller.get_provider", return_value=provider):
+                    with patch("bubo.poller.ReviewTelemetry.from_config", return_value=fake):
+                        poller.sync_outcomes(limit=1)
+    with sqlite3.connect(paths.DB) as conn:
+        return conn.execute(
+            "select developer_disposition, disposition_evidence, disputed, false_positive,"
+            " reply_classified from finding_outcomes"
+        ).fetchone()
+
+
+def test_outcome_sync_records_classifier_agreement() -> None:
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            row = _sync_with_agent_reply(tmp, '{"verdict": "agrees", "false_positive": false}')
+        assert row == ("agrees", "reply_classifier", 0, 0, 1)
+    finally:
+        paths.DB = original_db
+
+
+def test_outcome_sync_classifier_acceptance_stays_unknown_end_to_end() -> None:
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            row = _sync_with_agent_reply(tmp, '{"verdict": "accepted", "false_positive": false}')
+        # "Will fix" is not evidence the finding is correct.
+        assert row == ("unknown", "unknown", 0, 0, 1)
+    finally:
+        paths.DB = original_db
+
+
+def test_outcome_sync_false_positive_beats_agreement() -> None:
+    original_db = paths.DB
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            row = _sync_with_agent_reply(tmp, '{"verdict": "agrees", "false_positive": true}')
+        assert row == ("false_positive", "reply_classifier", 1, 1, 1)
+    finally:
+        paths.DB = original_db
