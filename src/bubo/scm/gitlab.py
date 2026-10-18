@@ -21,8 +21,10 @@ from bubo.scm.base import (
     FindingThreadReply,
     FindingThreadResolution,
     FindingThreadState,
+    OutcomeMemo,
     build_review_contract,
     git_checkout_change,
+    memoized,
     mirror_path,
 )
 from bubo.types import JsonObject
@@ -146,8 +148,13 @@ class GitLabProvider:
         number: int,
         thread_id: str,
         bot_username: str,
+        *,
+        memo: OutcomeMemo | None = None,
     ) -> JsonObject:
-        mr = self.get_change(cfg, token, project, number)
+        mr = memoized(
+            memo, ("change", project, number), lambda: self.get_change(cfg, token, project, number)
+        )
+        # The discussion is per finding, so it is never memoized.
         discussion = gitlab.get_mr_discussion(cfg, token, project, number, thread_id)
         return gitlab.classify_discussion_outcome(
             discussion, bot_username=bot_username, mr_state=str(mr.get("state") or "")

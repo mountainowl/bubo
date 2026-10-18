@@ -195,9 +195,12 @@ they **rejected** it ("working as intended", "not a blocker"). The `resolved`
 flag alone can't tell them apart, which would overcount the reviewer's
 precision. So when a finding's discussion has a developer reply and no explicit
 dispute marker, outcome sync asks an LLM to read the bot's finding plus the
-reply and decide whether it was **accepted** or **rejected**. A rejection sets
-`disputed` (and `false_positive` when the reply says the finding is factually
-wrong).
+reply and decide whether the developer **agrees**, merely **accepted** it,
+**rejected** it, or is unclear. A rejection sets `disputed` (and
+`false_positive` when the reply says the finding is factually wrong). Explicit
+agreement ("good catch", "you're right", "fixed") records
+`developer_disposition = agrees`; a plain "will look at it" stays `unknown`,
+because it doesn't confirm the finding was correct.
 
 - **Model-agnostic.** Classification runs the same agent you set in
   `[agents].reviewer_command` (default `codex exec --profile bubo`; a custom

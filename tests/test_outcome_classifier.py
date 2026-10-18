@@ -114,3 +114,16 @@ def test_classify_developer_reply_signals_error_on_nonzero_exit() -> None:
     with patch("bubo.outcome_classifier.run_bounded", return_value=_completed("", returncode=1)):
         out = oc.classify_developer_reply(cfg, "finding", "some reply")
     assert out["verdict"] == "error"
+
+
+def test_parse_verdict_keeps_explicit_agreement() -> None:
+    assert oc.parse_verdict('{"verdict": "agrees", "false_positive": false}') == {
+        "verdict": "agrees",
+        "false_positive": False,
+    }
+
+
+def test_build_prompt_separates_agreement_from_acceptance() -> None:
+    prompt = oc.build_prompt("finding", "reply")
+    assert '"agrees"' in prompt
+    assert '"accepted"' in prompt

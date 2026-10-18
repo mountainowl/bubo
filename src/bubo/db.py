@@ -272,6 +272,20 @@ def init_db() -> None:
             )
             """
         )
+        # Secondary indexes. Without them the report readers full-scan, and
+        # audit_rows' correlated finding_outcomes subqueries scan the whole
+        # table once per review run, so report time grows quadratically.
+        for statement in (
+            "create index if not exists ix_fo_change on finding_outcomes(project, iid, sha)",
+            "create index if not exists ix_fo_checked on finding_outcomes(last_checked_at)",
+            "create index if not exists ix_rm_updated on reviewed_mrs(updated_at)",
+            "create index if not exists ix_rm_status on reviewed_mrs(status)",
+            "create index if not exists ix_rr_started on review_runs(started_at)",
+            "create index if not exists ix_rf_updated on review_findings(updated_at)",
+            "create index if not exists ix_rf_status on review_findings(status)",
+            "create index if not exists ix_gd_created on governance_decisions(created_at)",
+        ):
+            db.execute(statement)
         # Debounce state for [review].settle_seconds: the head the poller last
         # saw per change, and when it first saw it (#254).
         db.execute(
@@ -1236,7 +1250,9 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
     """Return up to ``limit`` posted findings ordered by sync staleness.
 
     Never-synced findings come first; then oldest ``last_checked_at``.
-    The poller uses this list to drive ``--sync-outcomes``.
+    The poller uses this list to drive ``--sync-outcomes``. A finding whose
+    comment was observed deleted is terminal (a deleted comment cannot come
+    back) and is never selected again, so it costs no further API calls.
 
     Each row carries ``prior_outcome`` — the currently-stored outcome flags
     (all ``False`` if never synced) — so the caller can detect the
@@ -1256,6 +1272,7 @@ def posted_findings_for_outcome_sync(limit: int = 200) -> list[JsonObject]:
               on fo.finding_id = rf.project || ':' || rf.iid || ':' || rf.sha || ':' ||
                 rf.fingerprint
             where rf.status=? and rf.discussion_id is not null and rf.discussion_id != ''
+              and coalesce(fo.deleted,0)=0
             order by
               case when fo.last_checked_at is null then 0 else 1 end,
               fo.last_checked_at asc,
