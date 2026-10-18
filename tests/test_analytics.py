@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -115,15 +116,20 @@ def test_install_id_is_stable_and_persisted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(analytics.paths, "DB", tmp_path / "state" / "reviewer.sqlite")
+    monkeypatch.setattr(analytics.uuid, "getnode", lambda: 0x112233445566)
     first = analytics.install_id()
     assert first
-    assert len(first) == 32  # uuid4 hex
+    assert len(first) == 64
+    assert set(first) <= set("0123456789abcdef")
+    seed = (tmp_path / "state" / "install_id").read_text().strip()
+    assert first == hashlib.sha256(f"{seed}:{0x112233445566}".encode()).hexdigest()
+    assert analytics.uuid.UUID(seed).version == 4
     # cached within the process
     assert analytics.install_id() == first
     # persisted to disk and reused by a fresh process (cache cleared)
     monkeypatch.setattr(analytics, "_install_id", None)
     assert analytics.install_id() == first
-    assert (tmp_path / "state" / "install_id").read_text().strip() == first
+    assert (tmp_path / "state" / "install_id").read_text().strip() == seed
 
 
 def test_install_id_disables_events_when_unwritable(monkeypatch, tmp_path) -> None:
@@ -325,7 +331,11 @@ def test_flush_failure_is_nonfatal(monkeypatch: pytest.MonkeyPatch) -> None:
         raise OSError("offline")
 
     monkeypatch.setattr(analytics, "urlopen", _fail)
-    analytics.record_session_start(AnalyticsConfig(), scm_provider="gitlab", projects_count=1)
+    analytics.record_session_start(
+        AnalyticsConfig(endpoint="https://example.test/batch/", api_key="phc_test"),
+        scm_provider="gitlab",
+        projects_count=1,
+    )
     analytics.flush()
     assert analytics._pending_events == []
 
@@ -336,6 +346,10 @@ def test_product_analytics_transport_uses_no_stdlib_logging(
     root = logging.getLogger()
     before = list(root.handlers)
     monkeypatch.setattr(analytics, "urlopen", lambda request, timeout: _FakeResponse())
-    analytics.record_session_start(AnalyticsConfig(), scm_provider="gitlab", projects_count=1)
+    analytics.record_session_start(
+        AnalyticsConfig(endpoint="https://example.test/batch/", api_key="phc_test"),
+        scm_provider="gitlab",
+        projects_count=1,
+    )
     analytics.flush()
     assert root.handlers == before

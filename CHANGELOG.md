@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.28.4](https://github.com/mountainowl/bubo/compare/v0.28.3...v0.28.4) (2026-10-16)
+
+
+### Bug Fixes
+
+* **tests:** isolate product analytics from production PostHog ([#247](https://github.com/mountainowl/bubo/issues/247)) ([a171b8b](https://github.com/mountainowl/bubo/commit/a171b8bd60069b0963ff031dd7c3ba5761efdd35))
+
+
+### Documentation
+
+* add badges and remove GIF framing ([#243](https://github.com/mountainowl/bubo/issues/243)) ([4820d20](https://github.com/mountainowl/bubo/commit/4820d20a26dafa2a8b83fb11037ce1979970c1c8))
+* add README feature animation ([#241](https://github.com/mountainowl/bubo/issues/241)) ([e85534d](https://github.com/mountainowl/bubo/commit/e85534dbbd2a39b6729c78022000696f8bfec010))
+* reduce README GIF padding ([#244](https://github.com/mountainowl/bubo/issues/244)) ([5cd4f23](https://github.com/mountainowl/bubo/commit/5cd4f2392ca17510cd2c4fbfca103fa9fda27185))
+
+## [0.28.3](https://github.com/mountainowl/bubo/compare/v0.28.2...v0.28.3) (2026-10-06)
+
+
+### Bug Fixes
+
+* **analytics:** bind install identity to machine ([#228](https://github.com/mountainowl/bubo/issues/228)) ([028c7ba](https://github.com/mountainowl/bubo/commit/028c7ba6a50aed97b1e0e7e079a6d5ee0b81ca94))
+
+## [0.28.2](https://github.com/mountainowl/bubo/compare/v0.28.1...v0.28.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **ci:** gate releases on current lockfile ([#225](https://github.com/mountainowl/bubo/issues/225)) ([0ee9cf0](https://github.com/mountainowl/bubo/commit/0ee9cf01860f422540959e00215425e73e5994fa))
+
+## [0.28.1](https://github.com/mountainowl/bubo/compare/v0.28.0...v0.28.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **deps:** refresh lockfile for 0.28.0 ([#223](https://github.com/mountainowl/bubo/issues/223)) ([cbf3a56](https://github.com/mountainowl/bubo/commit/cbf3a56377c5949b9228d53f818afb284339a013))
+
+## [0.28.0](https://github.com/mountainowl/bubo/compare/v0.27.0...v0.28.0) (2026-10-05)
+
+
+### Features
+
+* restore GitHub Marketplace action ([#219](https://github.com/mountainowl/bubo/issues/219)) ([3b72eb0](https://github.com/mountainowl/bubo/commit/3b72eb0f50d559fb2b00a19e0302ed637d3e55ea))
+
 ## [0.27.0](https://github.com/mountainowl/bubo/compare/v0.26.0...v0.27.0) (2026-10-01)
 
 

@@ -30,6 +30,7 @@ Design — privacy is the whole point, so it is enforced structurally:
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import os
 import platform
@@ -173,6 +174,7 @@ _pending_events: list[tuple[str, str, dict[str, Any]]] = []
 _pending_lock = threading.Lock()
 _install_id: str | None = None
 _install_path: Path | None = None
+_install_node: int | None = None
 _identity_lock = threading.Lock()
 
 # Only these labels may leave the machine; paths are used locally and discarded.
@@ -232,16 +234,20 @@ def analytics_enabled(cfg: AnalyticsConfig) -> bool:
 def install_id() -> str | None:
     """Return this install's anonymous id, creating it on first use.
 
-    A random UUID persisted next to the state DB. Not tied to user, host, or
-    repository. Concurrent workers share a lock and atomic publication. Failure
-    returns None: dropping analytics is preferable to inventing extra installs.
+    A random UUID seed is persisted next to the state DB. The emitted id is a
+    SHA-256 digest of that seed and this machine's node id; the node id itself
+    is never sent. Concurrent workers share a lock and atomic publication.
+    Failure returns None: dropping analytics is preferable to inventing extra
+    installs.
     """
-    global _install_id, _install_path
+    global _install_id, _install_node, _install_path
     path = paths.DB.parent / "install_id"
+    node = uuid.getnode()
     with _identity_lock:
         if (
             _install_id is not None
             and _install_path == path
+            and _install_node == node
             and not guard_path(path.parent).exists()
         ):
             return _install_id
@@ -251,7 +257,12 @@ def install_id() -> str | None:
                 # Never stall a review behind another process's telemetry.
                 lock_file(lock.fileno(), exclusive=True)
                 if guard_path(path.parent).exists():
-                    return guarded_identity(path.parent)
+                    guarded = guarded_identity(path.parent)
+                    return (
+                        hashlib.sha256(f"{guarded}:{node}".encode()).hexdigest()
+                        if guarded
+                        else None
+                    )
                 try:
                     existing = path.read_text(encoding="utf-8").strip()
                     parsed = uuid.UUID(existing)
@@ -272,8 +283,9 @@ def install_id() -> str | None:
                     finally:
                         if temporary is not None:
                             Path(temporary).unlink(missing_ok=True)
-                _install_id, _install_path = existing, path
-                return existing
+                derived = hashlib.sha256(f"{existing}:{node}".encode()).hexdigest()
+                _install_id, _install_path, _install_node = derived, path, node
+                return derived
         except OSError, ValueError, UnicodeError, TypeError, AttributeError:
             return None
 

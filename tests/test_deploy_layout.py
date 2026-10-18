@@ -46,9 +46,12 @@ def test_legacy_scheduler_assets_are_not_shipped() -> None:
         assert not (templates / name).exists()
 
 
-def test_github_action_surface_is_not_shipped() -> None:
-    assert not (ROOT / "action.yml").exists()
-    assert not (ROOT / "docs" / "pages" / "github-action.mdx").exists()
+def test_github_action_surface_uses_synchronous_ci_path() -> None:
+    action = (ROOT / "action.yml").read_text()
+
+    assert "bubo-poller run-once" in action
+    assert "bubo-poller service start" not in action
+    assert (ROOT / "docs" / "pages" / "github-action.mdx").is_file()
 
 
 def test_codex_config_carries_bubo_profile() -> None:

@@ -15,6 +15,9 @@ on:
 permissions:
   contents: read
 
+env:
+  BUBO_ANALYTICS: "0"
+
 jobs:
   integration:
     name: Live GitLab + GitHub read-only tests

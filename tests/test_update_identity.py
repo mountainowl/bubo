@@ -67,7 +67,8 @@ def test_absent_before_upgrade_remains_absent_until_guard_released(state):
 
 
 def test_guard_is_idempotent_and_cannot_replace_snapshot(state):
-    identity = analytics.install_id()
+    analytics.install_id()
+    identity = (state / "install_id").read_text().strip()
     assert protect_identity(state) == identity
     original = guard_path(state).read_bytes()
     assert protect_identity(state) == identity

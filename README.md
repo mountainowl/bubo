@@ -55,13 +55,16 @@ Everything lives on the docs site — this README is just the front door.
 
 - **GitLab & GitHub posting via polling** — production path, at outcome-metric
   parity. Set `[scm].provider = "github"` (or `BUBO_PROVIDER=github`).
+- **GitHub Marketplace Action** — experimental synchronous review for the PR
+  that triggered a GitHub Actions workflow; start in dry-run mode.
 - **MCP server (`bubo-mcp`)** — read-only metrics + triggered reviews; stdio or HTTP.
 - **Codex or Claude** — Bubo runs the review through a wrapper around your agent
   CLI; Codex ships pre-wired.
-- **Webhook-driven triggering** — not yet; polling is the only path.
+- **Webhook service** — not yet; long-running deployments use polling, while
+  the GitHub Action can run one review from a `pull_request` workflow.
 
-Review execution sits outside CI/CD by design — run it as a poller beside your
-existing pipelines.
+For continuous operation, run the service beside your pipelines. Use the
+Marketplace Action only when a CI-scoped review is the intended deployment.
 
 ## Security
 
