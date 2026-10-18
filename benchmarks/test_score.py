@@ -24,8 +24,8 @@ def test_require_category_only_binds_when_both_present() -> None:
 
 
 def test_score_case_tp_fp_fn_and_rates() -> None:
-    truth = [Issue("a.py", 10), Issue("a.py", 50), Issue("b.py", 3)]
-    findings = [Issue("a.py", 10), Issue("a.py", 99)]  # 1 hit, 1 false positive
+    truth = [Issue("a.py", 10, summary="null input crashes"), Issue("a.py", 50), Issue("b.py", 3)]
+    findings = [Issue("a.py", 10, summary="null input crashes"), Issue("a.py", 99)]  # 1 hit, 1 false positive
     s = score_case("c1", "bubo", findings, truth, line_tolerance=2)
     assert (s.tp, s.fp, s.fn) == (1, 1, 2)
     assert s.precision == 0.5  # 1 / (1+1)
@@ -35,8 +35,8 @@ def test_score_case_tp_fp_fn_and_rates() -> None:
 
 def test_greedy_matching_no_double_count() -> None:
     # two findings on the same defect must not score as two true positives
-    truth = [Issue("a.py", 10)]
-    findings = [Issue("a.py", 10), Issue("a.py", 11)]
+    truth = [Issue("a.py", 10, summary="null input crashes")]
+    findings = [Issue("a.py", 10, summary="null input crashes"), Issue("a.py", 11, summary="null input crashes")]
     s = score_case("c", "bubo", findings, truth, line_tolerance=2)
     assert (s.tp, s.fp, s.fn) == (1, 1, 0)
 
@@ -47,14 +47,14 @@ def test_clean_case_no_findings_is_perfect_no_division_error() -> None:
 
 
 def test_clean_case_with_a_finding_is_a_false_positive() -> None:
-    s = score_case("clean", "bubo", [Issue("a.py", 1)], [], line_tolerance=2)
+    s = score_case("clean", "bubo", [Issue("a.py", 1, summary="null input crashes")], [], line_tolerance=2)
     assert (s.tp, s.fp, s.fn, s.fp_rate) == (0, 1, 0, 1.0)
 
 
 def test_aggregate_micro_averages_and_sums_efficiency() -> None:
-    a = score_case("c1", "bubo", [Issue("a.py", 1)], [Issue("a.py", 1)],
+    a = score_case("c1", "bubo", [Issue("a.py", 1, summary="null input crashes")], [Issue("a.py", 1, summary="null input crashes")],
                    efficiency=Efficiency(tokens_total=1000, seconds=10.0, cost_usd=0.2))
-    b = score_case("c2", "bubo", [Issue("b.py", 1)], [Issue("b.py", 1), Issue("b.py", 9)],
+    b = score_case("c2", "bubo", [Issue("b.py", 1, summary="wrong total")], [Issue("b.py", 1, summary="wrong total"), Issue("b.py", 9)],
                    efficiency=Efficiency(tokens_total=2000, seconds=20.0, cost_usd=0.4))
     agg = aggregate([a, b])
     assert agg["tp"] == 2 and agg["fp"] == 0 and agg["fn"] == 1
@@ -63,3 +63,14 @@ def test_aggregate_micro_averages_and_sums_efficiency() -> None:
     assert agg["tokens_total"] == 3000
     assert agg["cost_usd"] == 0.6
     assert agg["tokens_per_true_positive"] == 1500.0
+
+
+def test_wrong_diagnosis_at_right_line_is_not_a_true_positive():
+    result = score_case("wrong", "reviewer", [Issue("a.py", 10, summary="bad formatting")],
+                        [Issue("a.py", 10, summary="deletes customer data")])
+    assert (result.tp, result.fp, result.fn) == (0, 1, 1)
+
+
+def test_missing_diagnoses_do_not_receive_semantic_credit():
+    result = score_case("missing", "reviewer", [Issue("a.py", 10)], [Issue("a.py", 10)])
+    assert result.tp == 0

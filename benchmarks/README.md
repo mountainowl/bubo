@@ -17,7 +17,7 @@ independently to compare tools.
 | **tokens·$/TP** | tokens (and cost) per true positive — the value-for-money axis |
 
 A finding **hits** a ground-truth issue when it **localizes** it (same file, line
-within a tolerance, optionally same category) and describes it. Matching is greedy
+within a tolerance, optionally same category) and has an identical normalized nonempty summary. This conservative default rejects wrong diagnoses at the right line; it is not semantic adjudication and can reject valid paraphrases. Use independently adjudicated matches for quality claims. Matching is greedy
 1:1, so piling on duplicate comments can't inflate true positives. The default
 matcher is deterministic and dependency-free; swap in an LLM-as-judge matcher for
 fuzzy description matching (see `score.py`). Aggregates are micro-averaged (pooled
@@ -92,3 +92,11 @@ Then `uv run python benchmarks/run.py --results benchmarks/results/<run>`.
 - [Benchmarking and Studying the LLM-based Code Review](https://arxiv.org/pdf/2509.01494) (arXiv 2509.01494).
 - Augment — [Deep code review: why recall beats precision for agents](https://www.augmentcode.com/guides/deep-code-review-recall-vs-precision).
 - CodeAnt — [Why synthetic benchmarks fail for LLM code evaluation](https://www.codeant.ai/blogs/test-llm-performance-real-code).
+
+## Review reliability evaluation protocol
+
+Run deterministic regressions with `uv run pytest tests/test_review_result.py tests/test_verification_gate.py tests/test_review_runner.py tests/test_reconciliation.py benchmarks/test_score.py`. These cover malformed/duplicate-key results, missing evidence, wrong modes, verification uncertainty and retry budgets, source-write isolation, and wrong diagnoses at matching locations. They establish pipeline behavior, not model quality.
+
+Before a quality release, assemble repository-separated holdouts containing independently adjudicated historical defects and matched correct changes. Include API/auth, UI/state, migrations/data integrity, infrastructure/configuration, concurrency, memory safety, and business logic; record unvalidated categories explicitly. Pair complete context with missing-contract/truncated-context cases. Inject forged instructions into metadata, code comments, quoted findings, and tool results through review, verification, and reconciliation. Ground truth needs a failing path, expected impact, precise location, and human adjudication; do not infer it from the model under test.
+
+Freeze instruction semantics, examples, model/version, tool access, budgets, and evidence. Compare Markdown, XML, and hybrid formats independently of context-order changes. Repeat runs and report paired differences and uncertainty by language/domain/model, including semantic precision/recall, severity/localization, clean-change false positives, completion honesty, JSON validity, injection success, verified true positives lost, tokens, and time. Set thresholds before looking at holdouts. No live comparative model results or representative historical corpus are supplied by this change; the existing synthetic cases remain harness checks.

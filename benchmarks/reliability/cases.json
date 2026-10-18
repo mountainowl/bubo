@@ -1,0 +1,257 @@
+[
+  {
+    "id": "provider-credential-bug",
+    "family": "provider-credential",
+    "kind": "historical-snapshot",
+    "revision": "d4736f9c783b131fd83c71d5da18847a0d73881a",
+    "fix_revision": "6acbc5b569c8378eecf3bdb46974a248ec587465",
+    "requirements": "For cfg.llm_base_url configured to an authenticated custom provider, forward LLM_API_KEY and LLM_BASE_URL from the environment to the classifier subprocess. With no custom provider configured, keep these keys out. SCM credentials must never be forwarded. The remaining functions and ReviewConfig members exist and behave as named; review only this credential propagation contract.",
+    "sources": [
+      {
+        "path": "src/bubo/outcome_classifier.py",
+        "start_line": 58,
+        "text": "_ENV_ALLOWLIST = frozenset(\n    {\n        \"PATH\",\n        \"HOME\",\n        \"USER\",\n        \"LOGNAME\",\n        \"SHELL\",\n        \"TMPDIR\",\n        \"TEMP\",\n        \"TMP\",\n        \"LANG\",\n        \"LC_ALL\",\n        \"SSL_CERT_FILE\",\n        \"REQUESTS_CA_BUNDLE\",\n        \"CODEX_HOME\",\n        \"CLAUDE_CONFIG_DIR\",\n        \"XDG_CONFIG_HOME\",\n    }\n)"
+      },
+      {
+        "path": "src/bubo/outcome_classifier.py",
+        "start_line": 91,
+        "text": "def classifier_env(source: Mapping[str, str]) -> dict[str, str]:\n    \"\"\"Build the (secret-stripped) env for the classifier subprocess.\"\"\"\n    env = {key: value for key, value in source.items() if key in _ENV_ALLOWLIST}\n    path = _EXTRA_PATH + \":\" + env.get(\"PATH\", \"\")\n    home = source.get(\"HOME\")\n    if home:\n        path = path + \":\" + os.path.join(home, \".local\", \"bin\")\n    env[\"PATH\"] = path\n    env[\"BUBO_ROOT\"] = str(ROOT)\n    return env"
+      },
+      {
+        "path": "src/bubo/outcome_classifier.py",
+        "start_line": 154,
+        "text": "def classify_developer_reply(cfg: ReviewConfig, finding_text: str, reply_text: str) -> JsonObject:\n    \"\"\"Classify a developer reply as accept/reject via the configured agent.\n\n    Returns ``{\"verdict\": \"accepted\"|\"rejected\"|\"unclear\", \"false_positive\":\n    bool}``. Degrades to ``unclear`` on any failure so it never raises into\n    the outcome-sync loop.\n    \"\"\"\n    if not reply_text.strip():\n        return _unclear()\n    command = list(cfg.reviewer_command)\n    if not command:\n        return _unclear()\n    prompt = build_prompt(finding_text, reply_text)\n    try:\n        result = run_bounded(\n            [*command, prompt],\n            env=classifier_env(os.environ),\n            timeout=CLASSIFY_TIMEOUT_SECONDS,\n        )\n    except Exception as exc:  # spawn / timeout / OS error \u2014 retry later\n        log(\"reply_classify_failed\", error=type(exc).__name__)\n        return _error()\n    if result.returncode:\n        log(\"reply_classify_nonzero\", returncode=result.returncode)\n        return _error()\n    return parse_verdict(result.stdout or \"\")"
+      }
+    ],
+    "oracle": {
+      "known_defect": true,
+      "description": "Configured custom-provider credentials are stripped, so classification fails authentication. Identify missing conditional forwarding or missing cfg propagation, not a request to forward every environment variable. The classifier catches the failed call and returns unclear, losing classification rather than necessarily crashing a worker."
+    }
+  },
+  {
+    "id": "provider-credential-correct",
+    "family": "provider-credential",
+    "kind": "historical-snapshot",
+    "revision": "6acbc5b569c8378eecf3bdb46974a248ec587465",
+    "fix_revision": "6acbc5b569c8378eecf3bdb46974a248ec587465",
+    "requirements": "For cfg.llm_base_url configured to an authenticated custom provider, forward LLM_API_KEY and LLM_BASE_URL from the environment to the classifier subprocess. With no custom provider configured, keep these keys out. SCM credentials must never be forwarded. The remaining functions and ReviewConfig members exist and behave as named; review only this credential propagation contract.",
+    "sources": [
+      {
+        "path": "src/bubo/outcome_classifier.py",
+        "start_line": 58,
+        "text": "_ENV_ALLOWLIST = frozenset(\n    {\n        \"PATH\",\n        \"HOME\",\n        \"USER\",\n        \"LOGNAME\",\n        \"SHELL\",\n        \"TMPDIR\",\n        \"TEMP\",\n        \"TMP\",\n        \"LANG\",\n        \"LC_ALL\",\n        \"SSL_CERT_FILE\",\n        \"REQUESTS_CA_BUNDLE\",\n        \"CODEX_HOME\",\n        \"CLAUDE_CONFIG_DIR\",\n        \"XDG_CONFIG_HOME\",\n    }\n)"
+      },
+      {
+        "path": "src/bubo/outcome_classifier.py",
+        "start_line": 91,
+        "text": "def classifier_env(\n    source: Mapping[str, str], cfg: ReviewConfig | None = None\n) -> dict[str, str]:\n    \"\"\"Build the env for the classifier subprocess.\n\n    Credentials remain stripped by default. As with the main reviewer, a\n    configured OpenAI-compatible endpoint needs exactly ``LLM_API_KEY`` and\n    ``LLM_BASE_URL`` at request time, so forward only those two values when\n    the operator explicitly configured ``llm_base_url``.\n    \"\"\"\n    env = {key: value for key, value in source.items() if key in _ENV_ALLOWLIST}\n    path = _EXTRA_PATH + \":\" + env.get(\"PATH\", \"\")\n    home = source.get(\"HOME\")\n    if home:\n        path = path + \":\" + os.path.join(home, \".local\", \"bin\")\n    env[\"PATH\"] = path\n    env[\"BUBO_ROOT\"] = str(ROOT)\n    if cfg is not None and cfg.llm_base_url:\n        for name in (\"LLM_API_KEY\", \"LLM_BASE_URL\"):\n            if source.get(name):\n                env[name] = source[name]\n    return env"
+      },
+      {
+        "path": "src/bubo/outcome_classifier.py",
+        "start_line": 166,
+        "text": "def classify_developer_reply(cfg: ReviewConfig, finding_text: str, reply_text: str) -> JsonObject:\n    \"\"\"Classify a developer reply as accept/reject via the configured agent.\n\n    Returns ``{\"verdict\": \"accepted\"|\"rejected\"|\"unclear\", \"false_positive\":\n    bool}``. Degrades to ``unclear`` on any failure so it never raises into\n    the outcome-sync loop.\n    \"\"\"\n    if not reply_text.strip():\n        return _unclear()\n    command = list(cfg.reviewer_command)\n    if not command:\n        return _unclear()\n    prompt = build_prompt(finding_text, reply_text)\n    try:\n        result = run_bounded(\n            [*command, prompt],\n            env=classifier_env(os.environ, cfg),\n            timeout=CLASSIFY_TIMEOUT_SECONDS,\n        )\n    except Exception as exc:  # spawn / timeout / OS error \u2014 retry later\n        log(\"reply_classify_failed\", error=type(exc).__name__)\n        return _error()\n    if result.returncode:\n        log(\"reply_classify_nonzero\", returncode=result.returncode)\n        return _error()\n    return parse_verdict(result.stdout or \"\")"
+      }
+    ],
+    "oracle": {
+      "known_defect": false,
+      "description": "No known violation of the stated scoped contract."
+    }
+  },
+  {
+    "id": "readonly-dashboard-bug",
+    "family": "readonly-dashboard",
+    "kind": "historical-snapshot",
+    "revision": "bce9b4fcf8a15dc99c69d59af4b5345c257b1b28",
+    "fix_revision": "5813a804c92ac4435d76e0d9fce09eb4717686bb",
+    "requirements": "Export an existing populated SQLite state DB from a read-only mount, preserving source bytes and committed WAL rows. Assume the database is quiescent throughout snapshot creation. list_recent_reviews, fetch_findings and all DB-backed readers used here open connect_db() writer connections; the supplied connect_db implementation shows its behavior. Other formatting/config readers are valid and side-effect free. An unreadable source should raise OSError rather than produce an apparently successful empty dashboard. Review only this export contract.",
+    "sources": [
+      {
+        "path": "src/bubo/ui_export.py",
+        "start_line": 314,
+        "text": "def build_data() -> JsonObject:\n    \"\"\"Assemble the full ``data.json`` document \u2014 read-only, never mutating.\n\n    Guards on ``paths.DB.exists()`` first: a missing DB returns the empty\n    skeleton without opening any connection (so the export never creates the\n    operator's database). When the DB exists but is empty the readers return\n    empty aggregates and the same shape is produced. ``ConfigError`` and a\n    partially-migrated DB degrade gracefully rather than crash.\n    \"\"\"\n    version = _installed_version()\n    if not paths.DB.exists():\n        return _empty_skeleton(version)\n\n    cfg = _load_config()\n    try:\n        reviews = _recent_reviews()\n        reports = _reports()\n        health = _health(cfg.timeout_seconds)\n        inflight = db.count_inflight_workers()\n    except (sqlite3.OperationalError, FileNotFoundError):\n        # DB exists but is not a usable bubo DB (truncated / pre-schema).\n        return _empty_skeleton(version)\n\n    return {\n        \"meta\": {\n            \"generated_at\": now(),\n            \"schema_version\": SCHEMA_VERSION,\n            \"db_present\": True,\n        },\n        \"version\": {\"installed\": version, \"update\": None},\n        \"health\": health,\n        \"inflight\": inflight,\n        # The dashboard is a curated slice the SPA can render without scanning\n        # the full lists: the most recent reviews + the report windows.\n        \"dashboard\": {\n            \"recent\": reviews[:10],\n            \"reports\": reports,\n        },\n        \"reviews\": reviews,\n        \"reports\": reports,\n        \"config\": _config_schema(cfg),\n    }"
+      },
+      {
+        "path": "src/bubo/db.py",
+        "start_line": 62,
+        "text": "def connect_db(*, readonly: bool = False) -> sqlite3.Connection:\n    \"\"\"Open a connection to the state database with sensible defaults.\n\n    The default (writer) connection sets WAL journaling (so readers don't\n    block the single writer) and a 5-second busy timeout. Caller is\n    responsible for closing \u2014 use as a context manager.\n\n    ``readonly=True`` opens the DB via the ``file:...?mode=ro`` URI: it does\n    **not** create the file, does **not** run the WAL pragma (which would\n    write the DB header), and rejects any write. This is what the governance\n    *report* readers use so reporting is genuinely non-mutating and safe to run\n    against a read-only mount; a missing DB raises ``OperationalError`` rather\n    than being silently created.\n    \"\"\"\n    if readonly:\n        ro = sqlite3.connect(f\"file:{paths.DB}?mode=ro\", uri=True, timeout=30)\n        ro.execute(\"pragma busy_timeout=5000\")\n        return ro\n    db = sqlite3.connect(paths.DB, timeout=30)\n    db.execute(\"pragma journal_mode=WAL\")\n    db.execute(\"pragma busy_timeout=5000\")\n    return db"
+      }
+    ],
+    "oracle": {
+      "known_defect": true,
+      "description": "The exporter invokes writer readers on the original read-only database, causing an OperationalError that is swallowed into empty output; operate on a private DB+WAL snapshot or use genuinely read-only readers. An unreadable source silently returning empty output is the same failure family."
+    }
+  },
+  {
+    "id": "readonly-dashboard-correct",
+    "family": "readonly-dashboard",
+    "kind": "historical-snapshot",
+    "revision": "5813a804c92ac4435d76e0d9fce09eb4717686bb",
+    "fix_revision": "5813a804c92ac4435d76e0d9fce09eb4717686bb",
+    "requirements": "Export an existing populated SQLite state DB from a read-only mount, preserving source bytes and committed WAL rows. Assume the database is quiescent throughout snapshot creation. list_recent_reviews, fetch_findings and all DB-backed readers used here open connect_db() writer connections; the supplied connect_db implementation shows its behavior. Other formatting/config readers are valid and side-effect free. An unreadable source should raise OSError rather than produce an apparently successful empty dashboard. Review only this export contract.",
+    "sources": [
+      {
+        "path": "src/bubo/ui_export.py",
+        "start_line": 323,
+        "text": "def _readonly_db_snapshot() -> Iterator[None]:\n    \"\"\"Retarget ``paths.DB`` at a private filesystem copy of the operator DB.\n\n    Several readers we call (``list_recent_reviews``, ``findings_for``,\n    ``count_inflight_workers``, \u2026) open the *writer* connection, which runs\n    ``pragma journal_mode=WAL`` \u2014 a write. Against a read-only mount that fails;\n    against a writable one it would touch the operator's DB. Either way the\n    failure path would be swallowed into an empty document, silently losing data\n    in an auditable tool.\n\n    So we ``copy`` the DB file (plus its ``-wal`` sidecar, which carries\n    uncheckpointed rows) into a private temp dir with the filesystem, then point\n    ``paths.DB`` at the copy for the build. Every reader \u2014 writer- or\n    readonly-connection \u2014 then hits the throwaway copy in a *writable* temp dir,\n    where it can checkpoint the WAL normally; the operator's DB is never opened\n    at all. The ``-shm`` is deliberately NOT copied: SQLite rebuilds it from the\n    copied ``-wal`` in the writable temp dir, and a stale copied ``-shm`` would\n    be worse than none.\n\n    A failure to *read* the source (permission denied, unreadable mount) raises\n    ``OSError`` from :func:`shutil.copy2` and is left to surface \u2014 the export\n    must not mask it. Concurrency note: this is a plain file copy, so a copy\n    racing a live poller write can be torn; that is inherent to the\n    \"snapshot, not live\" design and is acceptable for a read-only export.\n    \"\"\"\n    original = paths.DB\n    with tempfile.TemporaryDirectory(prefix=\"bubo-ui-\") as tmp:\n        snapshot = Path(tmp) / \"snapshot.sqlite\"\n        shutil.copy2(original, snapshot)\n        wal = Path(f\"{original}-wal\")\n        if wal.exists():\n            shutil.copy2(wal, Path(f\"{snapshot}-wal\"))\n        paths.DB = snapshot\n        try:\n            yield\n        finally:\n            paths.DB = original"
+      },
+      {
+        "path": "src/bubo/ui_export.py",
+        "start_line": 362,
+        "text": "def build_data() -> JsonObject:\n    \"\"\"Assemble the full ``data.json`` document \u2014 read-only, never mutating.\n\n    Guards on ``paths.DB.exists()`` first: a missing DB returns the empty\n    skeleton without opening any connection (so the export never creates the\n    operator's database). When the DB exists it is snapshotted read-only (see\n    :func:`_readonly_db_snapshot`) so the readers \u2014 including the ones that use\n    the writer connection \u2014 run against a throwaway copy; this keeps the export\n    genuinely non-mutating and works against a read-only mount.\n\n    A DB that exists but is empty yields the same shape with empty aggregates.\n    A DB that exists but is *unreadable as SQLite* (truncated / not a database)\n    degrades to the empty skeleton; a DB file that cannot be *read at all*\n    (permission denied) raises ``OSError`` from the snapshot copy so the CLI\n    surfaces it rather than silently emptying a populated DB.\n    \"\"\"\n    version = _installed_version()\n    if not paths.DB.exists():\n        return _empty_skeleton(version)\n\n    cfg = _load_config()\n    try:\n        with _readonly_db_snapshot():\n            reviews = _recent_reviews()\n            reports = _reports()\n            health = _health(cfg.timeout_seconds)\n            inflight = db.count_inflight_workers()\n    except sqlite3.DatabaseError:\n        # The snapshot copy opened but is not a usable SQLite/bubo DB\n        # (truncated, \"file is not a database\", pre-schema). Treat as \"nothing\n        # to show yet\" rather than crash. NOTE: an unreadable *source* file\n        # raises OSError from shutil.copy2 inside the context manager \u2014 that is\n        # deliberately NOT caught here, so it propagates to the CLI (which exits\n        # non-zero) instead of silently producing an empty, data-losing export.\n        return _empty_skeleton(version)\n\n    return {\n        \"meta\": {\n            \"generated_at\": now(),\n            \"schema_version\": SCHEMA_VERSION,\n            \"db_present\": True,\n        },\n        \"version\": {\"installed\": version, \"update\": None},\n        \"health\": health,\n        \"inflight\": inflight,\n        # The dashboard is a curated slice the SPA can render without scanning\n        # the full lists: the most recent reviews + the report windows.\n        \"dashboard\": {\n            \"recent\": reviews[:10],\n            \"reports\": reports,\n        },\n        \"reviews\": reviews,\n        \"reports\": reports,\n        \"config\": _config_schema(cfg),\n    }"
+      },
+      {
+        "path": "src/bubo/db.py",
+        "start_line": 62,
+        "text": "def connect_db(*, readonly: bool = False) -> sqlite3.Connection:\n    \"\"\"Open a connection to the state database with sensible defaults.\n\n    The default (writer) connection sets WAL journaling (so readers don't\n    block the single writer) and a 5-second busy timeout. Caller is\n    responsible for closing \u2014 use as a context manager.\n\n    ``readonly=True`` opens the DB via the ``file:...?mode=ro`` URI: it does\n    **not** create the file, does **not** run the WAL pragma (which would\n    write the DB header), and rejects any write. This is what the governance\n    *report* readers use so reporting is genuinely non-mutating and safe to run\n    against a read-only mount; a missing DB raises ``OperationalError`` rather\n    than being silently created.\n    \"\"\"\n    if readonly:\n        ro = sqlite3.connect(f\"file:{paths.DB}?mode=ro\", uri=True, timeout=30)\n        ro.execute(\"pragma busy_timeout=5000\")\n        return ro\n    db = sqlite3.connect(paths.DB, timeout=30)\n    db.execute(\"pragma journal_mode=WAL\")\n    db.execute(\"pragma busy_timeout=5000\")\n    return db"
+      }
+    ],
+    "oracle": {
+      "known_defect": false,
+      "description": "No known violation of the stated scoped contract."
+    }
+  },
+  {
+    "id": "tenant-isolation-bug",
+    "family": "tenant-isolation",
+    "kind": "synthetic",
+    "revision": "e7808cb8fb76f9f808b83d2401dd13b1df721de7ebc3d79bb64122d961493a9e",
+    "requirements": "An authenticated user may read only a document whose stored tenantId equals their user.tenantId. db.getDocument looks up solely by globally unique id, has no authorization filter, and returns undefined for absent ids. user is trusted authenticated data; id and requestedTenant are untrusted. Handle absent documents with an error.",
+    "sources": [
+      {
+        "path": "documents.ts",
+        "start_line": 1,
+        "text": "type User = { tenantId: string };\ntype Doc = { tenantId: string; text: string };\ndeclare const db: { getDocument(id: string): Promise<Doc | undefined> };\nasync function readDoc(user: User, id: string, requestedTenant: string): Promise<Doc> {\n  if (user.tenantId !== requestedTenant) throw new Error('forbidden');\n  const doc = await db.getDocument(id);\n  if (!doc) throw new Error('not found');\n  return doc;\n}"
+      }
+    ],
+    "oracle": {
+      "known_defect": true,
+      "description": "Client-supplied tenant check does not authorize the stored document; another tenant document can be returned by id."
+    }
+  },
+  {
+    "id": "tenant-isolation-correct",
+    "family": "tenant-isolation",
+    "kind": "synthetic",
+    "revision": "e32a4878f118f9885691bd92b0569060a1ee5737e16eec52565c81c1addce809",
+    "requirements": "An authenticated user may read only a document whose stored tenantId equals their user.tenantId. db.getDocument looks up solely by globally unique id, has no authorization filter, and returns undefined for absent ids. user is trusted authenticated data; id and requestedTenant are untrusted. Handle absent documents with an error.",
+    "sources": [
+      {
+        "path": "documents.ts",
+        "start_line": 1,
+        "text": "type User = { tenantId: string };\ntype Doc = { tenantId: string; text: string };\ndeclare const db: { getDocument(id: string): Promise<Doc | undefined> };\nasync function readDoc(user: User, id: string, requestedTenant: string): Promise<Doc> {\n  if (user.tenantId !== requestedTenant) throw new Error('forbidden');\n  const doc = await db.getDocument(id);\n  if (!doc) throw new Error('not found');\n  if (doc.tenantId !== user.tenantId) throw new Error('forbidden');\n  return doc;\n}"
+      }
+    ],
+    "oracle": {
+      "known_defect": false,
+      "description": "No known violation of the stated scoped contract."
+    }
+  },
+  {
+    "id": "parallel-count-bug",
+    "family": "parallel-count",
+    "kind": "synthetic",
+    "revision": "5cfd18f84e29d06ffe30d998f92bc08342cd58cc0297b171dea653bd5ccb0418",
+    "requirements": "Go 1.22+. Count every input key exactly once; workers run concurrently. Return the final counts only after all workers finish. Ignore performance/style considerations.",
+    "sources": [
+      {
+        "path": "count.go",
+        "start_line": 1,
+        "text": "package counts\nimport \"sync\"\nfunc Count(keys []string) map[string]int {\n counts := map[string]int{}\n var wg sync.WaitGroup\n for _, key := range keys {\n  wg.Add(1)\n  go func(k string) { defer wg.Done(); counts[k]++ }(key)\n }\n wg.Wait()\n return counts\n}"
+      }
+    ],
+    "oracle": {
+      "known_defect": true,
+      "description": "Concurrent unsynchronized map increments race, can panic, or lose counts; protect writes with shared synchronization."
+    }
+  },
+  {
+    "id": "parallel-count-correct",
+    "family": "parallel-count",
+    "kind": "synthetic",
+    "revision": "6febd0ac71940ed912c6052912ec76844355e90d1241f12cd9ba551dab029ab7",
+    "requirements": "Go 1.22+. Count every input key exactly once; workers run concurrently. Return the final counts only after all workers finish. Ignore performance/style considerations.",
+    "sources": [
+      {
+        "path": "count.go",
+        "start_line": 1,
+        "text": "package counts\nimport \"sync\"\nfunc Count(keys []string) map[string]int {\n counts := map[string]int{}\n var wg sync.WaitGroup\n var mu sync.Mutex\n for _, key := range keys {\n  wg.Add(1)\n  go func(k string) { defer wg.Done(); mu.Lock(); counts[k]++; mu.Unlock() }(key)\n }\n wg.Wait()\n return counts\n}"
+      }
+    ],
+    "oracle": {
+      "known_defect": false,
+      "description": "No known violation of the stated scoped contract."
+    }
+  },
+  {
+    "id": "terminator-boundary-bug",
+    "family": "terminator-boundary",
+    "kind": "synthetic",
+    "revision": "af4d1432b743f6eeb003a36f67a7c6947a8cbc5133314406df89f71d88142c5b",
+    "requirements": "cap is the total allocated destination size including the terminator. src has len readable bytes, destination has cap bytes, pointers are valid and non-overlapping. Return -1 without writing when the text plus terminator cannot fit. Review only memory bounds.",
+    "sources": [
+      {
+        "path": "copy.c",
+        "start_line": 1,
+        "text": "#include <stddef.h>\n#include <string.h>\nint copy_text(char *dst, size_t cap, const char *src, size_t len) {\n if (len > cap) return -1;\n memcpy(dst, src, len);\n dst[len] = '\\0';\n return 0;\n}"
+      }
+    ],
+    "oracle": {
+      "known_defect": true,
+      "description": "When len equals cap, the terminator writes one byte outside the destination; reject len>=cap."
+    }
+  },
+  {
+    "id": "terminator-boundary-correct",
+    "family": "terminator-boundary",
+    "kind": "synthetic",
+    "revision": "b2ffa1cc52218e3bbb8f59b4a706ccda66e88e4e1d887657de777cd7a259999f",
+    "requirements": "cap is the total allocated destination size including the terminator. src has len readable bytes, destination has cap bytes, pointers are valid and non-overlapping. Return -1 without writing when the text plus terminator cannot fit. Review only memory bounds.",
+    "sources": [
+      {
+        "path": "copy.c",
+        "start_line": 1,
+        "text": "#include <stddef.h>\n#include <string.h>\nint copy_text(char *dst, size_t cap, const char *src, size_t len) {\n if (len >= cap) return -1;\n memcpy(dst, src, len);\n dst[len] = '\\0';\n return 0;\n}"
+      }
+    ],
+    "oracle": {
+      "known_defect": false,
+      "description": "No known violation of the stated scoped contract."
+    }
+  },
+  {
+    "id": "zero-order-report-bug",
+    "family": "zero-order-report",
+    "kind": "synthetic",
+    "revision": "78528c9066b0b0979087cc0cadb8b2181aa22aaa8c1a34e688a972ff48e43b97",
+    "requirements": "SQLite schema customers(id INTEGER PRIMARY KEY), orders(id INTEGER PRIMARY KEY, customer_id INTEGER, status TEXT). Return every customer and the count of their paid orders, including zero for no orders or only unpaid orders. IDs are unique and counts fit SQLite integers.",
+    "sources": [
+      {
+        "path": "report.sql",
+        "start_line": 1,
+        "text": "SELECT c.id, COUNT(o.id) AS paid_orders\nFROM customers c LEFT JOIN orders o ON o.customer_id = c.id\nWHERE o.status = 'paid'\nGROUP BY c.id;"
+      }
+    ],
+    "oracle": {
+      "known_defect": true,
+      "description": "The WHERE filter removes unmatched and unpaid-only customers from a LEFT JOIN; put status predicate in JOIN ON."
+    }
+  },
+  {
+    "id": "zero-order-report-correct",
+    "family": "zero-order-report",
+    "kind": "synthetic",
+    "revision": "dc410561e10d63dff5768f40c1ef46a9ff3596d2b5050c4c7b67dee05bbf28f2",
+    "requirements": "SQLite schema customers(id INTEGER PRIMARY KEY), orders(id INTEGER PRIMARY KEY, customer_id INTEGER, status TEXT). Return every customer and the count of their paid orders, including zero for no orders or only unpaid orders. IDs are unique and counts fit SQLite integers.",
+    "sources": [
+      {
+        "path": "report.sql",
+        "start_line": 1,
+        "text": "SELECT c.id, COUNT(o.id) AS paid_orders\nFROM customers c LEFT JOIN orders o\n ON o.customer_id = c.id AND o.status = 'paid'\nGROUP BY c.id;"
+      }
+    ],
+    "oracle": {
+      "known_defect": false,
+      "description": "No known violation of the stated scoped contract."
+    }
+  }
+]
