@@ -987,3 +987,72 @@ def test_live_review_preserves_incomplete_findings_and_coverage():
     assert result["status"] == "incomplete"
     assert result["findings"][0]["title"] == "Concrete failure"
     assert result["coverage"]["unreviewed"] == ["dependency"]
+
+
+@pytest.mark.parametrize(
+    ("returncode", "findings", "status", "planned"),
+    [(0, [{"title": "ok"}], "success", 1), (0, [], "no_findings", 0), (1, [], "failed", 0)],
+)
+def test_review_change_reports_the_review_to_analytics(
+    tmp_path: Path, monkeypatch, returncode, findings, status, planned
+) -> None:
+    """MCP reviews used to emit nothing, so the surface was invisible."""
+    from bubo import analytics
+    from bubo.analytics_config import AnalyticsConfig
+
+    monkeypatch.setattr(paths, "DB", tmp_path / "state" / "reviewer.sqlite")
+    monkeypatch.setattr(analytics, "_install_id", None)
+    monkeypatch.setattr(analytics, "flush", lambda: None)
+    monkeypatch.setattr(analytics, "_surface", "mcp")
+    transcript = (
+        '{"type":"result","result":"x","total_cost_usd":0.25,'
+        '"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2}}'
+    )
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        result = subprocess.CompletedProcess(args, returncode, review_output(findings), None)
+        result.diagnostic_stdout = transcript  # type: ignore[attr-defined]
+        return result
+
+    consent = AnalyticsConfig(enabled=True, endpoint="https://posthog.invalid/batch", api_key="k")
+    cfg = ReviewConfig(
+        reviewer_command=["claude", "-p"], timeout_seconds=1800, analytics_config=consent
+    )
+    with (
+        patch("bubo.mcp_server.load_review_config", return_value=cfg),
+        patch("bubo.mcp_server.get_provider", return_value=_FakeReviewProvider()),
+        patch("bubo.mcp_server.run_bounded", side_effect=fake_run),
+    ):
+        mcp_server.review_change(provider="github", project="owner/repo", number=5)
+
+    [props] = [
+        event["properties"]
+        for _, _, event in analytics._pending_events
+        if event["event"] == "review_completed"
+    ]
+    assert {
+        key: props.get(key)
+        for key in (
+            "surface",
+            "status",
+            "agent",
+            "dry_run",
+            "findings_posted",
+            "findings_planned",
+            "cost_usd",
+            "tokens_input",
+            "tokens_output",
+        )
+    } == {
+        "surface": "mcp",
+        "status": status,
+        "agent": "claude",
+        "dry_run": True,
+        "findings_posted": 0,
+        "findings_planned": planned,
+        "cost_usd": 0.25,
+        # Claude's input includes its cache reads (bubo.telemetry.agent_output).
+        "tokens_input": 12,
+        "tokens_output": 5,
+    }
+    assert "owner/repo" not in repr(props)
