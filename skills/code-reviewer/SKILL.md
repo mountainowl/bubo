@@ -42,4 +42,8 @@ Return only the findings allowed by the configured meta prompt.
 
 If there are no findings, return exactly:
 
-`No actionable findings.`
+`a schema-version-1 result with explicit status and coverage`
+
+## Read-only execution and output
+
+Review only: do not edit files, run reviewed code/tests/builds/hooks/installers, or change external systems. Use authorized read-only inspection. Select diff or audit mode explicitly; change causality applies only in diff mode. Return the versioned JSON object from the meta contract, never a bare findings array or prose acknowledgement. Missing essential evidence produces incomplete coverage and a separate question.

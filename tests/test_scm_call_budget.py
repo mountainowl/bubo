@@ -19,6 +19,8 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
 
+from review_output import review_output
+
 from bubo import db, paths, poller
 from bubo.analytics_config import AnalyticsConfig
 from bubo.governance_config import GovernanceConfig
@@ -92,7 +94,7 @@ def _run_worker(
         "line": 2,
         "title": "t",
         "body": "b",
-        "severity": "major",
+        "severity": "blocking",
         "category": "correctness",
         "confidence": 0.95,
         "kind": "bug",
@@ -107,7 +109,7 @@ def _run_worker(
 
     def agent(*_a: Any, **_k: Any) -> SimpleNamespace:
         events.append("agent")
-        return SimpleNamespace(stdout=json.dumps([finding]), stderr="", returncode=0)
+        return SimpleNamespace(stdout=review_output([finding]), stderr="", returncode=0)
 
     completed = MagicMock()
     job = tmp / "job.json"

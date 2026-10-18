@@ -6,7 +6,7 @@ false-positive rate — plus the efficiency axes (tokens / seconds / cost).
 
 Methodology follows the now-common "a finding *hits* a ground-truth issue when it
 **localizes** it (right file + line) and **describes** it" rubric used by
-real-world AI-code-review benchmarks. The default matcher is **deterministic**
+real-world AI-code-review benchmarks. The default matcher is **conservative and deterministic**
 (same file, line within a tolerance, optional category match) so a run is
 reproducible and dependency-free; swap in an LLM-as-judge matcher for fuzzy
 description matching (see benchmarks/README.md). Matching is greedy 1:1 — each
@@ -89,10 +89,16 @@ def score_case(
     matcher: Matcher | None = None,
     efficiency: Efficiency | None = None,
 ) -> CaseScore:
-    """Score one case. ``matcher`` overrides the default localized match (e.g. an
+    """Score one case. Default requires exact normalized summary AND localization.
+
+    This conservative check is not semantic adjudication; paraphrases require a
+    separately adjudicated matcher. Missing summaries never earn credit.
+    ``matcher`` overrides this default (e.g. an
     LLM-judge); when given, ``line_tolerance``/``require_category`` are ignored."""
     hit = matcher or (
-        lambda f, t: localized_match(
+        lambda f, t: bool(f.summary.strip() and t.summary.strip())
+        and " ".join(f.summary.casefold().split()) == " ".join(t.summary.casefold().split())
+        and localized_match(
             f, t, line_tolerance=line_tolerance, require_category=require_category
         )
     )

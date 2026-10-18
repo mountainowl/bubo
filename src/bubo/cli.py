@@ -356,7 +356,7 @@ def _agent_template_subs(root: Path, agent: dict[str, Any]) -> dict[str, str]:
             'name = "bubo custom endpoint"\n'
             f'base_url = "{base_url}"\n'
             'env_key = "LLM_API_KEY"\n'
-            'wire_api = "chat"\n'
+            'wire_api = "responses"\n'
         )
     else:
         provider_line = ""
