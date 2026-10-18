@@ -471,3 +471,68 @@ def test_incomplete_review_preserves_posted_counts_without_clean_ack(tmp_path):
     assert analytics_results[-1]["findings_posted"] == 1
     reconciler.assert_not_called()
     ack.assert_not_called()
+
+
+def _git(repo: Path, *args: str) -> str:
+    import subprocess
+
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def test_reconciliation_prompt_carries_the_history_since_the_finding(tmp_path: Path) -> None:
+    """The verifier is told to inspect "the supplied history excerpt"; it must not be empty.
+
+    The Claude verifier has no git tool, so the excerpt is its only view of what
+    changed since the finding was posted.
+    """
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    (repo / "stats.py").write_text("def mean(v):\n    return sum(v) / len(v)\n")
+    (repo / "other.py").write_text("A = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "finding posted here")
+    original = _git(repo, "rev-parse", "HEAD")
+    (repo / "stats.py").write_text(
+        "def mean(v):\n    if not v:\n        return 0.0\n    return sum(v) / len(v)\n"
+    )
+    (repo / "other.py").write_text("A = 2\n")
+    _git(repo, "commit", "-qam", "guard empty input")
+    head = _git(repo, "rev-parse", "HEAD")
+    answer = json.dumps({"verdict": "fixed", "confidence": 0.9, "reason": "r"})
+    agent = MagicMock(return_value=SimpleNamespace(stdout=answer, returncode=0))
+
+    with patch("bubo.poller.run", agent), patch("bubo.poller.metered_agent_output"):
+        poller.run_reconciliation_verification(
+            {"title": "mean divides by zero", "file": "stats.py", "line": 2},
+            original_sha=original,
+            head_sha=head,
+            repo=repo,
+            cfg=ReviewConfig(reconcile_command=["codex", "exec"]),
+        )
+
+    prompt = agent.call_args.args[0][-1]
+    excerpt = prompt.split("HISTORY EXCERPT:\n", 1)[1].split("\n\nRespond with ONLY JSON", 1)[0]
+    assert "+    if not v:" in excerpt
+    assert "guard empty input" in excerpt
+    # Scoped to the finding's file; unrelated churn would only crowd the 4 KB excerpt.
+    assert "other.py" not in excerpt
+
+
+def test_reconciliation_prompt_says_when_history_is_unavailable(tmp_path: Path) -> None:
+    answer = json.dumps({"verdict": "uncertain", "confidence": 0.1, "reason": "r"})
+    agent = MagicMock(return_value=SimpleNamespace(stdout=answer, returncode=0))
+    with patch("bubo.poller.run", agent), patch("bubo.poller.metered_agent_output"):
+        poller.run_reconciliation_verification(
+            {"title": "t", "file": "a.py"},
+            original_sha="a" * 40,
+            head_sha="b" * 40,
+            repo=tmp_path,
+            cfg=ReviewConfig(reconcile_command=["codex", "exec"]),
+        )
+    excerpt = agent.call_args.args[0][-1].split("HISTORY EXCERPT:\n", 1)[1]
+    assert excerpt.startswith("(history unavailable")
