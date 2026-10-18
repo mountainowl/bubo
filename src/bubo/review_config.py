@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from bubo import paths
 from bubo.analytics_config import AnalyticsConfig, analytics_config_from_dict
 from bubo.config_values import (
     ConfigError,
@@ -41,7 +42,6 @@ from bubo.env_config import apply_runtime_env, read_config_file
 from bubo.errors import describe
 from bubo.findings import CANONICAL_CATEGORIES
 from bubo.governance_config import GovernanceConfig, governance_config_from_dict
-from bubo.paths import ROOT
 from bubo.subscription import DEFAULT_ERROR_PATTERNS, CircuitConfig
 from bubo.telemetry import TelemetryConfig, telemetry_config_from_dict
 
@@ -424,7 +424,7 @@ def load_review_config(
             )
         )
     raw = read_config_file(config_path)
-    apply_runtime_env(ROOT, raw)
+    apply_runtime_env(paths.ROOT, raw)
     override = os.environ.get("BUBO_PROVIDER")
     if override:
         raw.setdefault("scm", {})["provider"] = override

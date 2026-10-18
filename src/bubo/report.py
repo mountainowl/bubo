@@ -280,6 +280,8 @@ def build_report(
             "total": stat["total"],
             "rejected": stat["rejected"],
             "dispute_rate": _rate(stat["rejected"], stat["total"]),
+            # The rejecting replies and where they applied (JSON only, #184).
+            "feedback": stat.get("feedback", []),
         }
         if suppress_threshold is not None and suppress_min_samples is not None:
             row["would_suppress"] = (

@@ -25,9 +25,9 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
+from bubo import paths
 from bubo.events import log
 from bubo.json_salvage import last_json_object_with_key
-from bubo.paths import ROOT
 from bubo.review_config import ReviewConfig
 from bubo.subproc import run_bounded
 from bubo.telemetry import parse_agent_output, record_agent_usage, structured_output_command
@@ -105,7 +105,7 @@ def classifier_env(source: Mapping[str, str], cfg: ReviewConfig | None = None) -
     if home:
         path = path + ":" + os.path.join(home, ".local", "bin")
     env["PATH"] = path
-    env["BUBO_ROOT"] = str(ROOT)
+    env["BUBO_ROOT"] = str(paths.ROOT)
     if cfg is not None and cfg.llm_base_url:
         for name in ("LLM_API_KEY", "LLM_BASE_URL"):
             if source.get(name):
