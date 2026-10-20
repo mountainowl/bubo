@@ -128,6 +128,10 @@ _ALLOWED_ATTRS = frozenset(
         "metric_value",
         "metric_count",
         "surface",
+        # review_completed: where a failed/deferred/superseded review stopped,
+        # and the exception class (never its message) that failed it.
+        "stage",
+        "error_type",
         # finding_outcome: which review configuration produced the finding
         "prompt_version",
         "verified",
@@ -155,6 +159,10 @@ _KNOWN_EVENTS = frozenset(
 # inside GitHub Actions, whose state directory (and so install_id) is fresh on
 # every run; dashboards need it to keep those runs out of install counts.
 _KNOWN_SURFACES = frozenset({"service", "run_once", "github_action", "mcp", "unknown"})
+# The worker step a review was in when it stopped (see ``poller.worker``).
+_KNOWN_STAGES = frozenset({"setup", "checkout", "agent", "parse", "post", "incomplete", "finish"})
+# An exception's class name: code, never data. Anything else is dropped.
+_ERROR_TYPE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 # Developer-engagement outcome dimensions. Mirrors the per-finding flags the
 # poller's outcome sync writes to SQLite; a value outside the set normalizes to
 # "other" so a future column can never leak as an arbitrary string.
@@ -487,8 +495,14 @@ def record_review_completed(
     queue_seconds: float | None = None,
     profile: dict[str, Any] | None = None,
     prompt_version: str | None = None,
+    stage: str | None = None,
+    error_type: str | None = None,
 ) -> None:
-    """The primary signal: one anonymized event per completed review."""
+    """The primary signal: one anonymized event per review, however it ended.
+
+    ``stage`` says where a failed, deferred or superseded review stopped and
+    ``error_type`` names the exception class that failed it; both are bounded.
+    """
     context = {
         key: value
         for key, value in (profile or {}).items()
@@ -533,6 +547,12 @@ def record_review_completed(
             "lines_changed": lines_changed,
             "queue_seconds": queue_seconds,
             "prompt_version": _prompt_version(prompt_version),
+            "stage": stage if stage in _KNOWN_STAGES else None,
+            "error_type": (
+                error_type
+                if isinstance(error_type, str) and _ERROR_TYPE.fullmatch(error_type)
+                else None
+            ),
         },
     )
     if context.get("project_id"):

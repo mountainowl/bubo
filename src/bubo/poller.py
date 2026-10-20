@@ -2073,6 +2073,60 @@ def worker(job: Path) -> int:
     review_run_started = False
     review_prompt_version: str | None = None
     posted = planned = skipped = 0
+    # Where the review is; a failed, deferred or superseded review reports it.
+    stage = "setup"
+
+    def report_review(
+        status: ReviewStatus, *, stopped_at: str | None = None, error_type: str | None = None
+    ) -> None:
+        """One run metric and one ``review_completed`` event per review, whatever its end."""
+        if cfg is None:
+            return
+        duration = round(time.monotonic() - started, 2)
+        if telemetry is not None:
+            telemetry.record_review_done(
+                repo=project,
+                model=model,
+                languages=tuple(languages),
+                agent=analytics.agent_label(cfg.reviewer_command),
+                scm_provider=cfg.provider,
+                status=status,
+                review_mode=ReviewMode.DIFF,
+                dry_run=cfg.dry_run,
+                duration_seconds=duration,
+                tokens=tokens,
+                cost_usd=cost_usd,
+                tone=cfg.tone,
+                lines_reviewed=lines_reviewed,
+                prompt_version=review_prompt_version,
+            )
+        analytics.record_review_completed(
+            cfg.analytics_config,
+            scm_provider=cfg.provider,
+            agent=analytics.agent_label(cfg.reviewer_command),
+            model=model,
+            status=str(status),
+            dry_run=cfg.dry_run,
+            review_mode=str(ReviewMode.DIFF),
+            tone=cfg.tone,
+            duration_seconds=duration,
+            tokens_input=tokens.input,
+            tokens_output=tokens.output,
+            tokens_cached=tokens.cached,
+            tokens_total=tokens.total,
+            cost_usd=cost_usd,
+            findings_posted=posted,
+            findings_planned=planned,
+            findings_skipped=skipped,
+            files_changed=files_changed,
+            lines_changed=lines_changed,
+            languages=languages,
+            queue_seconds=queued_seconds,
+            profile=project_profile,
+            prompt_version=review_prompt_version,
+            stage=stopped_at,
+            error_type=error_type,
+        )
 
     def defer_review_run() -> None:
         record(project, iid, sha, ReviewStatus.DEFERRED, str(report))
@@ -2085,12 +2139,13 @@ def worker(job: Path) -> int:
                 error=None,
                 lines_reviewed=lines_reviewed,
             )
+        report_review(ReviewStatus.DEFERRED, stopped_at=stage)
 
     try:
         cfg = read_config()
         allowed, reason = subscription_gate(cfg)
         if not allowed:
-            record(project, iid, sha, ReviewStatus.DEFERRED, str(report))
+            defer_review_run()
             log_subscription_gate(reason, scope="reviewer", project=project, iid=iid, run_id=run_id)
             return 0
         provider = get_provider(cfg)
@@ -2126,6 +2181,7 @@ def worker(job: Path) -> int:
         review_run_started = True
         with telemetry.span("llm_review.run", repo=project, mr_iid=iid, sha=sha, run_id=run_id):
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
+            stage = "checkout"
             with telemetry.span("llm_review.checkout", repo=project, sha=sha):
                 provider.checkout(cfg, project, mr, repo)
             # Fetch the change's diff ONCE before the agent runs and share it
@@ -2184,6 +2240,7 @@ def worker(job: Path) -> int:
             if incremental is not None:
                 extra_directive = "\n\n".join(d for d in (extra_directive, incremental[0]) if d)
             env = reviewer_env(os.environ, cfg)
+            stage = "agent"
             allowed, reason = subscription_gate(cfg)
             if not allowed:
                 defer_review_run()
@@ -2229,7 +2286,9 @@ def worker(job: Path) -> int:
                             ),
                         )
                     )
+            stage = "parse"
             review_result = parse_review_result(safe_stdout)
+            stage = "post"
             allowed, reason = subscription_gate(cfg)
             if not allowed:
                 defer_review_run()
@@ -2274,12 +2333,14 @@ def worker(job: Path) -> int:
                     + review_result.coverage["unreviewed"]
                     + review_result.coverage["limitations"]
                 )
+                stage = "incomplete"
                 raise ValueError(f"Review incomplete: {detail}")
             status = (
                 ReviewStatus.NO_FINDINGS
                 if not review_result.findings and review_result.omitted_findings_count == 0
                 else ReviewStatus.SUCCESS
             )
+            stage = "finish"
             record(project, iid, sha, status, str(report))
             # Verification calls made while posting count toward this review.
             tokens, cost_usd = usage_meter.tokens, usage_meter.cost_usd
@@ -2348,47 +2409,7 @@ def worker(job: Path) -> int:
                     detail=no_findings_detail,
                     run_id=run_id,
                 )
-            telemetry.record_review_done(
-                repo=project,
-                model=model,
-                languages=tuple(languages),
-                agent=analytics.agent_label(cfg.reviewer_command),
-                scm_provider=cfg.provider,
-                status=status,
-                review_mode=ReviewMode.DIFF,
-                dry_run=cfg.dry_run,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens=tokens,
-                cost_usd=cost_usd,
-                tone=cfg.tone,
-                lines_reviewed=lines_reviewed,
-                prompt_version=review_prompt_version,
-            )
-            analytics.record_review_completed(
-                cfg.analytics_config,
-                scm_provider=cfg.provider,
-                agent=analytics.agent_label(cfg.reviewer_command),
-                model=model,
-                status=str(status),
-                dry_run=cfg.dry_run,
-                review_mode=str(ReviewMode.DIFF),
-                tone=cfg.tone,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens_input=tokens.input,
-                tokens_output=tokens.output,
-                tokens_cached=tokens.cached,
-                tokens_total=tokens.total,
-                cost_usd=cost_usd,
-                findings_posted=posted,
-                findings_planned=planned,
-                findings_skipped=skipped,
-                files_changed=files_changed,
-                lines_changed=lines_changed,
-                languages=languages,
-                queue_seconds=queued_seconds,
-                profile=project_profile,
-                prompt_version=review_prompt_version,
-            )
+            report_review(status)
             log(
                 "review_done",
                 project=project,
@@ -2427,6 +2448,7 @@ def worker(job: Path) -> int:
                 error=None,
                 lines_reviewed=lines_reviewed,
             )
+        report_review(ReviewStatus.SUPERSEDED, stopped_at=stage)
         log(
             "review_superseded",
             project=project,
@@ -2465,48 +2487,7 @@ def worker(job: Path) -> int:
             telemetry.record_failure(
                 repo=project, error_type=type(exc).__name__, operation="review"
             )
-            telemetry.record_review_done(
-                repo=project,
-                model=model,
-                languages=tuple(languages),
-                agent=analytics.agent_label(cfg.reviewer_command),
-                scm_provider=cfg.provider,
-                status=ReviewStatus.FAILED,
-                review_mode=ReviewMode.DIFF,
-                dry_run=cfg.dry_run if cfg is not None else True,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens=tokens,
-                cost_usd=cost_usd,
-                tone=cfg.tone if cfg is not None else None,
-                lines_reviewed=lines_reviewed,
-                prompt_version=review_prompt_version,
-            )
-        if cfg is not None:
-            analytics.record_review_completed(
-                cfg.analytics_config,
-                scm_provider=cfg.provider,
-                agent=analytics.agent_label(cfg.reviewer_command),
-                model=model,
-                status=str(ReviewStatus.FAILED),
-                dry_run=cfg.dry_run,
-                review_mode=str(ReviewMode.DIFF),
-                tone=cfg.tone,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens_input=tokens.input,
-                tokens_output=tokens.output,
-                tokens_cached=tokens.cached,
-                tokens_total=tokens.total,
-                cost_usd=cost_usd,
-                findings_posted=posted,
-                findings_planned=planned,
-                findings_skipped=skipped,
-                files_changed=files_changed,
-                lines_changed=lines_changed,
-                languages=languages,
-                queue_seconds=queued_seconds,
-                profile=project_profile,
-                prompt_version=review_prompt_version,
-            )
+        report_review(ReviewStatus.FAILED, stopped_at=stage, error_type=type(exc).__name__)
         log(
             "review_failed",
             project=project,
