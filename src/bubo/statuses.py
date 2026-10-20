@@ -73,6 +73,27 @@ class FindingStatus(StrEnum):
     VERIFY_CAPPED = "verify_capped"
 
 
+# Why a finding was not posted: the policy filter's reasons
+# (:func:`bubo.findings.filter_findings_by_policy`) and the poster's own.
+# A bounded label set, so it can travel as a metric dimension.
+SKIP_REASONS = frozenset(
+    {
+        "confidence_below_threshold",
+        "confidence_below_category_floor",
+        "kind_not_allowed",
+        "surface_mode_excluded",
+        "disputed_class_suppressed",
+        "already_recorded",
+        "previously_refuted",
+        "outside_incremental_range",
+        "duplicate_open_thread",
+        "line_not_in_diff",
+        "verification_capped",
+        "verification_unavailable",
+    }
+)
+
+
 class ReviewMode(StrEnum):
     """What scope the agent reviewed.
 

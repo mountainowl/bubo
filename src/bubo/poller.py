@@ -1165,10 +1165,13 @@ def emit_finding_metric(
     status: FindingStatus | str,
     finding: JsonObject,
     dry_run: bool,
+    skip_reason: str | None = None,
 ) -> None:
     """Forward one finding-lifecycle event to OTel if telemetry is enabled."""
     if telemetry and telemetry.config.emit_finding_events:
-        telemetry.record_finding(repo=repo, status=status, finding=finding, dry_run=dry_run)
+        telemetry.record_finding(
+            repo=repo, status=status, finding=finding, dry_run=dry_run, skip_reason=skip_reason
+        )
 
 
 def changed_loc(
@@ -1597,6 +1600,14 @@ def post_or_plan_findings(
         suppressed_scopes=suppressed_scopes,
     )
     for finding, reason in dropped:
+        emit_finding_metric(
+            telemetry,
+            repo=project,
+            status=FindingStatus.SKIPPED,
+            finding=finding,
+            dry_run=cfg.dry_run,
+            skip_reason=reason,
+        )
         rejection = (
             dispute_match(finding, suppressed_scopes)
             if reason == "disputed_class_suppressed"
@@ -1651,6 +1662,14 @@ def post_or_plan_findings(
         fp = finding_fingerprint(project, number, sha, finding)
         identity = finding_identity(project, number, finding)
         if finding_seen(project, number, sha, fp):
+            emit_finding_metric(
+                telemetry,
+                repo=project,
+                status=FindingStatus.SKIPPED,
+                finding=finding,
+                dry_run=cfg.dry_run,
+                skip_reason="already_recorded",
+            )
             skipped += 1
             continue
         if allowed_lines is not None and resolve_finding_line(allowed_lines, finding) is None:
@@ -1670,6 +1689,7 @@ def post_or_plan_findings(
                 status=FindingStatus.SKIPPED,
                 finding=finding,
                 dry_run=cfg.dry_run,
+                skip_reason="outside_incremental_range",
             )
             log(
                 "finding_skipped",
@@ -1712,6 +1732,7 @@ def post_or_plan_findings(
                 status=FindingStatus.SKIPPED,
                 finding=finding,
                 dry_run=cfg.dry_run,
+                skip_reason="duplicate_open_thread",
             )
             log(
                 "finding_skipped",
@@ -1743,6 +1764,7 @@ def post_or_plan_findings(
                 status=FindingStatus.SKIPPED,
                 finding=finding,
                 dry_run=cfg.dry_run,
+                skip_reason="line_not_in_diff",
             )
             log(
                 "finding_skipped",
@@ -1758,7 +1780,7 @@ def post_or_plan_findings(
         # non-duplicate survivor we are otherwise about to post/plan. Runs N
         # independent refute-it lenses and drops a finding a majority refute.
         # Verdict columns default to None so a verify-off run records nothing.
-        verification_unresolved = False
+        verification_unresolved: str | None = None
         verified_flag: bool | None = None
         verify_votes_json: str | None = None
         if cfg.verify_findings:
@@ -1766,12 +1788,22 @@ def post_or_plan_findings(
                 project, number, sha, fp, expected_policy=verification_policy
             )
             if cached is False or (cached is True and cfg.dry_run):
+                emit_finding_metric(
+                    telemetry,
+                    repo=project,
+                    status=FindingStatus.SKIPPED,
+                    finding=finding,
+                    dry_run=cfg.dry_run,
+                    skip_reason="previously_refuted",
+                )
                 skipped += 1
                 continue
             if verified_attempts >= cfg.verify_max_findings:
                 # Preserve the candidate for retry; do not publish an undecided verdict.
                 capped_count += 1
-                verification_unresolved = True
+                verification_unresolved = "verification_capped"
+                if telemetry is not None:
+                    telemetry.record_verification(repo=project, outcome="capped")
                 if verification_blockers is not None:
                     verification_blockers.append("Verification budget exhausted")
                 log(
@@ -1900,7 +1932,9 @@ def post_or_plan_findings(
                 else:
                     # No decisive quorum: preserve the candidate and mark the run incomplete.
                     capped_count += 1
-                    verification_unresolved = True
+                    verification_unresolved = "verification_unavailable"
+                    if telemetry is not None:
+                        telemetry.record_verification(repo=project, outcome="unresolved")
                     if verification_blockers is not None:
                         verification_blockers.append(
                             f"Insufficient verification evidence: {finding.get('title', 'finding')}"
@@ -1926,6 +1960,14 @@ def post_or_plan_findings(
                 verified=None,
                 verify_votes=verify_votes_json,
                 finding_identity=identity,
+            )
+            emit_finding_metric(
+                telemetry,
+                repo=project,
+                status=FindingStatus.VERIFY_CAPPED,
+                finding=finding,
+                dry_run=cfg.dry_run,
+                skip_reason=verification_unresolved,
             )
             skipped += 1
             continue
