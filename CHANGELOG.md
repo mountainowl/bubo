@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.2](https://github.com/mountainowl/bubo/compare/v0.30.1...v0.30.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* resolve CodeQL code-quality alerts ([#287](https://github.com/mountainowl/bubo/issues/287)) ([e4251a2](https://github.com/mountainowl/bubo/commit/e4251a20882e66cbd74e7c563686b623d528adf2))
+
 ## [0.30.1](https://github.com/mountainowl/bubo/compare/v0.30.0...v0.30.1) (2026-10-18)
 
 
