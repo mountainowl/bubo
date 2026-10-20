@@ -663,6 +663,7 @@ def flush() -> None:
 
         flush_otel()
     except Exception:
+        # Telemetry flush is best-effort and must never fail the caller.
         pass
     try:
         with _pending_lock:

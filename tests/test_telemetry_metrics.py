@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import bubo.analytics as analytics
 from bubo.analytics_config import AnalyticsConfig
 from bubo.telemetry.config import ModelPricing, TelemetryConfig
@@ -101,13 +103,9 @@ def test_disabled_review_telemetry_is_noop() -> None:
 def test_telemetry_span_does_not_swallow_body_exceptions() -> None:
     telemetry = ReviewTelemetry(TelemetryConfig(analytics=AnalyticsConfig(enabled=True)))
 
-    try:
+    with pytest.raises(RuntimeError, match="review failed"):
         with telemetry.span("llm_review.run", repo="r"):
             raise RuntimeError("review failed")
-    except RuntimeError as exc:
-        assert str(exc) == "review failed"
-    else:
-        raise AssertionError("telemetry span swallowed the review exception")
 
 
 def test_review_stage_spans_nest_under_run_with_attributes(monkeypatch) -> None:

@@ -783,6 +783,7 @@ def cli_command(
                 producer_version=installed_version(),
             )
         except Exception:
+            # Recording the failure is best-effort; the bootstrap error below is still reported.
             pass
         print(
             "Bubo update deferred: a safe retained helper could not be configured. "

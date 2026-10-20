@@ -40,7 +40,6 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
     }
 )
 
-_CONFIGURED = False
 _SAFE_LABEL = re.compile(r"^[A-Za-z0-9_.:/-]{1,64}$")
 _ENUM_VALUES = {
     "finding_type": {"issue", "suggestion", "question", "unknown"},

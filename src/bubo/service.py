@@ -190,6 +190,7 @@ def _clear_pid() -> None:
         if identity is not None and identity[0] == os.getpid():
             _pid_path().unlink()
     except FileNotFoundError:
+        # Already removed; nothing to clear.
         pass
 
 
@@ -397,6 +398,7 @@ def monitor_loop(
                     if transition_event is not None:
                         _transition(cfg, telemetry, transition_event)
             except MaintenanceInProgress:
+                # A maintenance fence skips this tick; the loop retries on the next one.
                 pass
             stop.wait(circuit.monitor_interval_seconds)
 

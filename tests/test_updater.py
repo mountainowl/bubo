@@ -946,6 +946,7 @@ main()
                     with socket.create_connection(("127.0.0.1", port), timeout=0.1):
                         break
                 except OSError:
+                    # The server is not listening yet; poll again.
                     pass
             time.sleep(0.02)
         if kind == "mcp-http":

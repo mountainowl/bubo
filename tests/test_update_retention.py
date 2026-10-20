@@ -257,6 +257,7 @@ with _file_lock(installation / 'attempt.lock', exclusive=True):
                     child = record["pid"]
                     break
             except OSError, ValueError:
+                # The record may be mid-write; poll again.
                 pass
             time.sleep(0.02)
         assert child is not None
