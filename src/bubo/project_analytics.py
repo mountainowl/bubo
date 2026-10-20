@@ -9,6 +9,8 @@ import re
 import sqlite3
 import subprocess
 import uuid
+from contextlib import closing
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -299,16 +301,68 @@ def collect_profile(cfg: Any, token: str, project: str, repo: Path) -> dict[str,
         configured = cfg.analytics_config.profiles.get(f"{cfg.provider}:{project}", {})
         domain = configured.get("domain", "unknown")
         project_type = configured.get("project_type", "unknown")
-        technologies, coverage = detect_stack(repo)
+        day = _utc_day()
+        scanned = _cached_scan(identifier, day)
+        if scanned is None:
+            technologies, coverage = detect_stack(repo)
+            scanned = {
+                "stack_coverage": coverage,
+                "technologies": technologies,
+                **fetch_metadata(cfg.provider, base, token, project),
+            }
+            if scanned.get("metadata_status") != "unavailable":
+                _store_scan(identifier, day, scanned)
         return {
             "project_id": identifier,
             "domain": domain if domain in DOMAINS else "unknown",
             "project_type": project_type if project_type in PROJECT_TYPES else "unknown",
             "profile_source": "declared" if configured else "unknown",
             "stack_source": "tracked_paths_and_manifests",
-            "stack_coverage": coverage,
-            "technologies": technologies,
-            **fetch_metadata(cfg.provider, base, token, project),
+            **scanned,
         }
     except Exception:
         return {}
+
+
+# The stack scan and SCM metadata read are cached per project per UTC day.
+# Each review is its own worker process, so the cache lives beside the
+# project-ID table. Declared domain/type are read from config every time.
+
+
+def _utc_day() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
+def _profile_db() -> sqlite3.Connection:
+    db = sqlite3.connect(paths.DB.parent / "analytics_projects.sqlite", timeout=0.2)
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, day TEXT NOT NULL, "
+        "scan TEXT NOT NULL)"
+    )
+    return db
+
+
+def _cached_scan(identifier: str, day: str) -> dict[str, Any] | None:
+    try:
+        with closing(_profile_db()) as db:
+            row = db.execute(
+                "SELECT scan FROM profiles WHERE id = ? AND day = ?", (identifier, day)
+            ).fetchone()
+        if row is None:
+            return None
+        scan = json.loads(row[0])
+        scan["technologies"] = [tuple(item) for item in scan["technologies"]]
+        return scan
+    except OSError, sqlite3.Error, ValueError, KeyError, TypeError:
+        return None
+
+
+def _store_scan(identifier: str, day: str, scan: dict[str, Any]) -> None:
+    try:
+        with closing(_profile_db()) as db, db:
+            db.execute(
+                "INSERT OR REPLACE INTO profiles VALUES (?, ?, ?)",
+                (identifier, day, json.dumps(scan)),
+            )
+    except OSError, sqlite3.Error:
+        return
