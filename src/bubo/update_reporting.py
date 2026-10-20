@@ -422,6 +422,7 @@ class FailureStore:
                     if 400 <= code < 500 and code not in (408, 429):
                         status = "quarantined"
                 except OSError, ValueError:
+                    # Transport errors leave the row pending so the next flush retries it.
                     pass
                 delay = min(3600, 30 * 2 ** min(row["attempts"], 7)) + random.uniform(0, 10)
                 db.execute(

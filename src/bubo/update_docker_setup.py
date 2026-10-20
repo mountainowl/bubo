@@ -178,6 +178,7 @@ def configure(
             report.write_text(store.report(attempt))
             error.bubo_report = str(report)
         except Exception:
+            # The failure report is best-effort; the original setup error still propagates.
             pass
         raise
 

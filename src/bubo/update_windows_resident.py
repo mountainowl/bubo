@@ -168,6 +168,7 @@ def http_stop_event():
             while os.read(descriptor, 1):
                 pass
         except OSError, ValueError, AttributeError:
+            # A closed or missing pipe is treated the same as EOF: request exit.
             pass
         finally:
             event.set()

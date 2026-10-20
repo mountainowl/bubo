@@ -344,6 +344,7 @@ def test_native_retained_guardian_holds_admission_after_worker_root_exits(
                 if windows_process_identity(root_pid) is None:
                     break
             except FileNotFoundError, json.JSONDecodeError:
+                # The record may be missing or mid-write; poll again.
                 pass
             assert time.monotonic() < deadline, "Worker root did not exit"
             time.sleep(0.02)

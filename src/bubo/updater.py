@@ -389,6 +389,7 @@ class UpdateEngine:
             ):
                 journal.update(persisted)
         except OSError, ValueError:
+            # An unreadable journal means no terminal record; fall through to recovery.
             pass
         if journal["phase"] in {"committed", "restored"}:
             self._record(journal, "unexpected_error", recovery="blocked")

@@ -60,7 +60,6 @@ DEFAULT_PROVIDER = "gitlab"
 # non-interactive ``exec`` mode. The hardened runner supports Codex and
 # ``claude -p`` only, and derives provider/model settings from this trusted
 # configuration instead of loading user profiles or tool configuration.
-DEFAULT_CODEX_PROFILE = os.environ.get("CODEX_REVIEW_PROFILE", "bubo")
 DEFAULT_REVIEWER_COMMAND = [
     "codex",
     "--ask-for-approval",
