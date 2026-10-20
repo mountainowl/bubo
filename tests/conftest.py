@@ -64,7 +64,7 @@ def no_external_telemetry(monkeypatch, request):
     posthog.configure_otel(TelemetryConfig(analytics=AnalyticsConfig(enabled=False)))
     with analytics._pending_lock:
         analytics._pending_events.clear()
-    analytics._session_day = None
+    analytics._session_days.clear()
     assert not attempted, "A test attempted external telemetry without a fake transport"
 
 

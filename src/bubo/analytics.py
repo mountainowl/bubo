@@ -195,8 +195,8 @@ _install_path: Path | None = None
 _install_node: int | None = None
 _identity_lock = threading.Lock()
 _surface = "unknown"
-# UTC day this process last sent session_start; the service polls in-process.
-_session_day: str | None = None
+# UTC days this process sent session_start on; the service polls in-process.
+_session_days: set[str] = set()
 _session_lock = threading.Lock()
 
 # Only these labels may leave the machine; paths are used locally and discarded.
@@ -462,14 +462,13 @@ def record_session_start(cfg: AnalyticsConfig, *, scm_provider: str, projects_co
     this per poll made it the bulk of all events. Once a day still shows a
     long-running idle service as alive. A day isn't spent while consent is off.
     """
-    global _session_day
     if not analytics_enabled(cfg):
         return
     day = _utc_day()
     with _session_lock:
-        if _session_day == day:
+        if day in _session_days:
             return
-        _session_day = day
+        _session_days.add(day)
     _emit(
         cfg,
         "session_start",
