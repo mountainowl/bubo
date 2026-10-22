@@ -9,6 +9,7 @@ from opentelemetry import metrics, trace
 from opentelemetry.trace import Span
 
 from bubo.analytics import installed_version
+from bubo.statuses import SKIP_REASONS
 from bubo.telemetry.config import TelemetryConfig
 from bubo.telemetry.cost import TokenUsage
 
@@ -46,6 +47,7 @@ _ENUM_VALUES = {
     "severity": {"blocking", "non-blocking", "unknown"},
     "governance_mode": {"off", "report-only", "soft", "unknown"},
     "governance_action": {"clear", "flag", "unknown"},
+    "skip_reason": {*SKIP_REASONS, "unknown"},
 }
 SpanAttribute = (
     str | bool | int | float | Sequence[str] | Sequence[bool] | Sequence[int] | Sequence[float]
@@ -201,7 +203,13 @@ class ReviewTelemetry:
         self._add(self._cost, cost_usd, attrs)
 
     def record_finding(
-        self, *, repo: str, status: str, finding: dict[str, Any], dry_run: bool
+        self,
+        *,
+        repo: str,
+        status: str,
+        finding: dict[str, Any],
+        dry_run: bool,
+        skip_reason: str | None = None,
     ) -> None:
         attrs = metric_attrs(
             repo=repo,
@@ -210,6 +218,7 @@ class ReviewTelemetry:
             finding_type=finding.get("type"),
             severity=finding.get("severity"),
             category=finding.get("category"),
+            skip_reason=skip_reason,
         )
         self._add(self._findings, 1, attrs)
 
@@ -228,12 +237,14 @@ class ReviewTelemetry:
         )
 
     def record_verification(self, *, repo: str, outcome: str) -> None:
-        """Count one verified/refuted finding from the opt-in verify pass.
+        """Count one finding's verification decision from the opt-in verify pass.
 
-        ``outcome`` is ``"verified"`` (survived the lenses) or ``"refuted"``
-        (a majority dropped it). Low cardinality by design — the vote tally
-        and reason text are persisted to the DB/log, never as OTel attributes.
-        No-op when telemetry is disabled.
+        ``outcome`` is ``"verified"`` (survived the lenses), ``"refuted"`` (a
+        majority dropped it), ``"unresolved"`` (too few lenses produced a
+        verdict, e.g. a verifier outage) or ``"capped"`` (past
+        ``verify_max_findings``). One count per finding, not per lens. Low
+        cardinality by design — the vote tally and reason text are persisted
+        to the DB/log, never as OTel attributes. No-op when telemetry is disabled.
         """
         self._add(self._verifications, 1, metric_attrs(repo=repo, outcome=outcome))
 

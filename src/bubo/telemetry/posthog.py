@@ -23,6 +23,7 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 
 from bubo import analytics
 from bubo.analytics import analytics_enabled
+from bubo.statuses import SKIP_REASONS
 
 SPAN_NAMES = frozenset(
     {
@@ -139,6 +140,7 @@ def safe_context(attrs):
             "skipped",
             "refuted",
             "pending_external_id",
+            "verify_capped",
             "resolved",
             "deleted",
             "developer_replied",
@@ -148,7 +150,8 @@ def safe_context(attrs):
             "developer_agreed",
         },
         "review_mode": {"diff", "repo", "repo_review"},
-        "outcome": {"verified", "refuted", "opened", "recovered"},
+        "outcome": {"verified", "refuted", "unresolved", "capped", "opened", "recovered"},
+        "skip_reason": SKIP_REASONS,
         "finding_type": {"issue", "suggestion", "question", "unknown"},
         "severity": {"blocking", "non-blocking", "unknown"},
         "category": {
