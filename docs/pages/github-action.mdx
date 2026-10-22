@@ -86,11 +86,14 @@ model request.
 
 1. Resolve the compatible Bubo version and install it from PyPI.
 2. Optionally install Codex on a hosted runner.
-3. Initialize an ephemeral Bubo root below `${{ runner.temp }}`.
-4. Write a configuration containing one GitHub repository and the triggering
+3. Restore Bubo's anonymous analytics install id with `actions/cache`, keyed
+   by the repository ID, so a repository's runs count as one install. The
+   cached files hold only random IDs, and nothing about the repository is sent.
+4. Initialize an ephemeral Bubo root below `${{ runner.temp }}`.
+5. Write a configuration containing one GitHub repository and the triggering
    PR number as `target_merge_request_iid`.
-5. Validate the installation with `bubo doctor`.
-6. Run `bubo-poller run-once` and wait for the review result.
+6. Validate the installation with `bubo doctor`.
+7. Run `bubo-poller run-once` and wait for the review result.
 
 <Footnote id="experimental">
 

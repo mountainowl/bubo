@@ -121,6 +121,17 @@ runs:
         npm install -g @openai/codex \
           || echo "::warning::Codex install failed; ensure the agent CLI is on PATH."
 
+    # runner.temp starts empty on every run. Restore Bubo's random analytics
+    # install id and project-id table, so one repository's runs count as one
+    # install. Nothing about the repository is sent; the key stays on GitHub.
+    - name: Restore anonymous install identity
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ${{ runner.temp }}/bubo/var/state/install_id
+          ${{ runner.temp }}/bubo/var/state/analytics_projects.sqlite
+        key: bubo-analytics-identity-${{ github.repository_id }}
+
     - name: Initialize Bubo workspace
       shell: bash
       env:
