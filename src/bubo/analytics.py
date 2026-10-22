@@ -39,6 +39,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
@@ -203,6 +204,9 @@ _install_path: Path | None = None
 _install_node: int | None = None
 _identity_lock = threading.Lock()
 _surface = "unknown"
+# UTC days this process sent session_start on; the service polls in-process.
+_session_days: set[str] = set()
+_session_lock = threading.Lock()
 
 # Only these labels may leave the machine; paths are used locally and discarded.
 _LANGUAGES = {
@@ -456,8 +460,24 @@ def track(cfg: AnalyticsConfig, event: str, **props: Any) -> None:
     _emit(cfg, event, props)
 
 
+def _utc_day() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
 def record_session_start(cfg: AnalyticsConfig, *, scm_provider: str, projects_count: int) -> None:
-    """One event per poll cycle start — liveness + install context."""
+    """Liveness + install context: once per process per UTC day.
+
+    The service calls ``poll()`` every few minutes in one process; sending
+    this per poll made it the bulk of all events. Once a day still shows a
+    long-running idle service as alive. A day isn't spent while consent is off.
+    """
+    if not analytics_enabled(cfg):
+        return
+    day = _utc_day()
+    with _session_lock:
+        if day in _session_days:
+            return
+        _session_days.add(day)
     _emit(
         cfg,
         "session_start",
