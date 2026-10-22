@@ -119,6 +119,7 @@ _ALLOWED_ATTRS = frozenset(
         "finding_type",
         "severity",
         "category",
+        "skip_reason",
         "governance_mode",
         "governance_action",
         "provenance_band",
