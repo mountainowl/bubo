@@ -39,6 +39,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
@@ -119,6 +120,7 @@ _ALLOWED_ATTRS = frozenset(
         "finding_type",
         "severity",
         "category",
+        "skip_reason",
         "governance_mode",
         "governance_action",
         "provenance_band",
@@ -128,6 +130,10 @@ _ALLOWED_ATTRS = frozenset(
         "metric_value",
         "metric_count",
         "surface",
+        # review_completed: where a failed/deferred/superseded review stopped,
+        # and the exception class (never its message) that failed it.
+        "stage",
+        "error_type",
         # finding_outcome: which review configuration produced the finding
         "prompt_version",
         "verified",
@@ -155,6 +161,10 @@ _KNOWN_EVENTS = frozenset(
 # inside GitHub Actions, whose state directory (and so install_id) is fresh on
 # every run; dashboards need it to keep those runs out of install counts.
 _KNOWN_SURFACES = frozenset({"service", "run_once", "github_action", "mcp", "unknown"})
+# The worker step a review was in when it stopped (see ``poller.worker``).
+_KNOWN_STAGES = frozenset({"setup", "checkout", "agent", "parse", "post", "incomplete", "finish"})
+# An exception's class name: code, never data. Anything else is dropped.
+_ERROR_TYPE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 # Developer-engagement outcome dimensions. Mirrors the per-finding flags the
 # poller's outcome sync writes to SQLite; a value outside the set normalizes to
 # "other" so a future column can never leak as an arbitrary string.
@@ -194,6 +204,9 @@ _install_path: Path | None = None
 _install_node: int | None = None
 _identity_lock = threading.Lock()
 _surface = "unknown"
+# UTC days this process sent session_start on; the service polls in-process.
+_session_days: set[str] = set()
+_session_lock = threading.Lock()
 
 # Only these labels may leave the machine; paths are used locally and discarded.
 _LANGUAGES = {
@@ -447,8 +460,24 @@ def track(cfg: AnalyticsConfig, event: str, **props: Any) -> None:
     _emit(cfg, event, props)
 
 
+def _utc_day() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
 def record_session_start(cfg: AnalyticsConfig, *, scm_provider: str, projects_count: int) -> None:
-    """One event per poll cycle start — liveness + install context."""
+    """Liveness + install context: once per process per UTC day.
+
+    The service calls ``poll()`` every few minutes in one process; sending
+    this per poll made it the bulk of all events. Once a day still shows a
+    long-running idle service as alive. A day isn't spent while consent is off.
+    """
+    if not analytics_enabled(cfg):
+        return
+    day = _utc_day()
+    with _session_lock:
+        if day in _session_days:
+            return
+        _session_days.add(day)
     _emit(
         cfg,
         "session_start",
@@ -487,8 +516,14 @@ def record_review_completed(
     queue_seconds: float | None = None,
     profile: dict[str, Any] | None = None,
     prompt_version: str | None = None,
+    stage: str | None = None,
+    error_type: str | None = None,
 ) -> None:
-    """The primary signal: one anonymized event per completed review."""
+    """The primary signal: one anonymized event per review, however it ended.
+
+    ``stage`` says where a failed, deferred or superseded review stopped and
+    ``error_type`` names the exception class that failed it; both are bounded.
+    """
     context = {
         key: value
         for key, value in (profile or {}).items()
@@ -533,6 +568,12 @@ def record_review_completed(
             "lines_changed": lines_changed,
             "queue_seconds": queue_seconds,
             "prompt_version": _prompt_version(prompt_version),
+            "stage": stage if stage in _KNOWN_STAGES else None,
+            "error_type": (
+                error_type
+                if isinstance(error_type, str) and _ERROR_TYPE.fullmatch(error_type)
+                else None
+            ),
         },
     )
     if context.get("project_id"):
