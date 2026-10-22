@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.31.0](https://github.com/mountainowl/bubo/compare/v0.30.2...v0.31.0) (2026-10-22)
+
+
+### Features
+
+* **analytics:** say where a review stopped, and report deferred and superseded reviews ([#289](https://github.com/mountainowl/bubo/issues/289)) ([ba633c7](https://github.com/mountainowl/bubo/commit/ba633c74ac8ce1e81f5db216b448ae56153a82a5))
+* **telemetry:** say why a finding was not posted ([#290](https://github.com/mountainowl/bubo/issues/290)) ([19cc9b8](https://github.com/mountainowl/bubo/commit/19cc9b8a4744cca367adb6c4a7d7729a9f337f8e))
+
+
+### Bug Fixes
+
+* **action:** keep one anonymous install id across Action runs ([#295](https://github.com/mountainowl/bubo/issues/295)) ([7d34e34](https://github.com/mountainowl/bubo/commit/7d34e3453e930b86b56c80283e4e16d37e94dd0a))
+* **analytics:** send session_start once per process per day ([#291](https://github.com/mountainowl/bubo/issues/291)) ([e2de7f3](https://github.com/mountainowl/bubo/commit/e2de7f3baf22a9fc33b7479e1bbd6c965f67e28d))
+* **telemetry:** read plain-text token counters from the usage summary ([#293](https://github.com/mountainowl/bubo/issues/293)) ([405b515](https://github.com/mountainowl/bubo/commit/405b515fdeeda7fc2d641e6cb90e07386e37f17f))
+
+
+### Performance Improvements
+
+* **analytics:** cache the project profile per project per day ([#292](https://github.com/mountainowl/bubo/issues/292)) ([2220593](https://github.com/mountainowl/bubo/commit/222059334827abaf0ee2fb5a8fe30350548e19be))
+
 ## [0.30.2](https://github.com/mountainowl/bubo/compare/v0.30.1...v0.30.2) (2026-10-20)
 
 
