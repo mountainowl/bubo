@@ -1165,10 +1165,13 @@ def emit_finding_metric(
     status: FindingStatus | str,
     finding: JsonObject,
     dry_run: bool,
+    skip_reason: str | None = None,
 ) -> None:
     """Forward one finding-lifecycle event to OTel if telemetry is enabled."""
     if telemetry and telemetry.config.emit_finding_events:
-        telemetry.record_finding(repo=repo, status=status, finding=finding, dry_run=dry_run)
+        telemetry.record_finding(
+            repo=repo, status=status, finding=finding, dry_run=dry_run, skip_reason=skip_reason
+        )
 
 
 def changed_loc(
@@ -1597,6 +1600,14 @@ def post_or_plan_findings(
         suppressed_scopes=suppressed_scopes,
     )
     for finding, reason in dropped:
+        emit_finding_metric(
+            telemetry,
+            repo=project,
+            status=FindingStatus.SKIPPED,
+            finding=finding,
+            dry_run=cfg.dry_run,
+            skip_reason=reason,
+        )
         rejection = (
             dispute_match(finding, suppressed_scopes)
             if reason == "disputed_class_suppressed"
@@ -1651,6 +1662,14 @@ def post_or_plan_findings(
         fp = finding_fingerprint(project, number, sha, finding)
         identity = finding_identity(project, number, finding)
         if finding_seen(project, number, sha, fp):
+            emit_finding_metric(
+                telemetry,
+                repo=project,
+                status=FindingStatus.SKIPPED,
+                finding=finding,
+                dry_run=cfg.dry_run,
+                skip_reason="already_recorded",
+            )
             skipped += 1
             continue
         if allowed_lines is not None and resolve_finding_line(allowed_lines, finding) is None:
@@ -1670,6 +1689,7 @@ def post_or_plan_findings(
                 status=FindingStatus.SKIPPED,
                 finding=finding,
                 dry_run=cfg.dry_run,
+                skip_reason="outside_incremental_range",
             )
             log(
                 "finding_skipped",
@@ -1712,6 +1732,7 @@ def post_or_plan_findings(
                 status=FindingStatus.SKIPPED,
                 finding=finding,
                 dry_run=cfg.dry_run,
+                skip_reason="duplicate_open_thread",
             )
             log(
                 "finding_skipped",
@@ -1743,6 +1764,7 @@ def post_or_plan_findings(
                 status=FindingStatus.SKIPPED,
                 finding=finding,
                 dry_run=cfg.dry_run,
+                skip_reason="line_not_in_diff",
             )
             log(
                 "finding_skipped",
@@ -1758,7 +1780,7 @@ def post_or_plan_findings(
         # non-duplicate survivor we are otherwise about to post/plan. Runs N
         # independent refute-it lenses and drops a finding a majority refute.
         # Verdict columns default to None so a verify-off run records nothing.
-        verification_unresolved = False
+        verification_unresolved: str | None = None
         verified_flag: bool | None = None
         verify_votes_json: str | None = None
         if cfg.verify_findings:
@@ -1766,12 +1788,22 @@ def post_or_plan_findings(
                 project, number, sha, fp, expected_policy=verification_policy
             )
             if cached is False or (cached is True and cfg.dry_run):
+                emit_finding_metric(
+                    telemetry,
+                    repo=project,
+                    status=FindingStatus.SKIPPED,
+                    finding=finding,
+                    dry_run=cfg.dry_run,
+                    skip_reason="previously_refuted",
+                )
                 skipped += 1
                 continue
             if verified_attempts >= cfg.verify_max_findings:
                 # Preserve the candidate for retry; do not publish an undecided verdict.
                 capped_count += 1
-                verification_unresolved = True
+                verification_unresolved = "verification_capped"
+                if telemetry is not None:
+                    telemetry.record_verification(repo=project, outcome="capped")
                 if verification_blockers is not None:
                     verification_blockers.append("Verification budget exhausted")
                 log(
@@ -1900,7 +1932,9 @@ def post_or_plan_findings(
                 else:
                     # No decisive quorum: preserve the candidate and mark the run incomplete.
                     capped_count += 1
-                    verification_unresolved = True
+                    verification_unresolved = "verification_unavailable"
+                    if telemetry is not None:
+                        telemetry.record_verification(repo=project, outcome="unresolved")
                     if verification_blockers is not None:
                         verification_blockers.append(
                             f"Insufficient verification evidence: {finding.get('title', 'finding')}"
@@ -1926,6 +1960,14 @@ def post_or_plan_findings(
                 verified=None,
                 verify_votes=verify_votes_json,
                 finding_identity=identity,
+            )
+            emit_finding_metric(
+                telemetry,
+                repo=project,
+                status=FindingStatus.VERIFY_CAPPED,
+                finding=finding,
+                dry_run=cfg.dry_run,
+                skip_reason=verification_unresolved,
             )
             skipped += 1
             continue
@@ -2073,6 +2115,60 @@ def worker(job: Path) -> int:
     review_run_started = False
     review_prompt_version: str | None = None
     posted = planned = skipped = 0
+    # Where the review is; a failed, deferred or superseded review reports it.
+    stage = "setup"
+
+    def report_review(
+        status: ReviewStatus, *, stopped_at: str | None = None, error_type: str | None = None
+    ) -> None:
+        """One run metric and one ``review_completed`` event per review, whatever its end."""
+        if cfg is None:
+            return
+        duration = round(time.monotonic() - started, 2)
+        if telemetry is not None:
+            telemetry.record_review_done(
+                repo=project,
+                model=model,
+                languages=tuple(languages),
+                agent=analytics.agent_label(cfg.reviewer_command),
+                scm_provider=cfg.provider,
+                status=status,
+                review_mode=ReviewMode.DIFF,
+                dry_run=cfg.dry_run,
+                duration_seconds=duration,
+                tokens=tokens,
+                cost_usd=cost_usd,
+                tone=cfg.tone,
+                lines_reviewed=lines_reviewed,
+                prompt_version=review_prompt_version,
+            )
+        analytics.record_review_completed(
+            cfg.analytics_config,
+            scm_provider=cfg.provider,
+            agent=analytics.agent_label(cfg.reviewer_command),
+            model=model,
+            status=str(status),
+            dry_run=cfg.dry_run,
+            review_mode=str(ReviewMode.DIFF),
+            tone=cfg.tone,
+            duration_seconds=duration,
+            tokens_input=tokens.input,
+            tokens_output=tokens.output,
+            tokens_cached=tokens.cached,
+            tokens_total=tokens.total,
+            cost_usd=cost_usd,
+            findings_posted=posted,
+            findings_planned=planned,
+            findings_skipped=skipped,
+            files_changed=files_changed,
+            lines_changed=lines_changed,
+            languages=languages,
+            queue_seconds=queued_seconds,
+            profile=project_profile,
+            prompt_version=review_prompt_version,
+            stage=stopped_at,
+            error_type=error_type,
+        )
 
     def defer_review_run() -> None:
         record(project, iid, sha, ReviewStatus.DEFERRED, str(report))
@@ -2085,12 +2181,13 @@ def worker(job: Path) -> int:
                 error=None,
                 lines_reviewed=lines_reviewed,
             )
+        report_review(ReviewStatus.DEFERRED, stopped_at=stage)
 
     try:
         cfg = read_config()
         allowed, reason = subscription_gate(cfg)
         if not allowed:
-            record(project, iid, sha, ReviewStatus.DEFERRED, str(report))
+            defer_review_run()
             log_subscription_gate(reason, scope="reviewer", project=project, iid=iid, run_id=run_id)
             return 0
         provider = get_provider(cfg)
@@ -2126,6 +2223,7 @@ def worker(job: Path) -> int:
         review_run_started = True
         with telemetry.span("llm_review.run", repo=project, mr_iid=iid, sha=sha, run_id=run_id):
             repo = paths.WORK / slug(project) / str(iid) / sha[:12]
+            stage = "checkout"
             with telemetry.span("llm_review.checkout", repo=project, sha=sha):
                 provider.checkout(cfg, project, mr, repo)
             # Fetch the change's diff ONCE before the agent runs and share it
@@ -2184,6 +2282,7 @@ def worker(job: Path) -> int:
             if incremental is not None:
                 extra_directive = "\n\n".join(d for d in (extra_directive, incremental[0]) if d)
             env = reviewer_env(os.environ, cfg)
+            stage = "agent"
             allowed, reason = subscription_gate(cfg)
             if not allowed:
                 defer_review_run()
@@ -2229,7 +2328,9 @@ def worker(job: Path) -> int:
                             ),
                         )
                     )
+            stage = "parse"
             review_result = parse_review_result(safe_stdout)
+            stage = "post"
             allowed, reason = subscription_gate(cfg)
             if not allowed:
                 defer_review_run()
@@ -2274,12 +2375,14 @@ def worker(job: Path) -> int:
                     + review_result.coverage["unreviewed"]
                     + review_result.coverage["limitations"]
                 )
+                stage = "incomplete"
                 raise ValueError(f"Review incomplete: {detail}")
             status = (
                 ReviewStatus.NO_FINDINGS
                 if not review_result.findings and review_result.omitted_findings_count == 0
                 else ReviewStatus.SUCCESS
             )
+            stage = "finish"
             record(project, iid, sha, status, str(report))
             # Verification calls made while posting count toward this review.
             tokens, cost_usd = usage_meter.tokens, usage_meter.cost_usd
@@ -2348,47 +2451,7 @@ def worker(job: Path) -> int:
                     detail=no_findings_detail,
                     run_id=run_id,
                 )
-            telemetry.record_review_done(
-                repo=project,
-                model=model,
-                languages=tuple(languages),
-                agent=analytics.agent_label(cfg.reviewer_command),
-                scm_provider=cfg.provider,
-                status=status,
-                review_mode=ReviewMode.DIFF,
-                dry_run=cfg.dry_run,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens=tokens,
-                cost_usd=cost_usd,
-                tone=cfg.tone,
-                lines_reviewed=lines_reviewed,
-                prompt_version=review_prompt_version,
-            )
-            analytics.record_review_completed(
-                cfg.analytics_config,
-                scm_provider=cfg.provider,
-                agent=analytics.agent_label(cfg.reviewer_command),
-                model=model,
-                status=str(status),
-                dry_run=cfg.dry_run,
-                review_mode=str(ReviewMode.DIFF),
-                tone=cfg.tone,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens_input=tokens.input,
-                tokens_output=tokens.output,
-                tokens_cached=tokens.cached,
-                tokens_total=tokens.total,
-                cost_usd=cost_usd,
-                findings_posted=posted,
-                findings_planned=planned,
-                findings_skipped=skipped,
-                files_changed=files_changed,
-                lines_changed=lines_changed,
-                languages=languages,
-                queue_seconds=queued_seconds,
-                profile=project_profile,
-                prompt_version=review_prompt_version,
-            )
+            report_review(status)
             log(
                 "review_done",
                 project=project,
@@ -2427,6 +2490,7 @@ def worker(job: Path) -> int:
                 error=None,
                 lines_reviewed=lines_reviewed,
             )
+        report_review(ReviewStatus.SUPERSEDED, stopped_at=stage)
         log(
             "review_superseded",
             project=project,
@@ -2465,48 +2529,7 @@ def worker(job: Path) -> int:
             telemetry.record_failure(
                 repo=project, error_type=type(exc).__name__, operation="review"
             )
-            telemetry.record_review_done(
-                repo=project,
-                model=model,
-                languages=tuple(languages),
-                agent=analytics.agent_label(cfg.reviewer_command),
-                scm_provider=cfg.provider,
-                status=ReviewStatus.FAILED,
-                review_mode=ReviewMode.DIFF,
-                dry_run=cfg.dry_run if cfg is not None else True,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens=tokens,
-                cost_usd=cost_usd,
-                tone=cfg.tone if cfg is not None else None,
-                lines_reviewed=lines_reviewed,
-                prompt_version=review_prompt_version,
-            )
-        if cfg is not None:
-            analytics.record_review_completed(
-                cfg.analytics_config,
-                scm_provider=cfg.provider,
-                agent=analytics.agent_label(cfg.reviewer_command),
-                model=model,
-                status=str(ReviewStatus.FAILED),
-                dry_run=cfg.dry_run,
-                review_mode=str(ReviewMode.DIFF),
-                tone=cfg.tone,
-                duration_seconds=round(time.monotonic() - started, 2),
-                tokens_input=tokens.input,
-                tokens_output=tokens.output,
-                tokens_cached=tokens.cached,
-                tokens_total=tokens.total,
-                cost_usd=cost_usd,
-                findings_posted=posted,
-                findings_planned=planned,
-                findings_skipped=skipped,
-                files_changed=files_changed,
-                lines_changed=lines_changed,
-                languages=languages,
-                queue_seconds=queued_seconds,
-                profile=project_profile,
-                prompt_version=review_prompt_version,
-            )
+        report_review(ReviewStatus.FAILED, stopped_at=stage, error_type=type(exc).__name__)
         log(
             "review_failed",
             project=project,
