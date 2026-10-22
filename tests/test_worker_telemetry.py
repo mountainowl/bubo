@@ -191,3 +191,80 @@ def test_failure_after_a_comment_posted_still_reports_it() -> None:
     assert stored == 1
     completed = _completed(result)
     assert (completed["status"], completed["findings_posted"]) == ("failed", 1)
+
+
+def test_failed_review_says_where_it_stopped_and_why() -> None:
+    """Agent exit 2: PostHog must carry the stage and exception class, not the message."""
+    with _state() as tmp:
+        failed = run_worker(
+            tmp,
+            _cfg(),
+            **{
+                "bubo.poller.run": lambda *a, **k: SimpleNamespace(
+                    stdout="", stderr="boom", returncode=2
+                )
+            },
+        )
+    completed = _completed(failed)
+    assert failed.rc == 1
+    assert (completed["status"], completed["stage"], completed["error_type"]) == (
+        "failed",
+        "agent",
+        "RuntimeError",
+    )
+
+
+def test_unparseable_review_fails_at_the_parse_stage() -> None:
+    with _state() as tmp:
+        failed = run_worker(
+            tmp,
+            _cfg(),
+            **{
+                "bubo.poller.run": lambda *a, **k: SimpleNamespace(
+                    stdout="not json", stderr="", returncode=0
+                )
+            },
+        )
+    completed = _completed(failed)
+    assert (completed["status"], completed["stage"], completed["error_type"]) == (
+        "failed",
+        "parse",
+        "ValueError",
+    )
+
+
+def test_deferred_review_is_reported() -> None:
+    """The circuit closes before posting: the review is counted as deferred, not lost."""
+    gates = iter([(True, "ok"), (True, "ok"), (False, "subscription_paused")])
+    with _state() as tmp:
+        deferred = run_worker(
+            tmp, _cfg(), **{"bubo.poller.subscription_gate": lambda cfg: next(gates)}
+        )
+    completed = _completed(deferred)
+    assert deferred.rc == 0
+    assert (completed["status"], completed["stage"]) == ("deferred", "post")
+    assert "error_type" not in completed
+    assert {point["status"] for point in deferred.points["llm_review.runs"]} == {"deferred"}
+
+
+def test_superseded_review_is_reported() -> None:
+    newer = {"number": 1, "state": "open", "head": {"sha": "c" * 40}}
+    base = _route
+
+    def moved(method: str, url: str, body: Any) -> Any:
+        if method == "GET" and urlparse(url).path.endswith("/pulls/1"):
+            return newer
+        return base(method, url, body)
+
+    with _state() as tmp, patch(f"{__name__}._route", moved):
+        superseded = run_worker(tmp, _cfg())
+    completed = _completed(superseded)
+    assert (completed["status"], completed["stage"]) == ("superseded", "post")
+
+
+def test_successful_review_has_no_stop_stage() -> None:
+    with _state() as tmp:
+        completed = _completed(run_worker(tmp, _cfg()))
+    assert completed["status"] == "success"
+    assert "stage" not in completed
+    assert "error_type" not in completed
