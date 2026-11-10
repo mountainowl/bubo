@@ -462,6 +462,26 @@ def test_review_change_dispatches_with_parsed_url() -> None:
     assert not captured["cwd"].exists()
 
 
+def test_review_change_refuses_project_with_auto_review_off() -> None:
+    """A project onboarded with auto_review = false is not reviewed at all."""
+    ran: list[object] = []
+    cfg = ReviewConfig(
+        reviewer_command=["codex", "exec"],
+        projects=["owner/repo"],
+        project_auto_review={"owner/repo": False},
+    )
+    with (
+        patch("bubo.mcp_server.load_review_config", return_value=cfg),
+        patch("bubo.mcp_server.get_provider", side_effect=lambda *_: ran.append("scm")),
+        patch("bubo.mcp_server.run_bounded", side_effect=lambda *a, **k: ran.append("run")),
+    ):
+        result = mcp_server.review_change(url="https://github.com/owner/repo/pull/5")
+
+    assert result["status"] == "auto_review_off"
+    assert result["project"] == "owner/repo"
+    assert ran == []
+
+
 def test_review_change_requires_url_or_project_plus_number() -> None:
     with pytest.raises(ValueError, match="missing required review target"):
         mcp_server.review_change(number=42, provider="github")  # project missing
