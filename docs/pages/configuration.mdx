@@ -224,6 +224,7 @@ One block per repository.
 |---|---|---|---|
 | `path` | string | required | Repository path, such as `group/repo`, `group/subgroup/repo`, or `owner/repo`. |
 | `enabled` | boolean | `true` | Include or skip the repository during polling. |
+| `auto_review` | boolean | `true` | Let Bubo start reviews for the repository on its own. `false` keeps it a listed project, but the poller queues no review for it, no agent runs and nothing is posted until it is set back to `true`. Must be a bare `true`/`false`. |
 
 ## Direct environment overrides
 
