@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0](https://github.com/mountainowl/bubo/compare/v0.31.0...v0.32.0) (2026-11-13)
+
+
+### Features
+
+* per-project auto_review switch; keep polling past a missing project ([#306](https://github.com/mountainowl/bubo/issues/306)) ([c912b66](https://github.com/mountainowl/bubo/commit/c912b667a83a355f56901f79191f5feab480cb84))
+
 ## [0.31.0](https://github.com/mountainowl/bubo/compare/v0.30.2...v0.31.0) (2026-10-22)
 
 
