@@ -499,6 +499,16 @@ def review_change(
     # Build the same contract-carrying prompt the poller uses, then run the
     # operator's configured reviewer_command directly (no bundled wrapper).
     cfg = replace(load_review_config(paths.CONFIG), provider=provider)
+    if not cfg.auto_review_enabled(project):
+        # Onboarded with auto_review = false: no review of any kind until the
+        # operator turns the switch on.
+        log("mcp_review_not_started", project=project, number=number, reason="auto_review_off")
+        return {
+            "status": "auto_review_off",
+            "provider": provider,
+            "project": project,
+            "number": number,
+        }
     allowed, reason = review_gate(cfg.subscription_circuit, state_path(paths.DB.parent))
     if not allowed:
         log("mcp_review_deferred_subscription", reason=reason)

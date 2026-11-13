@@ -994,6 +994,11 @@ def review_blocker(cfg: ReviewConfig, project: str, number: int, sha: str) -> Js
     return None
 
 
+# Listing statuses that mean "this project is gone from the host", not "the
+# host or the credentials are broken": the poll skips such a project only.
+PROJECT_GONE_STATUSES = frozenset({404, 410})
+
+
 @admitted(writable=True)
 def poll(*, worker_mode: str = "detached") -> int:
     """Run one poll cycle: scan projects, queue eligible changes, fork workers.
@@ -1056,12 +1061,42 @@ def poll(*, worker_mode: str = "detached") -> int:
             inflight_cap=inflight_cap,
         )
         return 0
+    failed_projects: list[str] = []
     for project in cfg.projects:
         if _shutdown_requested():
             log("poll_interrupted", poll_run_id=poll_run_id, reason="shutdown", queued=queued)
             return queued
+        if not cfg.auto_review_enabled(project):
+            # [[projects]] auto_review = false: a known project that is never
+            # reviewed on its own. Skip it before any SCM call, so no change is
+            # listed, queued, reviewed or commented on until the switch is on.
+            log(
+                "poll_project_skipped",
+                poll_run_id=poll_run_id,
+                project=project,
+                reason="auto_review_off",
+            )
+            continue
         log("poll_project", poll_run_id=poll_run_id, project=project)
-        for change in provider.list_open_changes(cfg, project, token):
+        try:
+            changes = provider.list_open_changes(cfg, project, token)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in PROJECT_GONE_STATUSES:
+                raise
+            # The host does not know this project (deleted, renamed or never
+            # existed). Record it and keep reviewing every other project; any
+            # other failure (bad token, host down) still fails the cycle.
+            failed_projects.append(project)
+            log(
+                "poll_project_failed",
+                poll_run_id=poll_run_id,
+                project=project,
+                reason="not_found",
+                status=exc.code,
+                provider=provider.name,
+            )
+            continue
+        for change in changes:
             if _shutdown_requested():
                 log("poll_interrupted", poll_run_id=poll_run_id, reason="shutdown", queued=queued)
                 return queued
@@ -1110,7 +1145,7 @@ def poll(*, worker_mode: str = "detached") -> int:
     if queued == 0:
         log("no_pending_reviews", poll_run_id=poll_run_id)
     analytics.flush()
-    log("poll_done", poll_run_id=poll_run_id, queued=queued)
+    log("poll_done", poll_run_id=poll_run_id, queued=queued, failed_projects=failed_projects)
     return queued
 
 
@@ -2185,6 +2220,20 @@ def worker(job: Path) -> int:
 
     try:
         cfg = read_config()
+        if not cfg.auto_review_enabled(project):
+            # Queued before [[projects]] auto_review was turned off: stop
+            # before any checkout or agent call. DEFERRED is not a "seen"
+            # status, so the head is reviewed once the switch is back on.
+            record(project, iid, sha, ReviewStatus.DEFERRED, str(report))
+            log(
+                "review_not_started",
+                project=project,
+                iid=iid,
+                sha=sha,
+                run_id=run_id,
+                reason="auto_review_off",
+            )
+            return 0
         allowed, reason = subscription_gate(cfg)
         if not allowed:
             defer_review_run()
@@ -2748,7 +2797,13 @@ def sync_outcomes(limit: int = 200) -> int:
             )
             if needs_verdict and stored["hash"] == reply_hash and stored["verdict"]:
                 _apply_reply_verdict(outcome, stored, reply_hash)
-            elif needs_verdict and classifications < MAX_REPLY_CLASSIFICATIONS_PER_SYNC:
+            elif (
+                needs_verdict
+                and classifications < MAX_REPLY_CLASSIFICATIONS_PER_SYNC
+                # No agent call for a project with [[projects]] auto_review =
+                # false; its reply stays unclassified until the switch is on.
+                and cfg.auto_review_enabled(project)
+            ):
                 classifications += 1
                 # Bill the classifier call to the review run that raised the finding.
                 classify_meter, classify_meter_token = start_metering()

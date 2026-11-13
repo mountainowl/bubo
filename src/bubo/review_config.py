@@ -190,6 +190,12 @@ class ReviewConfig:
     projects:
         List of GitLab project paths the poller should scan, with disabled
         entries already filtered out.
+    project_auto_review:
+        ``[[projects]].auto_review`` per listed project: a mapping of every
+        path in ``projects`` to whether Bubo may start reviews for it on its
+        own. A missing key means ``true``. A ``false`` project stays a known,
+        listed project, but the poller never queues a review for it, no agent
+        runs for it and nothing is posted (see :meth:`auto_review_enabled`).
     min_confidence:
         Confidence threshold (0.0-1.0). Findings with ``finding.confidence``
         below this value are dropped before posting/planning. Defaults to
@@ -384,6 +390,19 @@ class ReviewConfig:
     service_poll_interval_seconds: int = 900
     service_outcome_sync_interval_seconds: int = 3600
     service_outcome_sync_limit: int = 200
+    project_auto_review: dict[str, bool] = field(default_factory=dict)
+
+    def auto_review_enabled(self, project: str) -> bool:
+        """Whether Bubo may review ``project`` on its own (``[[projects]].auto_review``).
+
+        A project with no recorded value — an existing config without the key,
+        or a config built in code — defaults to ``True``.
+        """
+        return self.project_auto_review.get(project, True)
+
+    def auto_review_projects(self) -> list[str]:
+        """The listed ``projects`` whose ``auto_review`` is on, in config order."""
+        return [project for project in self.projects if self.auto_review_enabled(project)]
 
     def model_for(self, command: list[str]) -> str | None:
         """The model an agent ``command`` runs: Claude Code's own, else ``llm_model``."""
@@ -448,6 +467,32 @@ def _agent_model_effort(agent: dict[str, Any], log_event: Callable[..., None] | 
     return None
 
 
+def _project_entries(raw: dict[str, Any]) -> list[tuple[Any, bool]]:
+    """``(path, auto_review)`` for each enabled ``[[projects]]`` entry, in order.
+
+    ``auto_review`` is a strict boolean (default ``true``): a quoted
+    ``"false"`` is rejected rather than read as truthy, because a typo there
+    would start reviews the operator meant to keep off.
+    """
+    entries: list[tuple[Any, bool]] = []
+    for item in raw.get("projects", []):
+        if not (isinstance(item, dict) and item.get("enabled", True) and item.get("path")):
+            continue
+        auto_review = bool_value(
+            item.get("auto_review"), f"projects[{item['path']}].auto_review", default=True
+        )
+        entries.append((item["path"], auto_review))
+    return entries
+
+
+def _project_auto_review(entries: list[tuple[Any, bool]]) -> dict[str, bool]:
+    """Map each project path to its ``auto_review``; any ``false`` entry for a path wins."""
+    result: dict[str, bool] = {}
+    for path, auto_review in entries:
+        result[path] = result.get(path, True) and auto_review
+    return result
+
+
 def review_config_from_dict(
     raw: dict[str, Any], log_event: Callable[..., None] | None = None
 ) -> ReviewConfig:
@@ -487,6 +532,7 @@ def review_config_from_dict(
             log_event("telemetry_config_disabled", error=str(exc))
 
     target_iid = poller.get("target_merge_request_iid")
+    project_entries = _project_entries(raw)
     return ReviewConfig(
         provider=provider,
         gitlab_url=str(gitlab.get("url", "https://gitlab.com")),
@@ -515,11 +561,8 @@ def review_config_from_dict(
         analytics_config=analytics_config_from_dict(raw),
         auto_update=bool_value(raw.get("auto_update"), "auto_update", default=True),
         governance_config=governance_config_from_dict(raw),
-        projects=[
-            item["path"]
-            for item in raw.get("projects", [])
-            if isinstance(item, dict) and item.get("enabled", True) and item.get("path")
-        ],
+        projects=[path for path, _auto_review in project_entries],
+        project_auto_review=_project_auto_review(project_entries),
         min_confidence=confidence_threshold(
             review.get("min_confidence", DEFAULT_MIN_CONFIDENCE),
             "min_confidence",
