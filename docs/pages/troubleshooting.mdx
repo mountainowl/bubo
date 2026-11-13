@@ -98,6 +98,10 @@ An open MR/PR is never picked up.
 - **Automatic review off.** A `[[projects]]` entry with `auto_review = false` is never
   reviewed by the poller; the log shows `poll_project_skipped` with
   `reason: auto_review_off`. Set it to `true` (or remove the key).
+- **Project gone from the host.** A `[[projects]]` path the host answers with `404` or
+  `410` (deleted, renamed or a typo) is logged as `poll_project_failed` with
+  `reason: not_found` and its HTTP `status`; the poll carries on with every other
+  project, and `poll_done` lists it under `failed_projects`. Fix or remove the entry.
 - **`target_merge_request_iid` left set.** `[poller].target_merge_request_iid` pins the
   poller to a single MR and skips every other one. Unset it in production.
 - **Stale/failed state row.** `reviewed_mrs` is keyed on `(project, iid, sha)`; a row at

@@ -994,6 +994,11 @@ def review_blocker(cfg: ReviewConfig, project: str, number: int, sha: str) -> Js
     return None
 
 
+# Listing statuses that mean "this project is gone from the host", not "the
+# host or the credentials are broken": the poll skips such a project only.
+PROJECT_GONE_STATUSES = frozenset({404, 410})
+
+
 @admitted(writable=True)
 def poll(*, worker_mode: str = "detached") -> int:
     """Run one poll cycle: scan projects, queue eligible changes, fork workers.
@@ -1056,6 +1061,7 @@ def poll(*, worker_mode: str = "detached") -> int:
             inflight_cap=inflight_cap,
         )
         return 0
+    failed_projects: list[str] = []
     for project in cfg.projects:
         if _shutdown_requested():
             log("poll_interrupted", poll_run_id=poll_run_id, reason="shutdown", queued=queued)
@@ -1072,7 +1078,25 @@ def poll(*, worker_mode: str = "detached") -> int:
             )
             continue
         log("poll_project", poll_run_id=poll_run_id, project=project)
-        for change in provider.list_open_changes(cfg, project, token):
+        try:
+            changes = provider.list_open_changes(cfg, project, token)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in PROJECT_GONE_STATUSES:
+                raise
+            # The host does not know this project (deleted, renamed or never
+            # existed). Record it and keep reviewing every other project; any
+            # other failure (bad token, host down) still fails the cycle.
+            failed_projects.append(project)
+            log(
+                "poll_project_failed",
+                poll_run_id=poll_run_id,
+                project=project,
+                reason="not_found",
+                status=exc.code,
+                provider=provider.name,
+            )
+            continue
+        for change in changes:
             if _shutdown_requested():
                 log("poll_interrupted", poll_run_id=poll_run_id, reason="shutdown", queued=queued)
                 return queued
@@ -1121,7 +1145,7 @@ def poll(*, worker_mode: str = "detached") -> int:
     if queued == 0:
         log("no_pending_reviews", poll_run_id=poll_run_id)
     analytics.flush()
-    log("poll_done", poll_run_id=poll_run_id, queued=queued)
+    log("poll_done", poll_run_id=poll_run_id, queued=queued, failed_projects=failed_projects)
     return queued
 
 
