@@ -36,8 +36,6 @@ def test_launch_readiness_files_exist() -> None:
         "SECURITY.md",
         "SUPPORT.md",
         "CODE_OF_CONDUCT.md",
-        ".github/workflows/ci.yml",
-        ".github/workflows/scorecard.yml",
         ".github/PULL_REQUEST_TEMPLATE.md",
         ".github/ISSUE_TEMPLATE/bug_report.yml",
         ".github/ISSUE_TEMPLATE/feature_request.yml",
@@ -55,7 +53,7 @@ def test_launch_readiness_files_exist() -> None:
     assert "uv tool install" in readme
     assert "bubo init" in readme
     assert "bubo doctor" in readme
-    assert "actions/workflows/ci.yml/badge.svg" in readme
+    assert "actions/workflows/" not in readme
     assert "https://mountainowl.github.io/bubo/recipes/" in readme
     assert "/install-and-configure/" not in readme
     # Scorecard badge via shields' direct endpoint — the api.scorecard.dev
@@ -68,20 +66,8 @@ def test_launch_readiness_files_exist() -> None:
     assert (ROOT / "assets" / "social-preview.png").stat().st_size > 0
 
 
-def test_ci_gates_stale_release_lockfiles() -> None:
-    workflows = ROOT / ".github" / "workflows"
-    ci_workflow = (workflows / "ci.yml").read_text()
-    release_sync = (workflows / "release-please-lockfile.yml").read_text()
-
-    assert "uv lock --check" in ci_workflow
-    assert "uv sync --locked --dev" in ci_workflow
-    assert "uv lock" in release_sync
-    assert "git push" in release_sync
-
-
 def test_docs_site_present() -> None:
-    # The mkdocs split docs were replaced by the Nextra site under docs/,
-    # published to GitHub Pages via .github/workflows/deploy-docs.yml.
+    # The mkdocs split docs were replaced by the Nextra site under docs/.
     docs = ROOT / "docs"
     assert (docs / "package.json").is_file()
     assert (docs / "next.config.mjs").is_file()
@@ -102,7 +88,6 @@ def test_docs_site_present() -> None:
     next_config = (docs / "next.config.mjs").read_text()
     package_json = (docs / "package.json").read_text()
     theme_config = (docs / "theme.config.tsx").read_text()
-    deploy_workflow = (ROOT / ".github" / "workflows" / "deploy-docs.yml").read_text()
     llms_text = (ROOT / "llms.txt").read_text()
     assert "../pyproject.toml" in next_config
     assert "NEXT_PUBLIC_BUBO_VERSION" in next_config
@@ -111,11 +96,9 @@ def test_docs_site_present() -> None:
     assert "DeveloperApplication" in theme_config
     assert "v0.24.2" not in theme_config
     assert "scripts/publish-llms.mjs" in package_json
-    assert "llms.txt" in deploy_workflow
     assert "# Bubo AI Code Review" in llms_text
     assert "https://mountainowl.github.io/bubo/" in llms_text
     assert "webhook-driven triggering is not shipped" in llms_text
-    assert "pyproject.toml" in deploy_workflow
 
 
 def test_github_action_runs_the_matching_bubo_release_synchronously() -> None:
